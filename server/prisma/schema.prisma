@@ -1,0 +1,108 @@
+// Prisma Schema for KakaoChat
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  phone         String?  @unique
+  password      String
+  username      String
+  profileImage  String?
+  statusMessage String?
+  isOnline      Boolean  @default(false)
+  lastSeen      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  friends          Friend[]         @relation("UserFriends")
+  friendOf         Friend[]         @relation("FriendOf")
+  createdRooms     ChatRoom[]       @relation("RoomCreator")
+  roomMemberships  ChatRoomMember[]
+  refreshTokens    RefreshToken[]
+
+  @@index([email])
+  @@index([phone])
+  @@map("users")
+}
+
+model Friend {
+  id         String   @id @default(uuid())
+  userId     String
+  friendId   String
+  isFavorite Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user   User @relation("UserFriends", fields: [userId], references: [id], onDelete: Cascade)
+  friend User @relation("FriendOf", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, friendId])
+  @@index([userId])
+  @@index([friendId])
+  @@map("friends")
+}
+
+model ChatRoom {
+  id        String   @id @default(uuid())
+  name      String?
+  type      RoomType
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator User             @relation("RoomCreator", fields: [createdBy], references: [id])
+  members ChatRoomMember[]
+
+  @@index([createdBy])
+  @@index([type])
+  @@map("chat_rooms")
+}
+
+model ChatRoomMember {
+  id         String    @id @default(uuid())
+  roomId     String
+  userId     String
+  role       MemberRole @default(MEMBER)
+  joinedAt   DateTime  @default(now())
+  lastReadAt DateTime?
+
+  room ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+  @@map("chat_room_members")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+enum RoomType {
+  DIRECT
+  GROUP
+}
+
+enum MemberRole {
+  ADMIN
+  MEMBER
+}

@@ -1,0 +1,166 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  html {
+    @apply h-full;
+  }
+
+  body {
+    @apply h-full m-0 font-sans antialiased bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100;
+  }
+
+  #root {
+    @apply h-full;
+  }
+}
+
+@layer components {
+  /* 스크롤바 스타일 */
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply w-2;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-gray-100 dark:bg-gray-800;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-600 rounded-full;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-gray-500;
+  }
+
+  /* 카카오톡 스타일 버튼 */
+  .btn-kakao {
+    @apply bg-kakao-yellow text-kakao-brown font-semibold py-2 px-4 rounded-lg hover:bg-yellow-400 transition-colors duration-200;
+  }
+
+  .btn-primary {
+    @apply bg-primary-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-primary-600 transition-colors duration-200;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200;
+  }
+
+  /* 입력 필드 */
+  .input-field {
+    @apply w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-800 dark:text-white;
+  }
+
+  /* 채팅 메시지 */
+  .message-bubble {
+    @apply max-w-xs md:max-w-md px-4 py-2 rounded-2xl;
+  }
+
+  .message-bubble-sent {
+    @apply message-bubble bg-primary-500 text-black ml-auto;
+  }
+
+  .message-bubble-received {
+    @apply message-bubble bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100;
+  }
+
+  /* 카드 스타일 */
+  .card {
+    @apply bg-white dark:bg-gray-800 rounded-lg shadow-md;
+  }
+
+  /* 채팅방 아이템 */
+  .chat-room-item {
+    @apply flex items-center p-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors duration-150;
+  }
+
+  .chat-room-item.active {
+    @apply bg-gray-200 dark:bg-gray-700;
+  }
+
+  /* 뱃지 */
+  .badge {
+    @apply inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-500 rounded-full;
+  }
+
+  /* 아바타 */
+  .avatar {
+    @apply rounded-full object-cover;
+  }
+
+  .avatar-sm {
+    @apply avatar w-8 h-8;
+  }
+
+  .avatar-md {
+    @apply avatar w-12 h-12;
+  }
+
+  .avatar-lg {
+    @apply avatar w-16 h-16;
+  }
+
+  /* 온라인 상태 표시 */
+  .status-indicator {
+    @apply absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800;
+  }
+
+  .status-online {
+    @apply status-indicator bg-green-500;
+  }
+
+  .status-offline {
+    @apply status-indicator bg-gray-400;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* 애니메이션 */
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slideInLeft {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 0.3s ease-out;
+  }
+
+  .animate-slide-in-left {
+    animation: slideInLeft 0.3s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+}
