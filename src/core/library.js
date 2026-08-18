@@ -131,7 +131,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'patchArray', name: 'Microstrip patch array (corporate feed)', nameKo: '패치 배열 안테나',
+    id: 'patchArray', minGainDbi: 8, name: 'Microstrip patch array (corporate feed)', nameKo: '패치 배열 안테나',
     category: 'Microstrip', pattern: 'directional', pol: ['linear', 'circular'],
     fRange: [0.7e9, 90e9], profile: 'planar', complexity: 3, cost: 3,
     summary: 'The standard way to buy gain on a PCB: N elements give 10*log10(N) minus a feed loss that grows with N and with the substrate Df.',
@@ -165,7 +165,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'seriesArray', name: 'Series-fed patch column', nameKo: '직렬 급전 패치 열',
+    id: 'seriesArray', minGainDbi: 8, name: 'Series-fed patch column', nameKo: '직렬 급전 패치 열',
     category: 'Microstrip', pattern: 'directional', pol: ['linear'],
     fRange: [2e9, 90e9], profile: 'planar', complexity: 3, cost: 2,
     summary: 'Patches strung along one line - minimal feed copper, so it beats a corporate feed on lossy substrates. Beam squints with frequency.',
@@ -187,7 +187,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'siwSlotArray', name: 'SIW slot array', nameKo: 'SIW 슬롯 배열',
+    id: 'siwSlotArray', minGainDbi: 12, name: 'SIW slot array', nameKo: 'SIW 슬롯 배열',
     category: 'Waveguide', pattern: 'directional', pol: ['linear'],
     fRange: [8e9, 170e9], profile: 'planar', complexity: 4, cost: 4,
     summary: 'Substrate-integrated waveguide replaces the lossy microstrip feed with a via-fenced waveguide: the mmWave answer to feed loss.',
@@ -323,7 +323,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'collinear', name: 'Collinear omni array (COCO / sleeve stack)', nameKo: '동일선상 옴니 배열',
+    id: 'collinear', minGainDbi: 4, name: 'Collinear omni array (COCO / sleeve stack)', nameKo: '동일선상 옴니 배열',
     category: 'Wire', pattern: 'omni', pol: ['linear'],
     fRange: [0.1e9, 12e9], profile: '3d', complexity: 3, cost: 2,
     summary: 'Stacked in-phase half-wave sections squash the doughnut toward the horizon: the only practical way past ~4 dBi while staying omnidirectional.',
@@ -386,7 +386,7 @@ export const ARCHETYPES = [
 
   // ====================================================== directional / high gain
   {
-    id: 'yagi', name: 'Yagi-Uda array', nameKo: '야기-우다 배열',
+    id: 'yagi', minGainDbi: 8, name: 'Yagi-Uda array', nameKo: '야기-우다 배열',
     category: 'Wire', pattern: 'directional', pol: ['linear'],
     fRange: [0.05e9, 40e9], profile: '3d', complexity: 2, cost: 2,
     summary: 'Best gain per unit cost of any antenna up to ~16 dBi. One driven element, one reflector, N directors on a boom.',
@@ -401,7 +401,7 @@ export const ARCHETYPES = [
         size: mm(0.5 * ctx.lambda0, boomL * ctx.lambda0, 0.02 * ctx.lambda0), count: nDir + 2,
         dims: { 'Boom length': boomL * ctx.lambda0 * 1e3, 'Directors': nDir, 'Reflector': 0.49 * ctx.lambda0 * 1e3, 'Driven': 0.47 * ctx.lambda0 * 1e3 },
         notes: [
-          `${nDir} directors on a ${boomL.toFixed(2)} lambda boom. Gain follows boom length, not element count - adding elements to a short boom buys almost nothing.`,
+          `${nDir} director${nDir === 1 ? '' : 's'} on a ${boomL.toFixed(2)} lambda boom. Gain follows boom length, not element count - adding elements to a short boom buys almost nothing.`,
           'Element lengths must hold ~0.5 % tolerance; the design is narrowband by construction.',
         ],
       };
@@ -429,7 +429,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'lpda', name: 'Log-periodic dipole array (LPDA)', nameKo: '로그 주기 다이폴 배열',
+    id: 'lpda', minGainDbi: 6, name: 'Log-periodic dipole array (LPDA)', nameKo: '로그 주기 다이폴 배열',
     category: 'Wire', pattern: 'directional', pol: ['linear'],
     fRange: [0.03e9, 40e9], profile: 'planar', complexity: 3, cost: 3,
     summary: 'Constant gain and impedance over a decade. When one antenna must cover 700 MHz to 6 GHz, this is the answer.',
@@ -468,7 +468,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'hornPyramidal', name: 'Pyramidal horn', nameKo: '피라미드 혼',
+    id: 'hornPyramidal', minGainDbi: 11, name: 'Pyramidal horn', nameKo: '피라미드 혼',
     category: 'Aperture', pattern: 'directional', pol: ['linear'],
     fRange: [1e9, 330e9], profile: '3d', complexity: 3, cost: 4,
     summary: 'The metrology standard. Predictable, low-loss, power-handling limited only by breakdown; used as the gain reference in every antenna range.',
@@ -491,7 +491,7 @@ export const ARCHETYPES = [
     ignoreSubstrate: true,
   },
   {
-    id: 'hornSiw', name: 'SIW / substrate-integrated H-plane horn', nameKo: 'SIW 혼 안테나',
+    id: 'hornSiw', minGainDbi: 8, name: 'SIW / substrate-integrated H-plane horn', nameKo: 'SIW 혼 안테나',
     category: 'Aperture', pattern: 'directional', pol: ['linear'],
     fRange: [20e9, 170e9], profile: 'planar', complexity: 4, cost: 4,
     summary: 'A horn built inside the board with via fences. Gives 8-12 dBi end-fire at mmWave with zero assembly.',
@@ -509,7 +509,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'reflector', name: 'Parabolic reflector (prime focus)', nameKo: '파라볼릭 반사판',
+    id: 'reflector', minGainDbi: 18, name: 'Parabolic reflector (prime focus)', nameKo: '파라볼릭 반사판',
     category: 'Aperture', pattern: 'directional', pol: ['linear', 'circular'],
     fRange: [0.3e9, 300e9], profile: '3d', complexity: 4, cost: 4,
     summary: 'The only practical route above ~30 dBi. Gain scales with diameter squared; everything else is feed and surface-tolerance engineering.',
@@ -532,7 +532,7 @@ export const ARCHETYPES = [
     ignoreSubstrate: true,
   },
   {
-    id: 'reflectarray', name: 'Printed reflectarray', nameKo: '리플렉트어레이',
+    id: 'reflectarray', minGainDbi: 20, name: 'Printed reflectarray', nameKo: '리플렉트어레이',
     category: 'Aperture', pattern: 'directional', pol: ['linear', 'circular'],
     fRange: [8e9, 300e9], profile: 'planar', complexity: 5, cost: 4,
     summary: 'A flat PCB that focuses like a dish: phase-shifting patches replace the parabolic surface. Reflector gain without the depth or the feed loss.',
@@ -628,7 +628,7 @@ export const ARCHETYPES = [
     },
   },
   {
-    id: 'lens', name: 'Dielectric lens (mmWave)', nameKo: '유전체 렌즈',
+    id: 'lens', minGainDbi: 16, name: 'Dielectric lens (mmWave)', nameKo: '유전체 렌즈',
     category: 'Aperture', pattern: 'directional', pol: ['linear', 'circular'],
     fRange: [24e9, 300e9], profile: '3d', complexity: 4, cost: 3,
     summary: 'A moulded lens over a patch or SIW feed. At 60-140 GHz this is the cheapest route to 20+ dBi because the feed stays on the PCB.',
@@ -650,7 +650,7 @@ export const ARCHETYPES = [
     ignoreSubstrate: true,
   },
   {
-    id: 'phasedArray', name: 'Beam-steering phased array (AiP)', nameKo: '위상 배열·빔 스티어링',
+    id: 'phasedArray', minGainDbi: 12, name: 'Beam-steering phased array (AiP)', nameKo: '위상 배열·빔 스티어링',
     category: 'Microstrip', pattern: 'steerable', pol: ['linear', 'circular'],
     fRange: [2e9, 170e9], profile: 'planar', complexity: 5, cost: 5,
     summary: 'Per-element phase control for electronic beam steering. Gain like an array, plus a scan angle - at the cost of a beamformer IC per few elements.',

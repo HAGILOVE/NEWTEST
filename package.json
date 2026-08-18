@@ -1,0 +1,14 @@
+{
+  "name": "rf-antenna-studio",
+  "version": "1.0.0",
+  "description": "Physics-based antenna design, trade-study and analysis tool for RF engineers",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "python3 -m http.server 8777",
+    "test": "node --test tests/",
+    "build": "node tools/build.mjs"
+  },
+  "keywords": ["antenna", "rf", "microwave", "microstrip", "patch", "link-budget", "emc"],
+  "engines": { "node": ">=18" }
+}

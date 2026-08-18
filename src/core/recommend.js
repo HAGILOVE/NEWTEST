@@ -136,6 +136,16 @@ export function recommend(spec) {
     score += (1 - (arch.cost - 1) / 4) * w.cost; weightSum += w.cost;
     score += (1 - (arch.complexity - 1) / 4) * w.simplicity; weightSum += w.simplicity;
 
+    // ---- over-engineering ---------------------------------------------------
+    // A 24 dBi-class aperture asked to deliver 7 dBi is not "wrong", it is the
+    // wrong tool: it costs volume, money and build time for gain nobody asked
+    // for. Rank it below the parts that fit the job.
+    if (arch.minGainDbi && spec.targetGainDbi < arch.minGainDbi - 0.5) {
+      const over = arch.minGainDbi - spec.targetGainDbi;
+      reasons.push(`Over-specified for a ${spec.targetGainDbi.toFixed(1)} dBi requirement - this class of antenna only earns its cost above about ${arch.minGainDbi} dBi.`);
+      score -= Math.min(over * 0.12, 1.1);
+    }
+
     // ---- substrate sanity ---------------------------------------------------
     if (!arch.ignoreSubstrate && spec.material.fMax && spec.f > spec.material.fMax) {
       reasons.push(`${spec.material.name} is not recommended above ${(spec.material.fMax / 1e9).toFixed(0)} GHz.`);
