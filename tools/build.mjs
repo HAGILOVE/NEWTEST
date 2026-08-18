@@ -104,6 +104,9 @@ const out = `<!doctype html>
 <title>${title}</title>
 <meta name="description" content="Physics-based antenna design tool: antenna-type recommendation, substrate trade studies, efficiency, ground-plane, thermal, tolerance and link-budget analysis.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128225;</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;650&display=swap">
 <style>
 ${css}
 </style>
@@ -126,3 +129,26 @@ mkdirSync(resolve(root, 'dist'), { recursive: true });
 const dest = resolve(root, 'dist/rf-antenna-studio.html');
 writeFileSync(dest, out);
 console.log(`bundled ${order.length} modules -> ${relative(root, dest)} (${(out.length / 1024).toFixed(0)} kB)`);
+
+// Fragment build: same bundle without the document wrapper, for hosts that
+// supply their own <head>/<body> (Claude Artifacts, CMS embeds, docs sites).
+const fragment = `<title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;650&display=swap">
+<style>
+${css}
+</style>
+<div id="app-root"><noscript>This tool requires JavaScript.</noscript></div>
+<script>
+(function () {
+'use strict';
+${chunks.join('\n\n')}
+
+__m${entryId}.boot();
+})();
+</script>
+`;
+const fragDest = resolve(root, 'dist/rf-antenna-studio.fragment.html');
+writeFileSync(fragDest, fragment);
+console.log(`fragment build      -> ${relative(root, fragDest)} (${(fragment.length / 1024).toFixed(0)} kB)`);

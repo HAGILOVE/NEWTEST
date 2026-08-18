@@ -168,6 +168,14 @@ function checkbox(key, label, after) {
 function buildSidebar(aside) {
   aside.innerHTML = '';
 
+  // On a narrow screen the form stacks above the results, so give the reader a
+  // way straight to the output without scrolling the whole specification.
+  const jump = h('a', { class: 'jump-results', href: '#panel', text: 'Jump to results ↓' }, aside);
+  jump.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
   // --- frequency ---------------------------------------------------------
   const g1 = h('fieldset', { class: 'group' }, aside);
   h('legend', { text: 'Operating frequency' }, g1);
