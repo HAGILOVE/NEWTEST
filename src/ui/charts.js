@@ -39,6 +39,28 @@ export const h = (tag, attrs = {}, parent = null) => {
   return n;
 };
 
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
+
+/**
+ * Size a drawing's viewBox to its container so it renders at a 1:1 scale and
+ * its annotation text comes out at the size it was designed for.
+ */
+export function fitWidth(host, preferred, lo = 340, hi = 980) {
+  const measured = host.getBoundingClientRect().width
+    || (host.parentElement ? host.parentElement.getBoundingClientRect().width : 0);
+  return Math.round(clampNum(measured - 30, lo, hi)) || preferred;
+}
+
+/**
+ * Square charts (polar, Smith) size their viewBox to the container too, so
+ * their labels render at the designed size instead of being magnified.
+ */
+function fitSquare(host, preferred) {
+  const measured = host.getBoundingClientRect().width
+    || (host.parentElement ? host.parentElement.getBoundingClientRect().width : 0);
+  return Math.round(clampNum(measured - 30, 300, 560)) || preferred || 340;
+}
+
 /** Nice axis ticks (Wilkinson-lite). */
 export function niceTicks(min, max, count = 6) {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { ticks: [0, 1], min: 0, max: 1 };
@@ -75,10 +97,14 @@ class Chart {
   constructor(host, opts) {
     this.host = host;
     this.opts = opts;
-    // Fixed viewBox width: the SVG scales to its container via CSS, so a
-    // constant here keeps every chart at the same aspect ratio regardless of
-    // when it is measured during layout.
-    this.width = opts.width || 640;
+    // Match the viewBox width to the container's actual width so the SVG
+    // renders at a 1:1 scale and its labels come out at the size they were
+    // designed for. A fixed viewBox made text in two-column layouts render at
+    // roughly half size, which is the difference between a chart you can read
+    // and one you squint at.
+    const measured = host.getBoundingClientRect().width
+      || (host.parentElement ? host.parentElement.getBoundingClientRect().width : 0);
+    this.width = opts.width || Math.round(clampNum(measured - 30, 380, 980)) || 640;
     this.height = opts.height || 300;
     this.m = Object.assign({ t: 26, r: 18, b: 44, l: 62 }, opts.margin || {});
     host.innerHTML = '';
@@ -202,6 +228,7 @@ function refLabel(g, x, y, text, anchor = 'start') {
   const rx = anchor === 'end' ? x - w + 4 : anchor === 'middle' ? x - w / 2 : x - 4;
   const bg = el('rect', { x: rx, y: y - 10, width: w, height: 13, fill: 'var(--surface-1)', opacity: 0.88, rx: 3 });
   grp.insertBefore(bg, t);
+  grp.box = { x0: rx, x1: rx + w, y0: y - 10, y1: y + 3 };
   return grp;
 }
 
@@ -368,12 +395,7 @@ export function barChart(host, opts) {
   const yDom = opts.yDomain || { min: yr.min, max: yr.max };
   c.axes({ x: { min: 0, max: items.length }, y: yDom, yLabel: opts.yLabel, xTicksOverride: [] });
 
-  for (const r of opts.hlines || []) {
-    const y = c.sy(r.y);
-    el('line', { x1: c.m.l, x2: c.m.l + c.iw, y1: y, y2: y, class: 'ref-line spec' }, c.g);
-    if (r.label) refLabel(c.g, c.m.l + c.iw - 4, y - 6, r.label, 'end');
-  }
-
+  const valueBoxes = [];        // filled while the bars are drawn
   const bw = c.iw / items.length;
   const pad = Math.min(bw * 0.22, 14);
   const zero = c.sy(Math.max(yDom.min, 0));
@@ -391,9 +413,13 @@ export function barChart(host, opts) {
     }, g);
     // square off the baseline end so only the data end is rounded
     el('rect', { x, y: up ? zero - 4 : zero, width: Math.max(w, 1), height: 4, fill: color }, g);
-    el('text', {
+    const vt = el('text', {
       x: x + w / 2, y: up ? y - 7 : zero + hgt + 15, class: 'bar-value',
-    }, g).textContent = opts.valueFmt ? opts.valueFmt(d.value) : fmt(d.value, 3);
+    }, g);
+    vt.textContent = opts.valueFmt ? opts.valueFmt(d.value) : fmt(d.value, 3);
+    const vw = vt.textContent.length * 6 + 4;
+    valueBoxes.push({ x0: x + w / 2 - vw / 2, x1: x + w / 2 + vw / 2,
+                      y0: (up ? y - 7 : zero + hgt + 15) - 10, y1: (up ? y - 7 : zero + hgt + 15) + 3 });
 
     const label = el('text', { x: x + w / 2, y: c.m.t + c.ih + 16, class: 'bar-label' }, c.g);
     const words = String(d.label).split(/\s+/);
@@ -412,6 +438,27 @@ export function barChart(host, opts) {
     });
     g.addEventListener('pointerleave', () => c.hideTip());
   });
+
+  // Reference lines go on last so their labels can be placed into a gap that
+  // the bar values have left free - above or below the line, either end.
+  for (const r of opts.hlines || []) {
+    const y = c.sy(r.y);
+    el('line', { x1: c.m.l, x2: c.m.l + c.iw, y1: y, y2: y, class: 'ref-line spec' }, c.g);
+    if (!r.label) continue;
+    const wEst = r.label.length * 5.6 + 8;
+    const slots = [
+      [c.m.l + c.iw - 4, y - 6, 'end'], [c.m.l + 4, y - 6, 'start'],
+      [c.m.l + c.iw - 4, y + 14, 'end'], [c.m.l + 4, y + 14, 'start'],
+    ];
+    let placedRef = false;
+    for (const [lx, ly, anchor] of slots) {
+      const x0 = anchor === 'end' ? lx - wEst : lx;
+      const box = { x0, x1: x0 + wEst, y0: ly - 10, y1: ly + 3 };
+      const hit = valueBoxes.some((b) => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1));
+      if (!hit) { refLabel(c.g, lx, ly, r.label, anchor); placedRef = true; break; }
+    }
+    if (!placedRef) refLabel(c.g, c.m.l + c.iw - 4, y + 14, r.label, 'end');
+  }
 
   if (opts.table !== false) {
     c.table([opts.xLabel || 'Item', opts.yLabel || 'Value'],
@@ -481,7 +528,6 @@ export function hBarChart(host, opts) {
   return c;
 }
 
-const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 
 /* ------------------------------------------------------------ stacked bars */
 
@@ -528,6 +574,104 @@ export function stackedBar(host, opts) {
   return c;
 }
 
+/* ------------------------------------------------------------------ heatmap */
+
+/**
+ * Sequential single-hue heatmap for a value over a 2-D parameter space.
+ * The ramp is one hue light-to-dark (never a rainbow): lightest means "least",
+ * darkest means "most", so the reader never has to consult the legend to know
+ * which way is up.
+ */
+const SEQ_BLUE = ['#cde2fb', '#b7d3f6', '#9ec5f4', '#86b6ef', '#6da7ec', '#5598e7',
+                  '#3987e5', '#2a78d6', '#256abf', '#1c5cab', '#184f95', '#104281', '#0d366b'];
+
+export function heatmap(host, opts) {
+  const margin = { t: 20, r: 104, b: 50, l: 66 };
+  // When both axes carry the same physical quantity the plot must be square,
+  // or the diagonal (the equal-X-equal-Y case) is not a 45 degree line and the
+  // reader cannot judge "wider than tall" by eye.
+  let height = opts.height;
+  if (opts.square) {
+    const w = opts.width || fitWidth(host, 620, 380, 640);   // cap so a square map does not swallow the page
+    height = (w - margin.l - margin.r) + margin.t + margin.b;
+    opts = Object.assign({}, opts, { width: w });
+  }
+  const c = new Chart(host, Object.assign({ margin }, opts, { height }));
+  const { cells, xs, ys } = opts;      // cells[iy][ix] = value (or NaN)
+  const flat = cells.flat().filter(Number.isFinite);
+  const lo = opts.min ?? Math.min(...flat);
+  const hi = opts.max ?? Math.max(...flat);
+  c.axes({
+    x: { min: xs[0], max: xs[xs.length - 1] },
+    y: { min: ys[0], max: ys[ys.length - 1] },
+    xLabel: opts.xLabel, yLabel: opts.yLabel, xFmt: opts.xFmt, yFmt: opts.yFmt, grid: false,
+  });
+  const colorOf = (v) => {
+    if (!Number.isFinite(v)) return 'var(--surface-3)';
+    const t = clampNum((v - lo) / Math.max(hi - lo, 1e-9), 0, 1);
+    return SEQ_BLUE[Math.round(t * (SEQ_BLUE.length - 1))];
+  };
+  const cw = c.iw / (xs.length - 1);
+  const ch = c.ih / (ys.length - 1);
+  for (let iy = 0; iy < ys.length; iy++) {
+    for (let ix = 0; ix < xs.length; ix++) {
+      const v = cells[iy][ix];
+      const x = c.sx(xs[ix]) - cw / 2;
+      const y = c.sy(ys[iy]) - ch / 2;
+      const r = el('rect', { x, y, width: cw + 0.6, height: ch + 0.6, fill: colorOf(v) }, c.g);
+      r.addEventListener('pointerenter', () => c.showTip(
+        `<div class="tip-head">${opts.xFmt ? opts.xFmt(xs[ix]) : fmt(xs[ix], 3)} × ${opts.yFmt ? opts.yFmt(ys[iy]) : fmt(ys[iy], 3)}</div>`
+        + `<div class="tip-row">${opts.valueLabel || 'value'}<b>${Number.isFinite(v) ? (opts.valueFmt ? opts.valueFmt(v) : fmt(v, 3)) : 'does not fit'}</b></div>`,
+        x + cw / 2, y));
+      r.addEventListener('pointerleave', () => c.hideTip());
+    }
+  }
+  // The equal-axes diagonal: everything on it is square, everything off it is
+  // a rectangle. Drawn rather than described, because it is the line readers
+  // navigate by.
+  if (opts.diagonal) {
+    const lo0 = Math.max(xs[0], ys[0]);
+    const hi0 = Math.min(xs[xs.length - 1], ys[ys.length - 1]);
+    el('line', {
+      x1: c.sx(lo0), y1: c.sy(lo0), x2: c.sx(hi0), y2: c.sy(hi0),
+      stroke: 'var(--surface-1)', 'stroke-width': 1.4, 'stroke-dasharray': '5 4', opacity: 0.75,
+    }, c.g);
+    refLabel(c.g, c.sx(hi0) - 6, c.sy(hi0) + 16, 'square', 'end');
+  }
+  // markers
+  (opts.markers || []).forEach((m, i) => {
+    const px = c.sx(m.x), py = c.sy(m.y);
+    el('circle', { cx: px, cy: py, r: 6.5, fill: 'none', stroke: 'var(--surface-1)', 'stroke-width': 4 }, c.g);
+    el('circle', { cx: px, cy: py, r: 6.5, fill: 'none', stroke: m.color || 'var(--series-2)', 'stroke-width': 2.2 }, c.g);
+    el('circle', { cx: px, cy: py, r: 1.8, fill: m.color || 'var(--series-2)' }, c.g);
+    // alternate the side so two nearby markers never overprint each other
+    if (m.label) {
+      const right = i % 2 === 0;
+      const lx = right ? Math.min(px + 12, c.m.l + c.iw - 6) : Math.max(px - 12, c.m.l + 6);
+      refLabel(c.g, lx, py + (right ? -10 : 16), m.label, right ? 'start' : 'end');
+    }
+  });
+  // colour scale
+  const barX = c.m.l + c.iw + 16, barW = 13;
+  SEQ_BLUE.forEach((col, i) => {
+    const seg = c.ih / SEQ_BLUE.length;
+    el('rect', { x: barX, y: c.m.t + c.ih - (i + 1) * seg, width: barW, height: seg + 0.5, fill: col }, c.g);
+  });
+  el('rect', { x: barX, y: c.m.t, width: barW, height: c.ih, fill: 'none',
+    stroke: 'var(--axis)', 'stroke-width': 0.8 }, c.g);
+  el('text', { x: barX + barW + 5, y: c.m.t + 9, class: 'tick' }, c.g)
+    .textContent = opts.valueFmt ? opts.valueFmt(hi) : fmt(hi, 3);
+  el('text', { x: barX + barW + 5, y: c.m.t + c.ih, class: 'tick' }, c.g)
+    .textContent = opts.valueFmt ? opts.valueFmt(lo) : fmt(lo, 3);
+  if (opts.valueLabel) {
+    const cap = el('text', { class: 'axis-label',
+      transform: `translate(${barX + barW + 34},${c.m.t + c.ih / 2}) rotate(-90)` }, c.g);
+    cap.textContent = opts.valueLabel;
+  }
+  c.note(opts.note);
+  return c;
+}
+
 /* ---------------------------------------------------------------- histogram */
 
 export function histogramChart(host, opts) {
@@ -565,7 +709,7 @@ export function histogramChart(host, opts) {
 
 /** Radiation-pattern polar plot, dB scale from `floor` to 0 (+peak). */
 export function polarChart(host, opts) {
-  const size = opts.size || 340;
+  const size = fitSquare(host, opts.size);
   host.innerHTML = '';
   host.classList.add('chart-host');
   if (opts.title) {
@@ -589,6 +733,12 @@ export function polarChart(host, opts) {
     el('circle', { cx, cy, r: rOf(db), class: 'polar-grid' }, svg);
     el('text', { x: cx + 3, y: cy - rOf(db) - 3, class: 'polar-tick' }, svg).textContent = `${db}`;
   }
+  // The half-power ring is the one people actually read a beamwidth off, so it
+  // is drawn as a labelled reference rather than as another grid circle.
+  el('circle', { cx, cy, r: rOf(-3), fill: 'none', stroke: 'var(--good)',
+    'stroke-width': 1.2, 'stroke-dasharray': '4 3', opacity: 0.85 }, svg);
+  el('text', { x: cx + rOf(-3) * 0.72, y: cy - rOf(-3) * 0.72, class: 'polar-tick',
+    fill: 'var(--good-text)' }, svg).textContent = '−3 dB';
   for (let a = 0; a < 360; a += 30) {
     const [x, y] = pt(a, 0);
     el('line', { x1: cx, y1: cy, x2: x, y2: y, class: 'polar-grid' }, svg);
@@ -599,6 +749,11 @@ export function polarChart(host, opts) {
   (opts.series || []).forEach((s, i) => {
     const color = s.color || SERIES_VARS[i % SERIES_VARS.length];
     const d = s.points.map((p, j) => `${j ? 'L' : 'M'}${pt(p.deg, p.db).join(',')}`).join('') + 'Z';
+    // A light fill under the first trace gives the lobe structure a readable
+    // body; further traces stay as outlines so they do not muddy each other.
+    if (i === 0 && (opts.series.length <= 2)) {
+      el('path', { d, fill: color, opacity: 0.10, stroke: 'none' }, svg);
+    }
     el('path', { d, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-dasharray': s.dash || null }, svg);
   });
 
@@ -642,7 +797,7 @@ export function polarChart(host, opts) {
 /* -------------------------------------------------------------- Smith chart */
 
 export function smithChart(host, opts) {
-  const size = opts.size || 340;
+  const size = fitSquare(host, opts.size);
   host.innerHTML = '';
   host.classList.add('chart-host');
   if (opts.title) {
@@ -730,10 +885,11 @@ export function scatterChart(host, opts) {
   const yr = niceTicks(Math.min(...pts.map((p) => p.y)), Math.max(...pts.map((p) => p.y)), 6);
   c.axes({ x: opts.xDomain || { min: xr.min, max: xr.max }, y: opts.yDomain || { min: yr.min, max: yr.max },
            xLabel: opts.xLabel, yLabel: opts.yLabel, xFmt: opts.xFmt, yFmt: opts.yFmt });
+  const refBoxes = [];
   for (const r of opts.hlines || []) {
     const y = c.sy(r.y);
     el('line', { x1: c.m.l, x2: c.m.l + c.iw, y1: y, y2: y, class: `ref-line ${r.kind || ''}` }, c.g);
-    if (r.label) el('text', { x: c.m.l + c.iw - 4, y: y - 5, class: 'ref-label', 'text-anchor': 'end' }, c.g).textContent = r.label;
+    if (r.label) refBoxes.push(refLabel(c.g, c.m.l + c.iw - 4, y - 5, r.label, 'end').box);
   }
   // Two passes: every marker first, then the labels on top. Drawing them
   // interleaved lets a later marker land on an earlier label, and lets a
@@ -752,7 +908,7 @@ export function scatterChart(host, opts) {
     return { p, px, py, r, box: { x0: px - r - 2, x1: px + r + 2, y0: py - r - 2, y1: py + r + 2 } };
   });
 
-  const placed = markers.map((m) => m.box);   // labels must clear every marker
+  const placed = markers.map((m) => m.box).concat(refBoxes);  // clear markers AND reference labels
   for (const m of markers) {
     if (!m.p.label) continue;
     const wEst = m.p.label.length * 5.4 + 10;

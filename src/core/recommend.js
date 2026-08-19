@@ -75,14 +75,20 @@ export function recommend(spec) {
     // ---- ground-plane corrected realized gain -------------------------------
     let gain = r.gainDbi;
     let gnd = null;
-    if (spec.groundM && (arch.category === 'Microstrip' || arch.id === 'slotCavity')) {
-      const patchDim = Math.max(r.size.w, r.size.l) / 1e3;
+    if ((spec.groundXM || spec.groundM) && (arch.category === 'Microstrip' || arch.id === 'slotCavity')) {
+      const gx = spec.groundXM || spec.groundM;
+      const gy = spec.groundYM || spec.groundM;
+      // size.l runs with the resonant length (x), size.w with the width (y)
+      const dimX = r.size.l / 1e3;
+      const dimY = r.size.w / 1e3;
       gnd = groundPlaneEffect({
-        lg: spec.groundM, patchDim, lambda0,
+        lgx: gx, lgy: gy, patchL: dimX, patchW: dimY, lambda0,
         swr: r.patch ? r.patch.surfaceWaveRatio : 0,
       });
       gain += gnd.deltaGdB;
-      if (patchDim > spec.groundM) blockers.push(`The radiator (${patchDim * 1e3 | 0} mm) does not fit on the ${(spec.groundM * 1e3).toFixed(0)} mm ground plane.`);
+      if (dimX > gx || dimY > gy) {
+        blockers.push(`The radiator (${(dimX * 1e3).toFixed(0)} × ${(dimY * 1e3).toFixed(0)} mm) does not fit on the ${(gx * 1e3).toFixed(0)} × ${(gy * 1e3).toFixed(0)} mm ground plane.`);
+      }
     }
     gain -= spec.feedLossDb || 0;
 

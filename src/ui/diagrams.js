@@ -3,7 +3,56 @@
  * Both are drawn to scale from the solved design so the picture cannot drift
  * out of step with the numbers.
  */
-import { el, h } from './charts.js';
+import { el, h, fitWidth } from './charts.js';
+
+/**
+ * Sectional hatching, as an engineering drawing would use it: each material
+ * family gets its own line angle and pitch, so a cut face is identifiable
+ * without reading its label. Registered once per SVG.
+ */
+let hatchSeq = 0;
+export function defineHatch(svg) {
+  const id = `hx${hatchSeq++}`;
+  const defs = el('defs', {}, svg);
+  const pat = (name, angle, pitch, stroke, width, bg) => {
+    const p = el('pattern', {
+      id: `${id}-${name}`, width: pitch, height: pitch,
+      patternUnits: 'userSpaceOnUse', patternTransform: `rotate(${angle})`,
+    }, defs);
+    if (bg) el('rect', { width: pitch, height: pitch, fill: bg }, p);
+    el('line', { x1: 0, y1: 0, x2: 0, y2: pitch, stroke, 'stroke-width': width }, p);
+  };
+  pat('substrate', 45, 5, 'var(--diagram-stroke)', 0.55, 'var(--sub)');
+  pat('carrier', 135, 5, 'var(--diagram-stroke)', 0.55, 'var(--sub2)');
+  pat('metal', 45, 3, 'var(--diagram-stroke)', 0.5, 'var(--connector)');
+  return {
+    substrate: `url(#${id}-substrate)`,
+    carrier: `url(#${id}-carrier)`,
+    metal: `url(#${id}-metal)`,
+  };
+}
+
+/** ISO-style dimension line with solid arrowheads at both ends. */
+export function dimArrow(g, x1, y1, x2, y2, text, vertical = false, cls = 'diagram-dim') {
+  el('line', { x1, y1, x2, y2, class: 'dim-line' }, g);
+  const head = (px, py, dir) => {
+    const a = vertical ? `M${px},${py} l-3.2,${dir * 7} h6.4 Z` : `M${px},${py} l${dir * 7},-3.2 v6.4 Z`;
+    el('path', { d: a, fill: 'var(--text-muted)' }, g);
+  };
+  head(x1, y1, 1);
+  head(x2, y2, -1);
+  // witness lines, the short ticks that tie the dimension to the feature
+  const w = 4;
+  for (const [px, py] of [[x1, y1], [x2, y2]]) {
+    el('line', Object.assign({ class: 'dim-line' },
+      vertical ? { x1: px - w, x2: px + w, y1: py, y2: py } : { x1: px, x2: px, y1: py - w, y2: py + w }), g);
+  }
+  if (!text) return;
+  const t = el('text', { class: cls, 'text-anchor': 'middle' }, g);
+  if (vertical) t.setAttribute('transform', `translate(${x1 - 8},${(y1 + y2) / 2}) rotate(-90)`);
+  else { t.setAttribute('x', (x1 + x2) / 2); t.setAttribute('y', y1 - 7); }
+  t.textContent = text;
+}
 
 const LAYER_FILL = {
   copper: 'var(--cu)',
@@ -18,7 +67,8 @@ const LAYER_FILL = {
  * @param design result of runDesign()
  */
 export function stackupDiagram(host, design, opts = {}) {
-  const W = opts.width || 760, H = opts.height || 400;
+  const W = opts.width || fitWidth(host, 760, 420, 980);
+  const H = opts.height || Math.round(W * 0.53);
   host.innerHTML = '';
   host.classList.add('chart-host');
   const head = h('div', { class: 'chart-head' }, host);
@@ -26,10 +76,12 @@ export function stackupDiagram(host, design, opts = {}) {
   h('div', { class: 'chart-sub', text: 'Horizontal scale is true; vertical scale is exaggerated so thin layers stay visible.' }, head);
   const wrap = h('div', { class: 'chart-wrap' }, host);
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg diagram', role: 'img', 'aria-label': 'stack-up cross section' }, wrap);
+  const HATCH = defineHatch(svg);
 
-  const { sol, stack, groundM, feed } = design;
-  const gndMm = groundM * 1e3;
-  const patchMm = sol.W * 1e3;
+  const { sol, stack, feed } = design;
+  // The cross-section is cut through the E-plane, so it shows the X extent.
+  const gndMm = (design.groundXM ?? design.groundM) * 1e3;
+  const patchMm = sol.L * 1e3;
   const isAirGap = !!stack.composite;
 
   const drawW = W * 0.44;
@@ -69,9 +121,13 @@ export function stackupDiagram(host, design, opts = {}) {
     y -= lh;
     const w = L.full ? gW : Math.min(L.patch ? patchMm * scaleX : patchMm * scaleX * 1.22, gW);
     const x = originX + (gW - w) / 2;
+    // Cut faces get sectional hatching; copper foils and the air gap stay flat,
+    // as they would on a real section view.
+    const fill = L.kind === 'substrate' ? HATCH.substrate
+      : L.kind === 'carrier' ? HATCH.carrier
+      : (LAYER_FILL[L.kind] || 'var(--sub)');
     const r = el('rect', {
-      x, y, width: w, height: lh,
-      fill: LAYER_FILL[L.kind] || 'var(--sub)',
+      x, y, width: w, height: lh, fill,
       stroke: 'var(--diagram-stroke)', 'stroke-width': 0.8,
     }, svg);
     el('title', {}, r).textContent = L.label;
@@ -113,10 +169,7 @@ export function stackupDiagram(host, design, opts = {}) {
   const dimX = originX - 16;
   const dimTop = topY;
   const dimBot = gndCu.y;
-  el('line', { x1: dimX, x2: dimX, y1: dimTop, y2: dimBot, class: 'dim-line' }, svg);
-  for (const yy of [dimTop, dimBot]) el('line', { x1: dimX - 4, x2: dimX + 4, y1: yy, y2: yy, class: 'dim-line' }, svg);
-  const ht = el('text', { class: 'diagram-dim', transform: `translate(${dimX - 7},${(dimTop + dimBot) / 2}) rotate(-90)`, 'text-anchor': 'middle' }, svg);
-  ht.textContent = `h = ${(stack.h * 1e3).toFixed(2)} mm`;
+  dimArrow(svg, dimX, dimTop, dimX, dimBot, `h = ${(stack.h * 1e3).toFixed(2)} mm`, true);
 
   // ---- callouts, one per layer, anchored to that layer's own height -------
   const cx = originX + gW + 40;
@@ -133,17 +186,17 @@ export function stackupDiagram(host, design, opts = {}) {
 
   // ---- horizontal scale bar ---------------------------------------------
   const sbY = H - 30;
-  el('line', { x1: originX, x2: originX + gW, y1: sbY, y2: sbY, class: 'dim-line' }, svg);
-  for (const xx of [originX, originX + gW]) el('line', { x1: xx, x2: xx, y1: sbY - 4, y2: sbY + 4, class: 'dim-line' }, svg);
+  dimArrow(svg, originX, sbY, originX + gW, sbY, null);
   el('text', { x: originX + gW / 2, y: sbY + 17, class: 'diagram-dim', 'text-anchor': 'middle' }, svg)
-    .textContent = `ground plane ${gndMm.toFixed(0)} mm  (${(groundM / design.lambda0).toFixed(2)} λ₀)`;
+    .textContent = `ground X ${gndMm.toFixed(0)} mm  (${(gndMm / 1e3 / design.lambda0).toFixed(2)} λ₀)  —  section through the E-plane`;
 
   return svg;
 }
 
 /** Plan view of the patch with the feed geometry dimensioned. */
 export function planView(host, design, opts = {}) {
-  const W = opts.width || 480, H = opts.height || 400;
+  const W = opts.width || fitWidth(host, 480, 340, 620);
+  const H = opts.height || Math.round(W * 0.86);
   host.innerHTML = '';
   host.classList.add('chart-host');
   const head = h('div', { class: 'chart-head' }, host);
@@ -152,14 +205,18 @@ export function planView(host, design, opts = {}) {
   const wrap = h('div', { class: 'chart-wrap' }, host);
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg diagram', role: 'img', 'aria-label': 'patch plan view' }, wrap);
 
-  const { sol, feed, groundM } = design;
-  const gndMm = groundM * 1e3;
-  const s = Math.min((W - 90) / gndMm, (H - 90) / gndMm);
-  const gx = (W - gndMm * s) / 2, gy = 46;
+  const { sol, feed } = design;
+  // Plan view: x (the resonant length, E-plane) runs vertically down the page
+  // so the feed enters from the bottom, as it does on the board.
+  const gndXMm = (design.groundXM ?? design.groundM) * 1e3;
+  const gndYMm = (design.groundYM ?? design.groundM) * 1e3;
+  const s = Math.min((W - 100) / gndYMm, (H - 100) / gndXMm);
+  const boardW = gndYMm * s, boardH = gndXMm * s;
+  const gx = (W - boardW) / 2, gy = 50;
 
-  el('rect', { x: gx, y: gy, width: gndMm * s, height: gndMm * s, fill: 'var(--sub)', stroke: 'var(--diagram-stroke)' }, svg);
+  el('rect', { x: gx, y: gy, width: boardW, height: boardH, fill: 'var(--sub)', stroke: 'var(--diagram-stroke)' }, svg);
   const pw = sol.W * 1e3 * s, pl = sol.L * 1e3 * s;
-  const pxc = gx + (gndMm * s - pw) / 2, pyc = gy + (gndMm * s - pl) / 2;
+  const pxc = gx + (boardW - pw) / 2, pyc = gy + (boardH - pl) / 2;
   el('rect', { x: pxc, y: pyc, width: pw, height: pl, fill: 'var(--cu)', stroke: 'var(--diagram-stroke)' }, svg);
 
   if (feed.type === 'inset') {
@@ -167,10 +224,10 @@ export function planView(host, design, opts = {}) {
     const gap = feed.insetGap * 1e3 * s;
     const dep = feed.insetDepth * 1e3 * s;
     const fx = pxc + pw / 2;
-    el('rect', { x: fx - fw / 2, y: pyc + pl - dep, width: fw, height: dep + (gy + gndMm * s - (pyc + pl)), fill: 'var(--cu)' }, svg);
+    el('rect', { x: fx - fw / 2, y: pyc + pl - dep, width: fw, height: dep + (gy + boardH - (pyc + pl)), fill: 'var(--cu)' }, svg);
     el('rect', { x: fx - fw / 2 - gap, y: pyc + pl - dep, width: gap, height: dep, fill: 'var(--sub)' }, svg);
     el('rect', { x: fx + fw / 2, y: pyc + pl - dep, width: gap, height: dep, fill: 'var(--sub)' }, svg);
-    el('text', { x: fx + fw / 2 + gap + 6, y: pyc + pl - dep / 2, class: 'diagram-label' }, svg)
+    el('text', { x: gx + boardW + 8, y: pyc + pl - dep / 2 + 4, class: 'diagram-label' }, svg)
       .textContent = `inset ${(feed.insetDepth * 1e3).toFixed(2)} mm`;
   } else if (feed.type === 'probe') {
     const off = feed.probeOffset * 1e3 * s;
@@ -186,16 +243,15 @@ export function planView(host, design, opts = {}) {
   }
 
   // dimensions
-  const dim = (x1, y1, x2, y2, text, vertical) => {
-    el('line', { x1, y1, x2, y2, class: 'dim-line' }, svg);
-    const t = el('text', { class: 'diagram-dim', 'text-anchor': 'middle' }, svg);
-    if (vertical) t.setAttribute('transform', `translate(${x1 - 6},${(y1 + y2) / 2}) rotate(-90)`);
-    else { t.setAttribute('x', (x1 + x2) / 2); t.setAttribute('y', y1 - 6); }
-    t.textContent = text;
-  };
+  const dim = (x1, y1, x2, y2, text, vertical) => dimArrow(svg, x1, y1, x2, y2, text, vertical);
   dim(pxc, pyc - 12, pxc + pw, pyc - 12, `W = ${(sol.W * 1e3).toFixed(2)} mm`);
   dim(pxc - 12, pyc, pxc - 12, pyc + pl, `L = ${(sol.L * 1e3).toFixed(2)} mm`, true);
-  dim(gx, gy + gndMm * s + 22, gx + gndMm * s, gy + gndMm * s + 22, `ground ${gndMm.toFixed(0)} mm`);
+  dim(gx, gy + boardH + 26, gx + boardW, gy + boardH + 26, `ground Y = ${gndYMm.toFixed(0)} mm  (H-plane)`);
+  dim(gx - 36, gy, gx - 36, gy + boardH, `ground X = ${gndXMm.toFixed(0)} mm  (E-plane)`, true);
+  // Per-side margins - what the ground model actually consumes - dimensioned
+  // rather than annotated, so they cannot collide with the W and L callouts.
+  dim(pxc + pw + 16, gy, pxc + pw + 16, pyc, `mX ${((gndXMm - sol.L * 1e3) / 2).toFixed(1)}`, true);
+  dim(gx, pyc + pl + 16, pxc, pyc + pl + 16, `mY ${((gndYMm - sol.W * 1e3) / 2).toFixed(1)}`);
   return svg;
 }
 

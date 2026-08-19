@@ -535,3 +535,80 @@ test('a ground plane smaller than the radiator is reported, not silently zeroed'
   assert.equal(gr.current, null, 'no gain figure is offered for a size the model cannot evaluate');
   assert.ok(gr.minimumMm > 250, `minimum reported size should exceed the radiator: ${gr.minimumMm}`);
 });
+
+/* ----------------------------------------- rectangular ground plane */
+
+test('a square ground reduces exactly to the previously validated model', () => {
+  const lam = 0.1228, dim = 0.0379;
+  const legacy = groundPlaneEffect({ lg: 0.070, patchDim: dim, lambda0: lam, swr: 0.09 });
+  close(legacy.deltaGdB, -0.280, 0.01, 'legacy single-dimension call is unchanged');
+  close(legacy.frontToBackDb, 9.69, 0.05, 'legacy front-to-back is unchanged');
+  // and the two planes of a square ground with a square radiator agree
+  const sq = groundPlaneEffect({ lgx: 0.070, lgy: 0.070, patchL: dim, patchW: dim, lambda0: lam, swr: 0.09 });
+  close(sq.E.deltaGdB, sq.H.deltaGdB, 1e-9, 'square ground, square radiator: both planes identical');
+  close(sq.deltaGdB, legacy.deltaGdB, 1e-9, 'and it matches the legacy result exactly');
+  close(sq.E.frontToBackDb, sq.H.frontToBackDb, 1e-9);
+});
+
+test('each principal plane answers to its own axis', () => {
+  const lam = 0.1228, L = 0.0294, W = 0.0379;
+  const base = { patchL: L, patchW: W, lambda0: lam, swr: 0.09 };
+  // Growing X must move the E-plane and leave the H-plane alone, and vice versa
+  const a = groundPlaneEffect({ ...base, lgx: 0.060, lgy: 0.090 });
+  const bx = groundPlaneEffect({ ...base, lgx: 0.140, lgy: 0.090 });
+  const by = groundPlaneEffect({ ...base, lgx: 0.060, lgy: 0.170 });
+  close(a.H.deltaGdB, bx.H.deltaGdB, 1e-9, 'changing X must not touch the H-plane');
+  close(a.H.frontToBackDb, bx.H.frontToBackDb, 1e-9, 'nor its front-to-back');
+  close(a.E.deltaGdB, by.E.deltaGdB, 1e-9, 'changing Y must not touch the E-plane');
+  assert.ok(bx.E.deltaGdB > a.E.deltaGdB, 'a bigger X improves the E-plane');
+  assert.ok(by.H.frontToBackDb > a.H.frontToBackDb, 'a bigger Y improves the H-plane front-to-back');
+});
+
+test('margins are measured against the right patch dimension', () => {
+  const lam = 0.1228, L = 0.0294, W = 0.0379;
+  const r = groundPlaneEffect({ lgx: 0.100, lgy: 0.080, patchL: L, patchW: W, lambda0: lam });
+  close(r.marginXLambda, ((0.100 - L) / 2) / lam, 1e-9, 'X margin runs past the RADIATING edges (length L)');
+  close(r.marginYLambda, ((0.080 - W) / 2) / lam, 1e-9, 'Y margin runs past the side edges (width W)');
+  // a radiator larger than its axis clamps the margin at zero rather than going negative
+  const tight = groundPlaneEffect({ lgx: 0.020, lgy: 0.080, patchL: L, patchW: W, lambda0: lam });
+  assert.equal(tight.marginXLambda, 0, 'a negative margin clamps to zero');
+});
+
+test('board orientation matters, and the tool computes by how much', () => {
+  const lam = 0.1228, L = 0.0294, W = 0.0379;
+  const p = { patchL: L, patchW: W, lambda0: lam, swr: 0.09 };
+  const tall = groundPlaneEffect({ ...p, lgx: 0.040, lgy: 0.122 });
+  const wide = groundPlaneEffect({ ...p, lgx: 0.122, lgy: 0.040 });
+  // Same board outline, antenna turned 90 degrees - and it is NOT the same answer
+  assert.ok(Math.abs(tall.deltaGdB - wide.deltaGdB) > 0.5,
+    `orientation must change the result: ${tall.deltaGdB.toFixed(2)} vs ${wide.deltaGdB.toFixed(2)} dB`);
+  assert.ok(wide.deltaGdB > tall.deltaGdB,
+    'the orientation that puts the long axis beyond the radiating edges wins');
+  assert.ok(tall.asymmetryDb > 2 && wide.asymmetryDb > 2, 'a 3:1 board is strongly asymmetric');
+  // the E-plane of one is the H-plane geometry of the other
+  close(wide.E.frontToBackDb, tall.H.frontToBackDb, 1e-9);
+});
+
+test('the design run carries X and Y end to end', () => {
+  const spec = {
+    f: 2.442e9, materialId: 'fr4', stackMode: 'solid', h: 1.6e-3, targetGainDbi: 7,
+    pattern: 'directional', polarization: 'linear', bwPct: 3.42,
+    feedLossDb: 0.4, powerW: 1, feedType: 'inset',
+  };
+  const a = runDesign({ ...spec, groundXM: 0.110, groundYM: 0.070 });
+  const b = runDesign({ ...spec, groundXM: 0.070, groundYM: 0.110 });
+  close(a.groundXM, 0.110, 1e-12);
+  close(a.groundYM, 0.070, 1e-12);
+  assert.ok(Math.abs(a.realizedGainDbi - b.realizedGainDbi) > 0.1,
+    'the two orientations of one board give different realized gain');
+  // thermal area must follow the real rectangle, not a square
+  const area = 0.110 * 0.070;
+  assert.ok(a.thermal.rTotalKperW > 0 && Number.isFinite(a.thermal.rTotalKperW));
+  const square = runDesign({ ...spec, groundM: Math.sqrt(area) });
+  assert.ok(Math.abs(a.thermal.rTotalKperW - square.thermal.rTotalKperW) / square.thermal.rTotalKperW < 0.05,
+    'equal-area boards dissipate about the same, whatever their aspect');
+  // a square spec still works through the legacy field
+  const legacy = runDesign({ ...spec, groundM: 0.070 });
+  close(legacy.groundXM, 0.070, 1e-12);
+  close(legacy.groundYM, 0.070, 1e-12);
+});

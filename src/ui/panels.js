@@ -1,12 +1,12 @@
 /**
  * Tab panel renderers. Each takes the container and the current design result.
  */
-import { h, el, lineChart, barChart, hBarChart, stackedBar, histogramChart, polarChart, smithChart, scatterChart, fmt, engFreq, SERIES_VARS } from './charts.js';
+import { h, el, lineChart, barChart, hBarChart, stackedBar, histogramChart, heatmap, polarChart, smithChart, scatterChart, fmt, engFreq, SERIES_VARS } from './charts.js';
 import { stackupDiagram, planView, arrayLayout } from './diagrams.js';
 import { antennaDrawing } from './antennaArt.js';
 import { patternFor, responseVsFrequency } from '../core/patterns.js';
 import {
-  thicknessSweep, permittivitySweep, substrateTrade, groundSweep, recommendGroundSize,
+  thicknessSweep, permittivitySweep, substrateTrade,
   monteCarlo, MATERIALS, MATERIAL_BY_ID, solvePatch, toDB, fromDB, C0, CONDUCTORS,
 } from '../core/design.js';
 import { groundResponse, groundModeFor, groundPlaneEffect, monopoleGround } from '../core/ground.js';
@@ -104,7 +104,7 @@ export function renderOverview(root, D, state) {
       `The Chu-McLean bound caps the VSWR-2 bandwidth at ${(lim.chuBandwidth * 100).toFixed(1)} % for this size at ${engFreq(D.spec.f)}. Efficiency and bandwidth are traded against volume here, not against cleverness.`);
   } else {
     callout(root, 'good', 'Specification is physically achievable',
-      `A ${(D.spec.maxDimM ? D.spec.maxDimM * 1e3 : D.groundM * 1e3).toFixed(0)} mm envelope supports up to ${lim.harringtonGainDbi.toFixed(1)} dBi (Harrington normal-gain limit) and ${(lim.chuBandwidth * 100).toFixed(0)} % bandwidth at ${engFreq(D.spec.f)}.`);
+      `A ${(D.spec.maxDimM ? D.spec.maxDimM * 1e3 : Math.max(D.groundXM, D.groundYM) * 1e3).toFixed(0)} mm envelope supports up to ${lim.harringtonGainDbi.toFixed(1)} dBi (Harrington normal-gain limit) and ${(lim.chuBandwidth * 100).toFixed(0)} % bandwidth at ${engFreq(D.spec.f)}.`);
   }
 
   // ---- headline tiles -----------------------------------------------------
@@ -244,7 +244,7 @@ export function renderSelected(root, D, state) {
   const bar = h('div', { class: 'ctrl-row' }, root);
   const pick = h('label', { class: 'ctrl' }, bar);
   h('span', { text: 'Antenna type' }, pick);
-  const sel = h('select', { style: 'width:auto;min-width:250px' }, pick);
+  const sel = h('select', { style: 'width:auto;min-width:min(250px, 100%)' }, pick);
   for (const group of ['recommended', 'marginal', 'rejected']) {
     const inGroup = cands.filter((x) => x.verdict === group);
     if (!inGroup.length) continue;
@@ -447,7 +447,7 @@ export function renderGroundEffect(root, D, state) {
   const bar = h('div', { class: 'ctrl-row' }, root);
   const pick = h('label', { class: 'ctrl' }, bar);
   h('span', { text: 'Antenna type' }, pick);
-  const sel = h('select', { style: 'width:auto;min-width:250px' }, pick);
+  const sel = h('select', { style: 'width:auto;min-width:min(250px, 100%)' }, pick);
   for (const x of cands) {
     h('option', { value: x.arch.id, text: `${x.arch.name} — ${x.realizedGainDbi.toFixed(1)} dBi`,
       selected: x.arch.id === c.arch.id ? 'selected' : null }, sel);
@@ -466,10 +466,14 @@ export function renderGroundEffect(root, D, state) {
   h('span', { class: 'pill info', text: MODE_LABEL[mode] }, bar);
 
   const radiatorDim = Math.max(c.size.w, c.size.l) / 1e3;
+  const radL = c.size.l / 1e3;    // along x, the resonant length -> E-plane
+  const radW = c.size.w / 1e3;    // along y, the radiating width -> H-plane
   const vertical = ['monopole', 'collinear', 'biconical'].includes(c.arch.id);
   // the size currently in play: the design ground for planar types, otherwise
   // a sensible default so the marker has somewhere to sit
-  const currentSize = mode === 'plane' ? D.groundM
+  // For a rectangular board the meaningful single number for the square sweep
+  // is the equal-area square, not either edge.
+  const currentSize = mode === 'plane' ? Math.sqrt(D.groundXM * D.groundYM)
     : mode === 'radial' ? (D.spec.maxDimM ? D.spec.maxDimM / 2 : 0.25 * D.lambda0)
     : mode === 'chassis' ? (D.spec.maxDimM || 0.4 * D.lambda0)
     : mode === 'disc' ? 0.8 * D.lambda0
@@ -485,9 +489,13 @@ export function renderGroundEffect(root, D, state) {
   const valid = gr.points.filter((q) => Number.isFinite(q.gainDbi));
   const best = valid.reduce((a, b) => (b.gainDbi > a.gainDbi ? b : a), valid[0]);
 
-  // ---- tiles -------------------------------------------------------------
-  const tl = h('div', { class: 'tiles' }, root);
+  // In plane mode the rectangular section below owns the headline numbers, so
+  // the generic square-ground tiles would only repeat them.
   const unit = mode === 'radial' ? 'radius' : mode === 'disc' ? 'diameter' : mode === 'height' ? 'height' : 'edge';
+  if (mode === 'plane') {
+    renderRectangularGround(root, D, c, { radL, radW });
+  }
+  const tl = h('div', { class: 'tiles', style: mode === 'plane' ? 'display:none' : '' }, root);
   tile(tl, `Current ${unit}`, (currentSize * 1e3).toFixed(0), 'mm',
     `${(currentSize / D.lambda0).toFixed(2)} λ₀ at ${engFreq(D.spec.f)}`);
   tile(tl, 'Gain there', gr.current ? gr.current.gainDbi.toFixed(2) : 'n/a', gr.current ? 'dBi' : '',
@@ -504,7 +512,9 @@ export function renderGroundEffect(root, D, state) {
   tile(tl, gr.secondaryLabel.replace(/ \[.*/, ''), secNow === null || !Number.isFinite(secNow) ? 'n/a' : secNow.toFixed(mode === 'chassis' ? 2 : 0),
     mode === 'radial' || mode === 'height' ? '°' : mode === 'chassis' ? '×' : 'dB', 'at the current size');
 
-  if (!gr.currentFits) {
+  if (mode === 'plane') {
+    // handled by the rectangular section
+  } else if (!gr.currentFits) {
     callout(root, 'bad',
       `The ${(currentSize * 1e3).toFixed(0)} mm ground plane is smaller than the antenna on it`,
       `This type needs at least ${gr.minimumMm.toFixed(0)} mm just to hold the radiator (${(radiatorDim * 1e3).toFixed(0)} mm across), and ${gr.recommended.xMm.toFixed(0)} mm to reach ${gr.recommended.gainDbi.toFixed(1)} dBi. Raise the ground plane in the sidebar, or pick a type that fits the board you have.`);
@@ -517,7 +527,11 @@ export function renderGroundEffect(root, D, state) {
   }
 
   // ---- the main chart ----------------------------------------------------
-  const c1 = card(root, `Gain against ${gr.xLabel}`, gr.mechanism);
+  const c1 = card(root,
+    mode === 'plane' ? 'Both axes together — the square-ground case' : `Gain against ${gr.xLabel}`,
+    mode === 'plane'
+      ? 'The diagonal of the map above: X and Y grown together. The marker is the square of the same area as the board actually specified, which is the fair comparison.'
+      : gr.mechanism);
   const series = [{ name: mode === 'radial' || mode === 'height' ? 'peak gain' : 'realized gain',
     points: valid.map((q) => ({ x: q.xLambda, y: q.gainDbi })) }];
   if (mode === 'radial') {
@@ -535,7 +549,7 @@ export function renderGroundEffect(root, D, state) {
     yLabel: 'gain [dBi]',
     xFmt: (v) => v.toFixed(2),
     vlines: [
-      ...(gr.current ? [{ x: gr.current.xLambda, label: `current ${(currentSize * 1e3).toFixed(0)} mm`, kind: 'spec' }] : []),
+      ...(gr.current ? [{ x: gr.current.xLambda, label: mode === 'plane' ? `equal-area square ${(currentSize * 1e3).toFixed(0)} mm` : `current ${(currentSize * 1e3).toFixed(0)} mm`, kind: 'spec' }] : []),
       { x: gr.recommended.xLambda, label: `recommended ${gr.recommended.xMm.toFixed(0)} mm`, kind: 'good' },
     ],
     hlines: [{ y: D.spec.targetGainDbi, label: `target ${D.spec.targetGainDbi.toFixed(1)} dBi` }],
@@ -622,6 +636,161 @@ export function renderGroundEffect(root, D, state) {
   gr.notes.forEach((n) => h('li', { text: n }, ul));
 }
 
+/**
+ * A rectangular ground plane does not behave like a square one of the same
+ * area: each principal plane is shaped by the two edges perpendicular to it,
+ * so the E-plane answers to the X extent and the H-plane to the Y extent.
+ */
+function renderRectangularGround(root, D, c, { radL, radW }) {
+  const lam = D.lambda0;
+  const gx = D.groundXM, gy = D.groundYM;
+  const base = c.gainDbi - (D.spec.feedLossDb || 0);
+  const g0 = groundPlaneEffect({ lgx: gx, lgy: gy, patchL: radL, patchW: radW,
+    lambda0: lam, swr: c.patch ? c.patch.surfaceWaveRatio : 0 });
+
+  const mxMm = ((gx - radL) / 2) * 1e3;
+  const myMm = ((gy - radW) / 2) * 1e3;
+  const fitsX = mxMm >= 0, fitsY = myMm >= 0;
+
+  const tl = h('div', { class: 'tiles' }, root);
+  tile(tl, 'Board', `${(gx * 1e3).toFixed(0)} × ${(gy * 1e3).toFixed(0)}`, 'mm',
+    `${(gx / lam).toFixed(2)} × ${(gy / lam).toFixed(2)} λ₀ · aspect ${(gx / gy).toFixed(2)}:1`);
+  tile(tl, 'Margin X (E-plane)', fitsX ? mxMm.toFixed(1) : 'does not fit', fitsX ? 'mm' : '',
+    fitsX ? `${g0.marginXLambda.toFixed(3)} λ₀ beyond each radiating edge`
+          : `the radiator is ${(radL * 1e3).toFixed(1)} mm long — ${Math.abs(mxMm * 2).toFixed(1)} mm too big for this axis`,
+    !fitsX ? 'bad' : g0.marginXLambda > 0.15 ? 'good' : g0.marginXLambda > 0.08 ? 'warn' : 'bad');
+  tile(tl, 'Margin Y (H-plane)', fitsY ? myMm.toFixed(1) : 'does not fit', fitsY ? 'mm' : '',
+    fitsY ? `${g0.marginYLambda.toFixed(3)} λ₀ beyond each side edge`
+          : `the radiator is ${(radW * 1e3).toFixed(1)} mm wide — ${Math.abs(myMm * 2).toFixed(1)} mm too big for this axis`,
+    !fitsY ? 'bad' : g0.marginYLambda > 0.15 ? 'good' : g0.marginYLambda > 0.08 ? 'warn' : 'bad');
+  tile(tl, 'E-plane gain change', g0.E.deltaGdB.toFixed(2), 'dB', `F/B ${g0.E.frontToBackDb.toFixed(1)} dB`);
+  tile(tl, 'H-plane gain change', g0.H.deltaGdB.toFixed(2), 'dB', `F/B ${g0.H.frontToBackDb.toFixed(1)} dB`);
+  tile(tl, 'E vs H asymmetry', g0.asymmetryDb.toFixed(2), 'dB',
+    `F/B differs by ${g0.fbAsymmetryDb.toFixed(1)} dB between the planes`,
+    g0.asymmetryDb < 0.5 ? 'good' : g0.asymmetryDb < 1.5 ? 'warn' : 'bad');
+
+  if (!fitsX || !fitsY) {
+    callout(root, 'bad',
+      `The radiator does not fit on this board in ${!fitsX && !fitsY ? 'either axis' : !fitsX ? 'the X axis' : 'the Y axis'}`,
+      `${c.arch.name} is ${(radL * 1e3).toFixed(1)} mm along X and ${(radW * 1e3).toFixed(1)} mm along Y, against a `
+      + `${(gx * 1e3).toFixed(0)} × ${(gy * 1e3).toFixed(0)} mm ground plane. The numbers below are computed with the `
+      + `margin clamped at zero, so treat them as the best case — a real overhanging patch behaves worse than that.`);
+  }
+
+  if (g0.asymmetryDb > 1.0) {
+    const worse = g0.E.deltaGdB < g0.H.deltaGdB ? 'E-plane (X axis)' : 'H-plane (Y axis)';
+    const better = worse.startsWith('E') ? 'H-plane (Y axis)' : 'E-plane (X axis)';
+    const swapped = groundPlaneEffect({ lgx: gy, lgy: gx, patchL: radL, patchW: radW,
+      lambda0: lam, swr: c.patch ? c.patch.surfaceWaveRatio : 0 });
+    callout(root, 'warn', `The two principal planes differ by ${g0.asymmetryDb.toFixed(1)} dB`,
+      `The ${worse} is the starved one. Rotating the antenna 90° on the same board `
+      + `(${(gy * 1e3).toFixed(0)} × ${(gx * 1e3).toFixed(0)} mm relative to the patch) would give `
+      + `${(base + swapped.deltaGdB).toFixed(2)} dBi instead of ${(base + g0.deltaGdB).toFixed(2)} dBi — `
+      + `${swapped.deltaGdB > g0.deltaGdB ? `worth ${(swapped.deltaGdB - g0.deltaGdB).toFixed(2)} dB, so turn it` : 'so the current orientation is the right one'}. `
+      + `The ${better} has margin to spare.`);
+  }
+
+  // ---- 2-D map ----------------------------------------------------------
+  const c1 = card(root, 'Realized gain over the whole board-size space',
+    'Every combination of X and Y, with this antenna on it. The circle is the board currently specified; the cross is the best square of the same area. Grey cells are sizes the radiator does not fit on.');
+  // 0.3 to 2.0 lambda covers the whole useful design space: below that the
+  // radiator does not fit, above it the curve is flat and the board is absurd.
+  const n = 52, lo = 0.3, span = 1.7;
+  const xs = [], ys = [];
+  for (let i = 0; i < n; i++) {
+    xs.push(lo + (span * i) / (n - 1));
+    ys.push(lo + (span * i) / (n - 1));
+  }
+  const cells = ys.map((yl) => xs.map((xl) => {
+    const lx = xl * lam, ly = yl * lam;
+    if (lx < radL * 1.02 || ly < radW * 1.02) return NaN;
+    return base + groundPlaneEffect({ lgx: lx, lgy: ly, patchL: radL, patchW: radW,
+      lambda0: lam, swr: c.patch ? c.patch.surfaceWaveRatio : 0 }).deltaGdB;
+  }));
+  const areaSq = Math.sqrt(gx * gy) / lam;
+  heatmap(chartBox(c1), {
+    square: true, diagonal: true, cells, xs, ys,
+    xLabel: 'ground X — along the resonant length [mm]',
+    yLabel: 'ground Y — along the width [mm]',
+    xFmt: (v) => `${(v * lam * 1e3).toFixed(0)}`,
+    yFmt: (v) => `${(v * lam * 1e3).toFixed(0)}`,
+    valueLabel: 'realized gain [dBi]', valueFmt: (v) => `${v.toFixed(2)} dBi`,
+    markers: [
+      { x: gx / lam, y: gy / lam, label: `this board ${(gx * 1e3).toFixed(0)}×${(gy * 1e3).toFixed(0)}` },
+      { x: areaSq, y: areaSq, label: 'square of equal area', color: 'var(--series-6)' },
+    ],
+    note: `Axes are in millimetres at ${engFreq(D.spec.f)}, on equal scales so the dashed diagonal is the square case at 45°. The map is deliberately not symmetric about that diagonal: the X margin sits beyond the radiating edges and the Y margin does not, so the same board turned 90° is a different antenna. The checkerboard is the edge-diffraction ripple in both axes at once — it is physical, not noise.`,
+  });
+
+  // ---- the two principal cuts -------------------------------------------
+  const c2 = card(root, 'Each axis, taken separately',
+    'Sweeping one axis with the other held at its current value. The E-plane responds to X, the H-plane to Y — and the ripple periods are independent, which is why the two curves do not line up.');
+  const g2 = h('div', { class: 'grid2' }, c2);
+  const sweep = (axis) => {
+    const pts = [];
+    for (let i = 0; i <= 200; i++) {
+      const v = 0.3 + (3.2 * i) / 200;
+      const lx = axis === 'x' ? v * lam : gx;
+      const ly = axis === 'x' ? gy : v * lam;
+      if (lx < radL * 1.02 || ly < radW * 1.02) continue;
+      const r = groundPlaneEffect({ lgx: lx, lgy: ly, patchL: radL, patchW: radW,
+        lambda0: lam, swr: c.patch ? c.patch.surfaceWaveRatio : 0 });
+      pts.push({ v, mm: v * lam * 1e3, gain: base + r.deltaGdB,
+        plane: axis === 'x' ? r.E.deltaGdB : r.H.deltaGdB,
+        fb: axis === 'x' ? r.E.frontToBackDb : r.H.frontToBackDb });
+    }
+    return pts;
+  };
+  const sx = sweep('x'), sy = sweep('y');
+  lineChart(chartBox(g2), {
+    height: 320, title: 'Sweeping X (E-plane)',
+    subtitle: `Y held at ${(gy * 1e3).toFixed(0)} mm`,
+    series: [
+      { name: 'realized gain', points: sx.map((q) => ({ x: q.mm, y: q.gain })) },
+      { name: 'E-plane change', points: sx.map((q) => ({ x: q.mm, y: base + q.plane })), color: 'var(--series-2)', dash: '5 4' },
+    ],
+    xLabel: 'ground X [mm]', yLabel: 'gain [dBi]',
+    vlines: [{ x: gx * 1e3, label: 'current', kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(2)} dBi`, directLabels: false, table: false,
+  });
+  lineChart(chartBox(g2), {
+    height: 320, title: 'Sweeping Y (H-plane)',
+    subtitle: `X held at ${(gx * 1e3).toFixed(0)} mm`,
+    series: [
+      { name: 'realized gain', points: sy.map((q) => ({ x: q.mm, y: q.gain })) },
+      { name: 'H-plane change', points: sy.map((q) => ({ x: q.mm, y: base + q.plane })), color: 'var(--series-2)', dash: '5 4' },
+    ],
+    xLabel: 'ground Y [mm]', yLabel: 'gain [dBi]',
+    vlines: [{ x: gy * 1e3, label: 'current', kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(2)} dBi`, directLabels: false, table: false,
+  });
+
+  const c3 = card(root, 'Front-to-back, per plane',
+    'Back radiation is set by the edges of the plane you are looking at, so a long-and-narrow board has a good F/B one way and a poor one the other.');
+  lineChart(chartBox(c3), {
+    height: 300,
+    series: [
+      { name: 'E-plane F/B (follows X)', points: sx.map((q) => ({ x: q.mm, y: q.fb })) },
+      { name: 'H-plane F/B (follows Y)', points: sy.map((q) => ({ x: q.mm, y: q.fb })), color: 'var(--series-2)' },
+    ],
+    xLabel: 'that axis of the ground plane [mm]', yLabel: 'front-to-back [dB]',
+    vlines: [{ x: gx * 1e3, label: `X ${(gx * 1e3).toFixed(0)}`, kind: 'spec' },
+             { x: gy * 1e3, label: `Y ${(gy * 1e3).toFixed(0)}`, kind: 'good' }],
+    tipFmt: (p) => `${p.y.toFixed(1)} dB`, directLabels: false, table: false,
+  });
+
+  const c4 = card(root, 'Orientation study — the same board, the antenna turned 90°');
+  dataTable(c4, ['Orientation', 'X × Y relative to the patch', 'Realized gain', 'E-plane', 'H-plane', 'F/B E / H', 'Asymmetry'],
+    [['As specified', gx, gy], ['Rotated 90°', gy, gx]].map(([name, a, bq]) => {
+      const r = groundPlaneEffect({ lgx: a, lgy: bq, patchL: radL, patchW: radW,
+        lambda0: lam, swr: c.patch ? c.patch.surfaceWaveRatio : 0 });
+      return [name, `${(a * 1e3).toFixed(0)} × ${(bq * 1e3).toFixed(0)} mm`,
+        `${(base + r.deltaGdB).toFixed(2)} dBi`, `${r.E.deltaGdB.toFixed(2)} dB`, `${r.H.deltaGdB.toFixed(2)} dB`,
+        `${r.E.frontToBackDb.toFixed(1)} / ${r.H.frontToBackDb.toFixed(1)} dB`, `${r.asymmetryDb.toFixed(2)} dB`];
+    }));
+  h('p', { class: 'chart-note', text: 'On a fixed board outline this is a free change: rotating the patch 90° costs nothing in area and can be worth a decibel.' }, c4);
+}
+
 /* =========================================================== PATCH DESIGN */
 
 export function renderPatch(root, D) {
@@ -635,7 +804,8 @@ export function renderPatch(root, D) {
     s.etaSpace > 0.8 ? 'good' : s.etaSpace > 0.5 ? 'warn' : 'bad');
   tile(tl, 'VSWR-2 bandwidth', (s.fbw2 * 100).toFixed(2), '%', `${(s.bw2Hz / 1e6).toFixed(1)} MHz · Q_t ${s.Qt.toFixed(0)}`);
   tile(tl, 'Edge resistance', s.Rin.toFixed(0), 'Ω', `G₁ ${(s.G1 * 1e3).toFixed(3)} mS, G₁₂ ${(s.G12 * 1e3).toFixed(3)} mS`);
-  tile(tl, 'Beamwidth E/H', `${D.beamwidth.thetaE.toFixed(0)}° / ${D.beamwidth.thetaH.toFixed(0)}°`, '', `F/B ${D.gnd.frontToBackDb.toFixed(1)} dB`);
+  tile(tl, 'Beamwidth E/H', `${D.beamwidth.thetaE.toFixed(0)}° / ${D.beamwidth.thetaH.toFixed(0)}°`, '',
+    `F/B ${D.gnd.E.frontToBackDb.toFixed(1)} / ${D.gnd.H.frontToBackDb.toFixed(1)} dB (E / H)`);
 
   // ---- dimensions + feed --------------------------------------------------
   const c1 = card(root, 'Synthesised geometry', 'Transmission-line/cavity synthesis at the design frequency, then solved back through the full model.');
@@ -649,7 +819,10 @@ export function renderPatch(root, D) {
     ['Patch length L', mm(s.L), `${(s.L / D.lambda0).toFixed(3)} λ₀`],
     ['Fringing extension ΔL', mm(s.dL), 'each radiating edge'],
     ['Effective length Le', mm(s.Le), `${s.LeOverLambda.toFixed(3)} λ₀ — sets the two-slot spacing`],
-    ['Ground plane', `${(D.groundM * 1e3).toFixed(1)} mm`, `${(D.groundM / D.lambda0).toFixed(2)} λ₀ square`],
+    ['Ground plane', `${(D.groundXM * 1e3).toFixed(1)} × ${(D.groundYM * 1e3).toFixed(1)} mm`,
+      `${(D.groundXM / D.lambda0).toFixed(2)} × ${(D.groundYM / D.lambda0).toFixed(2)} λ₀`],
+    ['Ground margin per side', `X ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} · Y ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm`,
+      `${D.gnd.marginXLambda.toFixed(3)} / ${D.gnd.marginYLambda.toFixed(3)} λ₀ — X is beyond the radiating edges`],
     ['Far-field distance', `${(D.fieldRegions.farField * 1e3).toFixed(0)} mm`, '2D²/λ criterion — minimum test range'],
   ]);
 
@@ -901,55 +1074,6 @@ function defaultTradeSet(spec) {
   return base;
 }
 
-/* ========================================================== GROUND PLANE */
-
-export function renderGround(root, D) {
-  const patchDim = Math.max(D.sol.W, D.sol.L);
-  const sweep = groundSweep({ patchDim, lambda0: D.lambda0, swr: D.sol.surfaceWaveRatio, from: 0.3, to: 4 });
-  const rec = recommendGroundSize({ patchDim, lambda0: D.lambda0, swr: D.sol.surfaceWaveRatio });
-
-  const tl = h('div', { class: 'tiles' }, root);
-  tile(tl, 'Ground in use', (D.groundM * 1e3).toFixed(0), 'mm', `${D.gnd.lgLambda.toFixed(2)} λ₀ square`);
-  tile(tl, 'Gain penalty', D.gnd.deltaGdB.toFixed(2), 'dB', `truncation ${D.gnd.truncationDb.toFixed(2)}, ripple ${D.gnd.rippleDb.toFixed(2)}`,
-    D.gnd.deltaGdB > -0.5 ? 'good' : D.gnd.deltaGdB > -1.5 ? 'warn' : 'bad');
-  tile(tl, 'Front-to-back', D.gnd.frontToBackDb.toFixed(1), 'dB', 'includes surface-wave spill-over');
-  tile(tl, 'Recommended ground', (rec.lg * 1e3).toFixed(0), 'mm', `${rec.lgLambda.toFixed(2)} λ₀ — within 0.5 dB of asymptotic`);
-  tile(tl, 'Edge margin', (D.gnd.marginLambda).toFixed(3), 'λ₀', `${((D.groundM - patchDim) / 2 * 1e3).toFixed(1)} mm per side`,
-    D.gnd.marginLambda > 0.15 ? 'good' : 'warn');
-
-  const c1 = card(root, 'Gain against ground-plane size',
-    'Three effects superimposed: aperture truncation when the fringing fields run out of ground, a λ/2-periodic ripple from the two diffracting edges, and surface-wave power spilling over the rim. The ripple is real — it is why measured gain wobbles as you trim a ground plane.');
-  lineChart(chartBox(c1), {
-    height: 340,
-    series: [{ name: 'Δ gain vs infinite ground', points: sweep.filter((p) => Number.isFinite(p.deltaGdB)).map((p) => ({ x: p.lgLambda, y: p.deltaGdB })) }],
-    xLabel: 'ground plane edge length [λ₀]', yLabel: 'gain change [dB]',
-    vlines: [{ x: D.gnd.lgLambda, label: 'this design', kind: 'spec' },
-             { x: rec.lgLambda, label: 'recommended', kind: 'good' }],
-    hlines: [{ y: 0, label: 'infinite ground' }],
-    tipFmt: (p) => `${p.y.toFixed(2)} dB`,
-    note: `Physical scale: 1 λ₀ = ${(D.lambda0 * 1e3).toFixed(1)} mm at ${engFreq(D.spec.f)}.`,
-  });
-
-  const c2 = card(root, 'Front-to-back ratio',
-    'Back radiation comes from edge diffraction of both the space wave and the surface wave. Doubling the ground buys roughly 4.5 dB until the surface-wave term saturates it.');
-  lineChart(chartBox(c2), {
-    height: 300,
-    series: [{ name: 'F/B', points: sweep.filter((p) => Number.isFinite(p.fb)).map((p) => ({ x: p.lgLambda, y: p.fb })), color: 'var(--series-2)' }],
-    xLabel: 'ground plane edge length [λ₀]', yLabel: 'front-to-back ratio [dB]',
-    vlines: [{ x: D.gnd.lgLambda, label: 'this design', kind: 'spec' }],
-    tipFmt: (p) => `${p.y.toFixed(1)} dB`,
-  });
-
-  const c3 = card(root, 'Ground-plane sizing guidance');
-  dataTable(c3, ['Ground size', 'Δ gain', 'F/B', 'Verdict'],
-    [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0].map((x) => {
-      const p = sweep.reduce((a, b) => (Math.abs(b.lgLambda - x) < Math.abs(a.lgLambda - x) ? b : a));
-      const v = p.deltaGdB > -0.3 ? 'Fully developed' : p.deltaGdB > -1.0 ? 'Acceptable' : 'Truncated — gain and pattern degraded';
-      return [`${x.toFixed(2)} λ₀ = ${(x * D.lambda0 * 1e3).toFixed(0)} mm`, `${p.deltaGdB.toFixed(2)} dB`, `${p.fb.toFixed(1)} dB`, v];
-    }));
-  h('p', { class: 'chart-note', text: 'Rule of thumb this model reproduces: allow at least a quarter-wavelength of ground beyond every patch edge, and expect the last 0.5 dB to arrive only past one wavelength square.' }, c3);
-}
-
 /* ============================================================== THERMAL */
 
 export function renderThermal(root, D, state) {
@@ -993,7 +1117,7 @@ export function renderThermal(root, D, state) {
         x: p,
         y: solveThermal({
           pInW: p, efficiency: D.sol.etaSpace, mismatchGamma: 0.1,
-          areaM2: D.groundM ** 2, perimeterM: 4 * D.groundM, material: D.stack.material,
+          areaM2: D.groundXM * D.groundYM, perimeterM: 2 * (D.groundXM + D.groundYM), material: D.stack.material,
           h: D.stack.h, tAmbC: spec.tAmbC ?? 25, airVelocity: cs.v,
           emissivity: spec.emissivity ?? 0.9, altitudeM: spec.altitudeM ?? 0,
           viaCount: spec.viaCount ?? 0,
@@ -1025,7 +1149,7 @@ export function renderThermal(root, D, state) {
   dataTable(h('div', {}, g2), ['Quantity', 'Value'], [
     ['Convection coefficient h_c', `${th.hConv.toFixed(2)} W/(m²·K)`],
     ['Radiation coefficient h_r', `${th.hRad.toFixed(2)} W/(m²·K)`],
-    ['Radiating/convecting area', `${(D.groundM ** 2 * 2 * 1e4).toFixed(1)} cm² (both faces)`],
+    ['Radiating/convecting area', `${(D.groundXM * D.groundYM * 2 * 1e4).toFixed(1)} cm² (both faces)`],
     ['Ambient pressure', `${(th.pressurePa / 1000).toFixed(1)} kPa (${(spec.altitudeM ?? 0)} m altitude)`],
     ['Board mass', `${th.massG.toFixed(1)} g`],
     ['Time to 63 % of final rise', `${th.tauSeconds.toFixed(0)} s`],
@@ -1320,7 +1444,8 @@ export function renderDrawings(root, D) {
   dataTable(dims, ['Feature', 'Dimension', 'Tolerance guidance'], [
     ['Patch width W', mm(D.sol.W), '±25 µm standard etch'],
     ['Patch length L', mm(D.sol.L), 'sets the resonance — tightest control here'],
-    ['Ground plane', `${(D.groundM * 1e3).toFixed(1)} mm square`, 'unbroken copper, no splits under the patch'],
+    ['Ground plane X (E-plane)', `${(D.groundXM * 1e3).toFixed(1)} mm`, `margin ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm per side beyond the radiating edges`],
+    ['Ground plane Y (H-plane)', `${(D.groundYM * 1e3).toFixed(1)} mm`, `margin ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm per side`],
     ['Substrate height', mm(D.stack.h), `±${D.stack.composite ? '0.10 mm (spacer stack)' : '10 % (core)'}`],
     ['50 Ω feed width', mm(D.feed.feedLineWidth), '±25 µm'],
     ...(D.feed.insetDepth !== undefined ? [['Inset depth', mm(D.feed.insetDepth), '±50 µm — trims the match, not the frequency']] : []),
@@ -1332,7 +1457,7 @@ export function renderDrawings(root, D) {
   const ul = h('ul', { class: 'ref-list' }, c3);
   const notes = [
     `Substrate: ${D.stack.baseMaterial.name} — ${D.stack.baseMaterial.notes}`,
-    `Keep the ground plane continuous for at least ${((D.groundM - Math.max(D.sol.W, D.sol.L)) / 2 * 1e3).toFixed(1)} mm beyond every patch edge; splits, stitching gaps and component keep-outs under the patch all show up as pattern distortion.`,
+    `Keep the ground plane continuous for at least ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm beyond the radiating edges (X) and ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm beyond the side edges (Y); splits, stitching gaps and component keep-outs under the patch all show up as pattern distortion. The X margin is the one that matters most - it sits beyond the edges that actually radiate.`,
     `Surface finish: ENIG adds a nickel layer whose conductivity is 4× worse than copper. On a ${(D.stack.h * 1e3).toFixed(2)} mm stack that is worth roughly ${(0.3 * (0.001 / Math.max(D.stack.h, 1e-4))).toFixed(2)} dB — prefer OSP or immersion silver for the radiating layer.`,
     `Solder mask over the patch raises the effective permittivity slightly and adds loss; specify mask-free (SMD-defined keep-out) over the radiator and note it on the fabrication drawing.`,
     D.stack.composite
@@ -1596,7 +1721,7 @@ function theoryAperture(root, D, state, k) {
   dataTable(c2, ['Relation', 'Formula', 'At this design'], [
     ['Directivity from beamwidths', 'D₀ ≈ 32400 / (θ_E · θ_H)', `${D.beamwidth.thetaE.toFixed(0)}° × ${D.beamwidth.thetaH.toFixed(0)}° → ${toDB(32400 / (D.beamwidth.thetaE * D.beamwidth.thetaH)).toFixed(1)} dBi`],
     ['Effective aperture', 'Ae = Gλ²/4π', `${(effectiveAperture(D.realizedGainDbi, lam) * 1e4).toFixed(2)} cm²`],
-    ['Aperture efficiency', 'ηap = Ae / Aphysical', `${((effectiveAperture(D.realizedGainDbi, lam) / (D.groundM * D.groundM)) * 100).toFixed(1)} % of the ground-plane footprint`],
+    ['Aperture efficiency', 'ηap = Ae / Aphysical', `${((effectiveAperture(D.realizedGainDbi, lam) / (D.groundXM * D.groundYM)) * 100).toFixed(1)} % of the ${(D.groundXM * 1e3).toFixed(0)} × ${(D.groundYM * 1e3).toFixed(0)} mm footprint`],
     ['Array gain', 'G = G_element + 10log₁₀(N) − feed loss', 'each doubling of elements is +3 dB minus what the feed takes back'],
     ['Element spacing for no grating lobe', 'd/λ < 1/(1 + |sin θ_scan|)', 'broadside: d < λ. ±60° scan: d < 0.54λ'],
     ['Gain–bandwidth of a small antenna', 'G·BW bounded by (ka)³', 'the Chu bound restated — you may trade them, not beat them'],
@@ -1960,7 +2085,7 @@ export function renderReport(root, D, state) {
     ['Polarisation', D.spec.polarization],
     ['Required bandwidth', D.spec.bwPct ? `${D.spec.bwPct.toFixed(2)} %` : 'not specified'],
     ['Substrate', `${D.stack.material.name}, h = ${(D.stack.h * 1e3).toFixed(3)} mm`],
-    ['Ground plane', `${(D.groundM * 1e3).toFixed(1)} mm square`],
+    ['Ground plane', `${(D.groundXM * 1e3).toFixed(1)} × ${(D.groundYM * 1e3).toFixed(1)} mm (X × Y)`],
     ['Envelope limit', D.spec.maxDimM ? `${(D.spec.maxDimM * 1e3).toFixed(0)} mm` : 'unconstrained'],
     ['Input power', `${(D.spec.powerW ?? 1).toFixed(2)} W`],
     ['Temperature range', `${D.spec.tMinC ?? -40} to ${D.spec.tMaxC ?? 85} °C`],
@@ -1978,7 +2103,7 @@ export function renderReport(root, D, state) {
       D.spec.bwPct ? (D.sol.fbw2 * 100 >= D.spec.bwPct ? 'covers requirement' : 'insufficient') : ''],
     ['Patch dimensions', `${(D.sol.W * 1e3).toFixed(2)} × ${(D.sol.L * 1e3).toFixed(2)} mm`, ''],
     ['Loaded Q', D.sol.Qt.toFixed(1), ''],
-    ['Front-to-back', `${D.gnd.frontToBackDb.toFixed(1)} dB`, ''],
+    ['Front-to-back', `${D.gnd.frontToBackDb.toFixed(1)} dB`, `E-plane ${D.gnd.E.frontToBackDb.toFixed(1)} dB, H-plane ${D.gnd.H.frontToBackDb.toFixed(1)} dB`],
     ['Hot-spot temperature', `${D.thermal.tHotC.toFixed(1)} °C`, D.thermal.safe ? 'within laminate limit' : 'EXCEEDS limit'],
     ['Max continuous power', `${D.thermal.pMaxContinuousW.toFixed(2)} W`, ''],
     ['Drift over temperature', `${(D.drift.totalSpan * 100).toFixed(3)} %`, `${D.drift.bandwidthConsumedPct.toFixed(0)} % of bandwidth`],
@@ -2015,7 +2140,7 @@ function buildPayload(D) {
       pattern: D.spec.pattern, polarization: D.spec.polarization,
       requiredBandwidthPct: D.spec.bwPct, substrate: D.stack.material.name,
       epsilonR: D.stack.material.er, lossTangent: D.stack.material.df,
-      substrateHeightM: D.stack.h, groundPlaneM: D.groundM,
+      substrateHeightM: D.stack.h, groundPlaneXM: D.groundXM, groundPlaneYM: D.groundYM,
       inputPowerW: D.spec.powerW, temperatureRangeC: [D.spec.tMinC, D.spec.tMaxC],
     },
     geometry: {
@@ -2032,6 +2157,9 @@ function buildPayload(D) {
       edgeResistanceOhm: D.sol.Rin, frontToBackDb: D.gnd.frontToBackDb,
       beamwidthEDeg: D.beamwidth.thetaE, beamwidthHDeg: D.beamwidth.thetaH,
       groundPenaltyDb: D.gnd.deltaGdB,
+      groundPenaltyEPlaneDb: D.gnd.E.deltaGdB, groundPenaltyHPlaneDb: D.gnd.H.deltaGdB,
+      frontToBackEPlaneDb: D.gnd.E.frontToBackDb, frontToBackHPlaneDb: D.gnd.H.frontToBackDb,
+      groundMarginXLambda: D.gnd.marginXLambda, groundMarginYLambda: D.gnd.marginYLambda,
     },
     thermal: {
       dissipatedW: D.thermal.pDissipatedW, hotSpotC: D.thermal.tHotC,

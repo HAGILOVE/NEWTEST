@@ -58,13 +58,30 @@ its own model:
 
 | Model | Applies to | What the size controls |
 |---|---|---|
-| Image plane | patch family, arrays, slots, DRA, SIW | aperture truncation, λ/2-periodic edge-diffraction ripple, surface-wave spill-over |
+| Image plane | patch family, arrays, slots, DRA, SIW | aperture truncation, λ/2-periodic edge-diffraction ripple, surface-wave spill-over — **resolved per axis**, see below |
 | Counterpoise | monopole, whip | how far the pattern peak tilts off the horizon, and the input impedance |
 | Chassis | PIFA, IFA, chip antennas | gain and bandwidth peak at the chassis half-wave wavemode resonance |
 | Backing disc | axial helix, QHA | back-lobe suppression |
 | Mounting height | dipole, Yagi, LPDA, horn, dish, biconical | two-ray interference with the surface: up to 6 dB of ground gain and the elevation of the first lobe |
 
-Each gives a gain curve against size, the secondary effect that goes with it
+**The ground plane is rectangular, and the two axes do different jobs.** X runs
+along the resonant length, so its margin sits beyond the *radiating* edges and
+shapes the E-plane; Y runs along the width and shapes the H-plane. Each plane's
+truncation, diffraction ripple, surface-wave spill and front-to-back are
+computed from its own two edges, so:
+
+- the same board turned 90° is a different antenna, and the tool says by how much
+- a long-and-narrow ground has a good front-to-back one way and a poor one the other
+- the E-plane margin dominates the boresight gain (weighted 65/35), because that
+  is where the fringing fields that actually radiate get clipped
+
+A square ground reduces to the single-dimension model exactly, so the original
+validation still holds. The Ground & platform tab shows a square gain map over
+the whole (X, Y) space with the equal-axes diagonal drawn on it, each axis swept
+separately, front-to-back per plane, and an orientation study — rotating the
+patch 90° on a fixed board outline is free, and can be worth a decibel.
+
+Each mode gives a gain curve against size, the secondary effect that goes with it
 (front-to-back, beam tilt, bandwidth factor, lobe elevation), a recommended
 size with the reason, a sizing table, and — for the ground-plane and
 counterpoise cases — the same antenna's pattern drawn on three different
@@ -134,6 +151,8 @@ The patch engine was checked against published data before any UI was written.
 | 4 × 4 array, 0.7 λ, cosine taper | ~22°, −20 dB | 22°, −21 dB |
 | Monopole beam tilt at 0.25 / 0.5 / 1 / 2 λ ground radius | 45 / 30 / 18 / 10° | 45 / 30 / 18 / 10° |
 | Dipole λ/4 above a perfect ground | 8.15 dBi (+6.0 dB) | 8.17 dBi (+6.02 dB) |
+| Square ground reduces to the 1-D model | identical | identical to 1e-9 |
+| E-plane independent of the Y axis | exactly | exactly (verified by test) |
 | First lobe elevation over ground | asin(λ/4h) | matches to 0.6° from 0.5 to 3 λ |
 
 `npm test` locks all of these in. If a model change moves any of them, the test

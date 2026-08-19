@@ -29,7 +29,9 @@ const DEFAULT_SPEC = {
   polarization: 'linear',
   targetGainDbi: 7,
   bwPct: 3.42,
-  groundMm: 70,
+  groundXMm: 70,
+  groundYMm: 70,
+  groundSquare: true,
   autoGround: false,
   maxDimMm: 120,
   feedType: 'inset',
@@ -97,7 +99,8 @@ function toSpec() {
     polarization: state.polarization,
     targetGainDbi: state.targetGainDbi,
     bwPct: state.bwPct,
-    groundM: state.autoGround ? null : state.groundMm * 1e-3,
+    groundXM: state.autoGround ? null : state.groundXMm * 1e-3,
+    groundYM: state.autoGround ? null : (state.groundSquare ? state.groundXMm : state.groundYMm) * 1e-3,
     maxDimM: state.maxDimMm > 0 ? state.maxDimMm * 1e-3 : null,
     feedType: state.feedType,
     feedLossDb: state.feedLossDb,
@@ -157,7 +160,11 @@ function segmented(key, options, after) {
   for (const o of options) {
     const b = h('button', { text: o.label, type: 'button' }, g);
     b.setAttribute('aria-pressed', String(state[key] === o.value));
-    b.addEventListener('click', () => { state[key] = o.value; if (after) after(); render(); });
+    b.addEventListener('click', () => {
+      state[key] = o.value;
+      if (after) after();
+      render();
+    });
   }
   return g;
 }
@@ -255,7 +262,22 @@ function buildSidebar(aside) {
   const g4 = h('fieldset', { class: 'group' }, aside);
   h('legend', { text: 'Ground plane & feed' }, g4);
   g4.appendChild(checkbox('autoGround', 'Size the ground plane automatically'));
-  if (!state.autoGround) field(g4, 'Ground plane (square)', 'mm', num('groundMm', { min: 5, max: 3000 }));
+  if (!state.autoGround) {
+    field(g4, 'Ground plane shape', '', segmented('groundSquare', [
+      { value: true, label: 'Square' },
+      { value: false, label: 'Rectangular' },
+    ], () => { if (state.groundSquare) state.groundYMm = state.groundXMm; }));
+    if (state.groundSquare) {
+      field(g4, 'Edge length (both axes)', 'mm', num('groundXMm', { min: 5, max: 3000, after: () => { state.groundYMm = state.groundXMm; } }));
+    } else {
+      field(g4, 'X — along the resonant length (E-plane)', 'mm', num('groundXMm', { min: 5, max: 3000 }));
+      field(g4, 'Y — along the radiating width (H-plane)', 'mm', num('groundYMm', { min: 5, max: 3000 }));
+    }
+    const gx = state.groundXMm, gy = state.groundSquare ? state.groundXMm : state.groundYMm;
+    h('p', { class: 'small muted', style: 'margin:2px 0 0',
+      text: `${gx.toFixed(0)} × ${gy.toFixed(0)} mm = ${((gx * gy) / 100).toFixed(1)} cm²`
+          + `, aspect ${(gx / gy).toFixed(2)}:1` }, g4);
+  }
   field(g4, 'Feed type', '', select('feedType', [
     { value: 'inset', label: 'Inset microstrip feed' },
     { value: 'quarterWave', label: 'Quarter-wave transformer' },
@@ -312,7 +334,11 @@ export function render() {
     D = lastDesign;
     if (!D) return;
   }
-  if (state.autoGround) state.groundMm = D.groundM * 1e3;
+  if (state.autoGround) {
+    state.groundXMm = D.groundXM * 1e3;
+    state.groundYMm = D.groundYM * 1e3;
+    state.groundSquare = Math.abs(D.groundXM - D.groundYM) < 1e-6;
+  }
 
   buildSidebar(document.getElementById('spec'));
 

@@ -243,14 +243,18 @@ input[type="range"] { width: 100%; accent-color: var(--series-1); }
 .card {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px;
+  min-width: 0;
 }
 .card > h2 { font-size: 14px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .card > h2 + p.lede { margin: 0 0 12px; color: var(--text-secondary); font-size: 12.5px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
-.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+/* auto-FILL, not auto-fit: auto-fit collapses tracks that have no child yet,
+   so the first chart in a two-column row would measure the full width and size
+   its viewBox (and therefore its label scale) wrongly. */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); gap: 12px; }
 
 /* -------------------------------------------------------------- stat tiles */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; margin-bottom: 14px; }
 .tile {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 10px 12px;
@@ -271,7 +275,7 @@ table.data th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; l
 table.data td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 table.data td:first-child { font-family: var(--sans); }
 table.data tbody tr:hover { background: var(--surface-2); }
-.table-scroll { overflow-x: auto; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
 
 /* ------------------------------------------------------------- candidates */
 .cand { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; background: var(--surface-1); margin-bottom: 10px; }
@@ -317,7 +321,7 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .callout b { font-weight: 650; }
 
 /* ------------------------------------------------------------------ charts */
-.chart-host { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px 10px; margin-bottom: 14px; }
+.chart-host { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px 10px; margin-bottom: 14px; min-width: 0; max-width: 100%; }
 .chart-head { margin-bottom: 6px; }
 .chart-title { font-size: 13px; font-weight: 620; letter-spacing: -0.01em; }
 .chart-sub { font-size: 11.5px; color: var(--text-secondary); margin-top: 1px; }
@@ -370,7 +374,7 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .lg-item { display: inline-flex; align-items: center; gap: 6px; }
 .lg-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .chart-note { font-size: 11.5px; color: var(--text-muted); margin: 8px 0 0; }
-.chart-table { margin-top: 8px; font-size: 12px; }
+.chart-table { margin-top: 8px; font-size: 12px; overflow-x: auto; max-width: 100%; }
 .chart-table summary { cursor: pointer; color: var(--text-secondary); font-size: 11.5px; }
 .chart-table table { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); font-size: 11.5px; }
 .chart-table th, .chart-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); text-align: right; }
@@ -424,13 +428,17 @@ textarea.export {
   padding: 10px 12px; background: var(--surface-1);
   border: 1px solid var(--border); border-radius: var(--radius);
 }
-.ctrl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.ctrl {
+  display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 0; max-width: 100%;   /* a flex item must be allowed to shrink */
+}
 .ctrl input, .ctrl select {
   font-family: var(--mono); font-size: 12px; width: 78px; padding: 3px 6px;
   border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
   background: var(--surface-2); color: var(--text-primary);
 }
-.ctrl select { width: auto; }
+.ctrl select { width: auto; max-width: 100%; min-width: 0; }
 .ctrl-unit { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
 
 @media print {

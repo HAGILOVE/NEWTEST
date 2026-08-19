@@ -213,8 +213,10 @@ export function substrateTrade(spec, stackCandidates) {
     const stack = buildStack({ ...spec, ...c });
     const sol = solvePatch({ f: spec.f, er: stack.material.er, df: stack.material.df, h: stack.h, sigma: spec.sigma || 5.8e7 });
     const patchDim = Math.max(sol.W, sol.L);
-    const gnd = spec.groundM
-      ? groundPlaneEffect({ lg: spec.groundM, patchDim, lambda0: sol.lambda0, swr: sol.surfaceWaveRatio })
+    const gnd = (spec.groundXM || spec.groundM)
+      ? groundPlaneEffect({
+          lgx: spec.groundXM || spec.groundM, lgy: spec.groundYM || spec.groundM,
+          patchL: sol.L, patchW: sol.W, lambda0: sol.lambda0, swr: sol.surfaceWaveRatio })
       : { deltaGdB: 0, frontToBackDb: 20 };
     const realized = sol.gainDbi + gnd.deltaGdB - (spec.feedLossDb || 0);
     return {
@@ -240,8 +242,17 @@ export function runDesign(spec) {
   });
 
   const patchDim = Math.max(sol.W, sol.L);
-  const groundM = spec.groundM || Math.max(patchDim + lam * 0.5, patchDim * 1.4);
-  const gnd = groundPlaneEffect({ lg: groundM, patchDim, lambda0: lam, swr: sol.surfaceWaveRatio });
+  // The ground plane is rectangular: x runs along the resonant length (E-plane),
+  // y along the radiating width (H-plane). A square board is the case x = y.
+  const autoX = Math.max(sol.L + lam * 0.5, sol.L * 1.4);
+  const autoY = Math.max(sol.W + lam * 0.5, sol.W * 1.4);
+  const groundXM = spec.groundXM || spec.groundM || autoX;
+  const groundYM = spec.groundYM || spec.groundM || autoY;
+  const groundM = Math.min(groundXM, groundYM);   // legacy scalar: the binding axis
+  const gnd = groundPlaneEffect({
+    lgx: groundXM, lgy: groundYM, patchL: sol.L, patchW: sol.W,
+    lambda0: lam, swr: sol.surfaceWaveRatio,
+  });
   const realizedGainDbi = sol.gainDbi + gnd.deltaGdB - (spec.feedLossDb || 0);
 
   const feed = synthesizeFeed(spec, sol, stack);
@@ -253,13 +264,13 @@ export function runDesign(spec) {
     f: spec.f, material: stack.material, h: stack.h, sigma: cu.sigma,
     targetGainDbi: spec.targetGainDbi, pattern: spec.pattern,
     polarization: spec.polarization, bwPct: spec.bwPct,
-    maxDimM: spec.maxDimM, groundM, feedLossDb: spec.feedLossDb || 0,
+    maxDimM: spec.maxDimM, groundM, groundXM, groundYM, feedLossDb: spec.feedLossDb || 0,
     lowProfile: spec.lowProfile, priority: spec.priority,
   });
 
   const thermal = solveThermal({
     pInW: spec.powerW ?? 1, efficiency: sol.etaSpace,
-    mismatchGamma: 0.1, areaM2: groundM * groundM, perimeterM: 4 * groundM,
+    mismatchGamma: 0.1, areaM2: groundXM * groundYM, perimeterM: 2 * (groundXM + groundYM),
     material: stack.material, h: stack.h, tAmbC: spec.tAmbC ?? 25,
     airVelocity: spec.airVelocity ?? 0, emissivity: spec.emissivity ?? 0.9,
     altitudeM: spec.altitudeM ?? 0, viaCount: spec.viaCount ?? 0,
@@ -279,7 +290,7 @@ export function runDesign(spec) {
   const regions = fieldRegions(patchDim, lam);
 
   return {
-    spec, stack, sol, feed, s11, pattern, groundM, gnd, realizedGainDbi,
+    spec, stack, sol, feed, s11, pattern, groundM, groundXM, groundYM, gnd, realizedGainDbi,
     beamwidth: bw, recommendation: rec, thermal, peak, drift, limits: lim,
     fieldRegions: regions, band: bandFor(spec.f), lambda0: lam,
     microstripLimits: microstripFreqLimits(stack.material.er, feed.feedLineWidth, stack.h),

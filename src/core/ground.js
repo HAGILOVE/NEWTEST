@@ -23,46 +23,84 @@ import { toDB, fromDB, clamp } from './constants.js';
  *   swr      surface-wave power ratio P_sw/P_sp from the patch solution
  * @returns gain delta [dB], front-to-back [dB], ripple [dB], back lobe level
  */
-export function groundPlaneEffect({ lg, patchDim, lambda0, swr = 0 }) {
-  const margin = Math.max((lg - patchDim) / 2, 0) / lambda0; // per-side margin in lambda
-  const lgL = lg / lambda0;
+export function groundPlaneEffect(p) {
+  // Accepts either a square ground ({lg, patchDim}) or a rectangular one
+  // ({lgx, lgy, patchL, patchW}); the square form is the rectangular form with
+  // both axes equal.
+  const lgx = p.lgx ?? p.lg;                       // ground extent along x (E-plane)
+  const lgy = p.lgy ?? p.lg;                       // ground extent along y (H-plane)
+  const patchL = p.patchL ?? p.patchDim;           // resonant length, along x
+  const patchW = p.patchW ?? p.patchDim;           // radiating width, along y
+  const { lambda0, swr = 0 } = p;
 
-  // 1. Aperture truncation. Below ~0.15 lambda of margin the fringing fields
-  //    are clipped and the forward gain collapses.
-  const truncation = -2.9 * Math.exp(-margin / 0.145);
+  // Per-side copper margin beyond the radiator, in each axis.
+  //   x: beyond the RADIATING edges     -> shapes the E-plane
+  //   y: beyond the non-radiating edges -> shapes the H-plane
+  const mx = Math.max((lgx - patchL) / 2, 0) / lambda0;
+  const my = Math.max((lgy - patchW) / 2, 0) / lambda0;
+  const lxL = lgx / lambda0;
+  const lyL = lgy / lambda0;
 
-  // 2. Surface-wave power that reaches the edge is re-radiated mostly backward.
-  //    A larger ground attenuates less but spreads the diffraction further off
-  //    boresight, so the forward loss saturates.
-  const swLoss = -toDB(1 / (1 + 0.55 * swr * clamp(lgL, 0.3, 3) / 3)) * -1;
+  // 1. Aperture truncation: below ~0.15 lambda of margin the fringing fields
+  //    are clipped and that plane's forward gain collapses.
+  const trunc = (m) => -2.9 * Math.exp(-m / 0.145);
+  const truncE = trunc(mx);
+  const truncH = trunc(my);
 
-  // 3. Edge-diffraction ripple: amplitude ~ 1/sqrt(k*lg), period lambda/2.
-  const rippleAmp = 1.8 / Math.sqrt(Math.max(2 * Math.PI * lgL, 1));
-  const ripple = rippleAmp * Math.cos(2 * Math.PI * (2 * lgL) - Math.PI / 3);
+  // 2. Edge-diffraction ripple: amplitude ~ 1/sqrt(k*Lg), period lambda/2 in
+  //    that axis. The two axes ripple independently, which is exactly why a
+  //    rectangular board does not behave like a square one of the same area.
+  const rippleOf = (lL) => (1.8 / Math.sqrt(Math.max(2 * Math.PI * lL, 1)))
+    * Math.cos(2 * Math.PI * (2 * lL) - Math.PI / 3);
+  const rippleE = rippleOf(lxL);
+  const rippleH = rippleOf(lyL);
 
-  const deltaGdB = truncation + ripple - Math.abs(swLoss);
+  // 3. Surface-wave power reaching the rim. The wave that leaves through the
+  //    x-edges shows up in the E-plane cut and the wave that leaves through the
+  //    y-edges in the H-plane cut, so this is split per axis too - each plane
+  //    then depends only on its own two edges, as it physically must.
+  const lMean = (lxL + lyL) / 2;
+  const swOf = (lL) => -Math.abs(toDB(1 / (1 + 0.55 * swr * clamp(lL, 0.3, 3) / 3)) * -1);
+  const swE = swOf(lxL);
+  const swH = swOf(lyL);
 
-  // Front-to-back ratio: ~15 dB at a one-wavelength square ground, +15 dB per
-  // decade of ground size, degraded by the surface-wave power that spills over
-  // the edge. Matches the usual 10-13 dB measured on half-wavelength grounds.
-  const fb = clamp(15 + 15 * Math.log10(Math.max(lgL, 0.25)) - 20 * swr / (1 + swr), 3, 35);
+  // Per-plane gain change (each cut sees its own two edges).
+  const deltaE = truncE + rippleE + swE;
+  const deltaH = truncH + rippleH + swH;
 
-  // Back-lobe level relative to peak
-  const backLobeDb = -fb;
+  // Boresight gain is a property of the whole aperture, not of one cut. The
+  // radiating-edge margin dominates, because that is where the fringing fields
+  // that actually radiate get clipped, so the axes combine 65/35. With both
+  // axes equal this reduces to the single-dimension model the tool was
+  // originally validated against.
+  const W_E = 0.65, W_H = 0.35;
+  const deltaGdB = W_E * deltaE + W_H * deltaH;
+
+  // Front-to-back, per plane: ~15 dB at a one-wavelength ground in that axis,
+  // +15 dB per decade, degraded by surface-wave spill-over.
+  const fbOf = (lL) => clamp(15 + 15 * Math.log10(Math.max(lL, 0.25)) - 20 * swr / (1 + swr), 3, 35);
+  const fbE = fbOf(lxL);
+  const fbH = fbOf(lyL);
+  // One figure for the whole antenna is the power average of the two cuts.
+  const fb = -toDB((fromDB(-fbE) + fromDB(-fbH)) / 2);
 
   // Ground-plane edge current -> co-planar (horizon) radiation lift
-  const horizonLiftDb = clamp(-6 + 8 * Math.exp(-margin / 0.25), -6, 3);
+  const horizonLiftDb = clamp(-6 + 8 * Math.exp(-Math.min(mx, my) / 0.25), -6, 3);
 
   return {
-    marginLambda: margin,
-    lgLambda: lgL,
-    truncationDb: truncation,
-    rippleDb: ripple,
-    surfaceWaveEdgeDb: -Math.abs(swLoss),
-    deltaGdB,
-    frontToBackDb: fb,
-    backLobeDb,
-    horizonLiftDb,
+    lgx, lgy, aspect: lgx / lgy,
+    marginXLambda: mx, marginYLambda: my,
+    lgxLambda: lxL, lgyLambda: lyL,
+    E: { truncationDb: truncE, rippleDb: rippleE, deltaGdB: deltaE, frontToBackDb: fbE, marginLambda: mx },
+    H: { truncationDb: truncH, rippleDb: rippleH, deltaGdB: deltaH, frontToBackDb: fbH, marginLambda: my },
+    asymmetryDb: Math.abs(deltaE - deltaH),
+    fbAsymmetryDb: Math.abs(fbE - fbH),
+    deltaGdB, frontToBackDb: fb, backLobeDb: -fb,
+    surfaceWaveEdgeDb: W_E * swE + W_H * swH, horizonLiftDb,
+    // legacy single-axis fields, so existing callers keep working unchanged
+    marginLambda: Math.min(mx, my), lgLambda: lMean,
+    truncationDb: W_E * truncE + W_H * truncH,
+    rippleDb: W_E * rippleE + W_H * rippleH,
   };
 }
 
