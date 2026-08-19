@@ -1433,40 +1433,258 @@ export function renderLink(root, D, state) {
 
 /* ============================================================== DRAWINGS */
 
-export function renderDrawings(root, D) {
-  const c1 = card(root, 'Stack-up', 'Generated from the solved design — the drawing cannot go out of step with the numbers.');
-  stackupDiagram(chartBox(c1), D);
+/**
+ * Shop drawings for the SELECTED antenna, not for the patch that happens to be
+ * on the current stack-up. Each family gets the views that mean something for
+ * it: a scale drawing always, a stack-up section only where there is a
+ * stack-up, an etch plan only where the thing is etched, an element layout only
+ * where there are elements to lay out.
+ */
+export function renderDrawings(root, D, state) {
+  const cands = D.recommendation.candidates.filter((c) => c.verdict !== 'error');
+  const c = cands.find((x) => x.arch.id === state.selected) || cands[0];
+  if (!c) { callout(root, 'warn', 'No candidate selected', 'Pick an antenna on the Recommendations tab.'); return; }
+  state.selected = c.arch.id;
+  const lamMm = D.lambda0 * 1e3;
 
-  const c2 = card(root, 'Etch geometry');
-  const g = h('div', { class: 'grid2' }, c2);
-  planView(chartBox(g), D);
-  const dims = h('div', {}, g);
-  dataTable(dims, ['Feature', 'Dimension', 'Tolerance guidance'], [
-    ['Patch width W', mm(D.sol.W), '±25 µm standard etch'],
-    ['Patch length L', mm(D.sol.L), 'sets the resonance — tightest control here'],
-    ['Ground plane X (E-plane)', `${(D.groundXM * 1e3).toFixed(1)} mm`, `margin ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm per side beyond the radiating edges`],
-    ['Ground plane Y (H-plane)', `${(D.groundYM * 1e3).toFixed(1)} mm`, `margin ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm per side`],
-    ['Substrate height', mm(D.stack.h), `±${D.stack.composite ? '0.10 mm (spacer stack)' : '10 % (core)'}`],
-    ['50 Ω feed width', mm(D.feed.feedLineWidth), '±25 µm'],
-    ...(D.feed.insetDepth !== undefined ? [['Inset depth', mm(D.feed.insetDepth), '±50 µm — trims the match, not the frequency']] : []),
-    ...(D.feed.probeOffset !== undefined ? [['Probe offset', mm(D.feed.probeOffset), '±100 µm']] : []),
-    ['Copper thickness', `${((D.spec.tCu ?? 35e-6) * 1e6).toFixed(0)} µm`, '1 oz nominal'],
-  ]);
+  // ---- selector ----------------------------------------------------------
+  const bar = h('div', { class: 'ctrl-row' }, root);
+  const pick = h('label', { class: 'ctrl' }, bar);
+  h('span', { text: 'Antenna type' }, pick);
+  const sel = h('select', { style: 'width:auto;min-width:min(250px, 100%)' }, pick);
+  for (const x of cands) {
+    h('option', { value: x.arch.id, text: `${x.arch.name} — ${x.realizedGainDbi.toFixed(1)} dBi`,
+      selected: x.arch.id === c.arch.id ? 'selected' : null }, sel);
+  }
+  sel.value = c.arch.id;
+  sel.addEventListener('change', () => { state.selected = sel.value; state.rerender(); });
+  const cls = buildClassOf(c.arch.id);
+  h('span', { class: 'pill info', text: cls.label }, bar);
 
-  const c3 = card(root, 'Manufacturing and assembly notes');
-  const ul = h('ul', { class: 'ref-list' }, c3);
-  const notes = [
-    `Substrate: ${D.stack.baseMaterial.name} — ${D.stack.baseMaterial.notes}`,
-    `Keep the ground plane continuous for at least ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm beyond the radiating edges (X) and ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm beyond the side edges (Y); splits, stitching gaps and component keep-outs under the patch all show up as pattern distortion. The X margin is the one that matters most - it sits beyond the edges that actually radiate.`,
-    `Surface finish: ENIG adds a nickel layer whose conductivity is 4× worse than copper. On a ${(D.stack.h * 1e3).toFixed(2)} mm stack that is worth roughly ${(0.3 * (0.001 / Math.max(D.stack.h, 1e-4))).toFixed(2)} dB — prefer OSP or immersion silver for the radiating layer.`,
-    `Solder mask over the patch raises the effective permittivity slightly and adds loss; specify mask-free (SMD-defined keep-out) over the radiator and note it on the fabrication drawing.`,
-    D.stack.composite
-      ? `Air gap is set by the spacer stack, not by the PCB: specify ${(D.stack.layers[0].h * 1e3).toFixed(2)} mm nylon spacers with a ±0.05 mm length tolerance and torque-controlled assembly. Gap error translates directly into frequency error.`
-      : `Core thickness tolerance is typically ±10 % on FR-4 and ±5 % on RF laminates — this is usually the second-largest yield contributor after Dk.`,
-    `Test: measure S₁₁ with the antenna in its final housing. A 2 mm ABS radome 1 mm above this patch will pull the resonance down by roughly ${(1.2 * (2 / (D.stack.h * 1e3 + 2))).toFixed(1)} %.`,
+  // ---- the drawing itself ------------------------------------------------
+  const c1 = card(root, `${c.arch.name} — general arrangement`,
+    'Every dimension comes from the solved design, so the drawing cannot go out of step with the numbers.');
+  antennaDrawing(chartBox(c1), c, D, { title: `${c.arch.name} — scale drawing` });
+
+  // ---- views that only some families have --------------------------------
+  if (cls.hasStackup) {
+    const c2 = card(root, 'Stack-up',
+      cls.stackupNote || 'Layer section through the board, with the electrical height dimensioned.');
+    stackupDiagram(chartBox(c2), D);
+    if (c.arch.category !== 'Microstrip') {
+      h('p', { class: 'chart-note', text: `The section shows the ${D.stack.baseMaterial.name} stack currently configured in the sidebar. ${c.arch.name} sits on that stack, but its own radiating geometry is in the general-arrangement drawing above.` }, c2);
+    }
+  }
+
+  if (cls.hasPlanView) {
+    const c3 = card(root, 'Etch geometry', 'Copper artwork on the radiating layer, drawn to scale.');
+    const g = h('div', { class: 'grid2' }, c3);
+    planView(chartBox(g), D);
+    dataTable(h('div', {}, g), ['Feature', 'Dimension', 'Tolerance guidance'], [
+      ['Patch width W', mm(D.sol.W), '±25 µm standard etch'],
+      ['Patch length L', mm(D.sol.L), 'sets the resonance — tightest control here'],
+      ['Ground plane X (E-plane)', `${(D.groundXM * 1e3).toFixed(1)} mm`,
+        `margin ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm per side beyond the radiating edges`],
+      ['Ground plane Y (H-plane)', `${(D.groundYM * 1e3).toFixed(1)} mm`,
+        `margin ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm per side`],
+      ['Substrate height', mm(D.stack.h), `±${D.stack.composite ? '0.10 mm (spacer stack)' : '10 % (core)'}`],
+      ['50 Ω feed width', mm(D.feed.feedLineWidth), '±25 µm'],
+      ...(D.feed.insetDepth !== undefined ? [['Inset depth', mm(D.feed.insetDepth), '±50 µm — trims the match, not the frequency']] : []),
+      ...(D.feed.probeOffset !== undefined ? [['Probe offset', mm(D.feed.probeOffset), '±100 µm']] : []),
+      ['Copper thickness', `${((D.spec.tCu ?? 35e-6) * 1e6).toFixed(0)} µm`, '1 oz nominal'],
+    ]);
+  }
+
+  if (c.count && c.count > 1) {
+    const c4 = card(root, 'Element layout',
+      `${c.count} elements. Spacing sets both the array gain and where the grating lobe appears.`);
+    const pitch = c.dims.Spacing ?? c.dims.Pitch ?? c.dims['Element pitch'] ?? 0.7 * lamMm;
+    arrayLayout(chartBox(c4), c.count, pitch,
+      c.patch ? c.patch.W * 1e3 : pitch * 0.45, c.patch ? c.patch.L * 1e3 : pitch * 0.35);
+  }
+
+  // ---- dimension schedule ------------------------------------------------
+  const c5 = card(root, 'Dimension schedule',
+    'Synthesised dimensions with the tolerance each one deserves. Anything that sets a resonance or an aperture phase is held tighter than the rest.');
+  const rows = Object.entries(c.dims || {}).map(([k, v]) => {
+    const isNum = typeof v === 'number';
+    return [k, isNum ? (Math.abs(v) >= 1000 ? v.toFixed(0) : Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2)) : v,
+      isNum ? toleranceFor(k, v, lamMm, cls) : '—'];
+  });
+  rows.push(['Overall envelope', `${c.size.w.toFixed(1)} × ${c.size.l.toFixed(1)} × ${c.size.h.toFixed(1)} mm`,
+    `${(Math.max(c.size.w, c.size.l, c.size.h) / lamMm).toFixed(2)} λ₀ largest dimension`]);
+  rows.push(['Far-field distance', `${(D.fieldRegions.farField * 1e3).toFixed(0)} mm`,
+    'minimum measurement range — closer than this under-reads the gain']);
+  dataTable(c5, ['Feature', 'Dimension [mm]', 'Tolerance guidance'], rows);
+
+  // ---- build notes for this family --------------------------------------
+  const c6 = card(root, `Manufacturing and assembly — ${cls.label}`);
+  const ul = h('ul', { class: 'ref-list' }, c6);
+  buildNotes(c, D, cls).forEach((n) => h('li', { text: n }, ul));
+}
+
+/** Which views and which build process a given archetype implies. */
+function buildClassOf(id) {
+  const PCB = ['patch', 'patchAir', 'patchStacked', 'patchApertureCoupled', 'patchArray',
+               'seriesArray', 'phasedArray', 'quasiYagi', 'vivaldi', 'ifa', 'pifa',
+               'loopSmall', 'dipole', 'lpda', 'siwSlotArray', 'hornSiw', 'reflectarray', 'slotCavity'];
+  const PLAN = ['patch', 'patchAir', 'patchStacked', 'patchApertureCoupled'];
+  const MACHINED = ['hornPyramidal', 'reflector', 'biconical', 'monopole', 'collinear',
+                    'helixAxial', 'qha', 'meDipole', 'yagi'];
+  const CERAMIC = ['dra'];
+  const MOULDED = ['lens'];
+  if (CERAMIC.includes(id)) {
+    return { label: 'Ceramic resonator', process: 'ceramic', hasStackup: true, hasPlanView: false,
+      stackupNote: 'The ceramic block sits on this ground/feed stack; its own geometry is drawn above.' };
+  }
+  if (MOULDED.includes(id)) {
+    return { label: 'Moulded dielectric', process: 'moulded', hasStackup: false, hasPlanView: false };
+  }
+  if (MACHINED.includes(id)) {
+    return { label: 'Machined / sheet metal', process: 'machined', hasStackup: false, hasPlanView: false };
+  }
+  if (['siwSlotArray', 'hornSiw'].includes(id)) {
+    return { label: 'Substrate-integrated waveguide', process: 'siw', hasStackup: true, hasPlanView: false,
+      stackupNote: 'The via fences run through this stack; the guide width and via pitch are set by the substrate permittivity and height.' };
+  }
+  if (PCB.includes(id)) {
+    return { label: 'Etched PCB', process: 'pcb', hasStackup: true, hasPlanView: PLAN.includes(id) };
+  }
+  return { label: 'Assembly', process: 'other', hasStackup: false, hasPlanView: false };
+}
+
+/** Tolerance guidance appropriate to what a dimension controls. */
+function toleranceFor(name, valueMm, lamMm, cls) {
+  const n = name.toLowerCase();
+  const pct = (p) => `±${(Math.abs(valueMm) * p / 100).toFixed(3)} mm (${p} %)`;
+  if (/turns|elements|slots|cells|directors|sections|ics|eps_r|tau|sigma|f\/d|eff/.test(n)) return 'count or ratio — not a machining dimension';
+  if (/patch l|driven|resonant|slot length|element length|arm|total length|driver/.test(n)) {
+    return `±${(lamMm / 400).toFixed(3)} mm (λ/400) — this sets the resonance`;
+  }
+  if (/aperture|dish|lens diameter|panel|taper length|boom|axial|flare/.test(n)) {
+    return `±${(lamMm / 100).toFixed(2)} mm (λ/100) — aperture phase`;
+  }
+  if (/gap|air gap|spacing|pitch|height|depth|thickness|carrier|via/.test(n)) {
+    return cls.process === 'pcb' ? `±${(Math.abs(valueMm) * 0.05).toFixed(3)} mm (5 %) — sets the coupling`
+      : `±${(lamMm / 200).toFixed(2)} mm (λ/200)`;
+  }
+  if (/width|patch w|w$/.test(n)) return cls.process === 'pcb' ? '±0.025 mm standard etch' : pct(1);
+  if (/rms|surface/.test(n)) return 'peak-to-valley, not average — Ruze loss is set by RMS';
+  return cls.process === 'pcb' ? '±0.05 mm' : `±${(lamMm / 200).toFixed(2)} mm (λ/200)`;
+}
+
+/** Build notes written for the process the antenna actually uses. */
+function buildNotes(c, D, cls) {
+  const lamMm = D.lambda0 * 1e3;
+  const id = c.arch.id;
+  const common = [
     `Far-field measurement distance must exceed ${(D.fieldRegions.farField * 1e3).toFixed(0)} mm (2D²/λ) — measuring closer under-reads the gain.`,
   ];
-  notes.forEach((n) => h('li', { text: n }, ul));
+
+  if (cls.process === 'pcb') {
+    const notes = [
+      `Substrate: ${D.stack.baseMaterial.name} — ${D.stack.baseMaterial.notes}`,
+      `Surface finish: ENIG puts 3-6 µm of nickel between the copper and the gold, and nickel is roughly four times more resistive than copper. Specify OSP or immersion silver on the radiating layer.`,
+      `Solder mask over the radiator raises the effective permittivity and adds loss; specify a mask keep-out over the copper that radiates and note it on the fabrication drawing.`,
+      `Core thickness tolerance is typically ±10 % on FR-4 and ±5 % on RF laminates — after Dk, this is the largest yield contributor.`,
+    ];
+    if (['patch', 'patchAir', 'patchStacked', 'patchApertureCoupled', 'patchArray', 'seriesArray', 'phasedArray'].includes(id)) {
+      notes.splice(1, 0, `Keep the ground plane continuous for at least ${((D.groundXM - D.sol.L) / 2 * 1e3).toFixed(1)} mm beyond the radiating edges (X) and ${((D.groundYM - D.sol.W) / 2 * 1e3).toFixed(1)} mm beyond the side edges (Y). Splits, stitching gaps and component keep-outs under the radiator all read as a smaller ground plane than the board outline suggests.`);
+    }
+    if (D.stack.composite) {
+      notes.push(`The air gap is set by the spacer stack, not by the PCB: specify ${(D.stack.layers[0].h * 1e3).toFixed(2)} mm nylon spacers to ±0.05 mm with torque-controlled assembly. Gap error translates directly into frequency error.`);
+    }
+    if (['ifa', 'pifa', 'loopSmall'].includes(id)) {
+      notes.push(`Clear ground copper under the whole element and keep metal — battery, shield can, display, camera — at least ${(0.1 * lamMm).toFixed(0)} mm (0.1 λ) away. This layout rule decides the efficiency far more than the element geometry does.`);
+      notes.push('Tune the match with the antenna inside its final housing and next to a hand phantom, not on the bare board.');
+    }
+    if (['quasiYagi', 'vivaldi', 'lpda'].includes(id)) {
+      notes.push('This is an end-fire antenna: it radiates off the board edge, so the connector, the enclosure wall and any nearby metal in that direction are part of the design.');
+      notes.push(`Keep the substrate below about ${(0.03 * lamMm).toFixed(1)} mm (0.03 λ) at the top of the band or the taper starts radiating into surface waves instead of into space.`);
+    }
+    if (['reflectarray'].includes(id)) {
+      notes.push('Cell-to-cell etch consistency is what sets the phase front: a 25 µm etch bias across the panel is a systematic phase error, not random noise.');
+      notes.push('Specify the feed position and its pointing as part of the assembly drawing — the panel alone is not the antenna.');
+    }
+    if (['slotCavity'].includes(id)) {
+      notes.push('The cavity must make continuous electrical contact around the whole slot perimeter; a gasket or a dense via fence, not just screws at the corners.');
+    }
+    return [...notes, ...common];
+  }
+
+  if (cls.process === 'siw') {
+    return [
+      `Via pitch must stay under 0.2 λ_g and the via diameter above half the pitch, or the fence leaks. On ${D.stack.baseMaterial.name} at ${engFreq(D.spec.f)} that means a pitch of about ${(c.dims['Via pitch'] ?? 0.5).toFixed(2)} mm.`,
+      'Drill registration between layers is the binding tolerance — specify it explicitly, since a shifted fence detunes the guide.',
+      'Back-drilling or filled-and-capped vias avoid stub resonances inside the guide.',
+      `Substrate: ${D.stack.baseMaterial.name} — ${D.stack.baseMaterial.notes}`,
+      'The transition from the feed line into the guide is usually the loss and bandwidth bottleneck; prototype it separately.',
+      ...common,
+    ];
+  }
+
+  if (cls.process === 'machined') {
+    const tol = lamMm / 100;
+    const notes = [
+      `Machined aluminium or sheet metal. Hold the aperture and element dimensions to about ±${tol.toFixed(2)} mm (λ/100) — beyond that the phase error starts costing gain.`,
+      'Conductivity of the surface matters, not the bulk: an anodised finish is an insulator. Specify chromate conversion (Alodine/Iridite), or plate.',
+      'Every mechanical joint in a current path is an RF joint. Continuous contact or many fasteners, never a few screws at the corners.',
+    ];
+    if (id === 'reflector') {
+      notes.push(`Surface RMS must stay under λ/50 = ${(lamMm / 50).toFixed(2)} mm for less than 0.3 dB of Ruze loss. That is an RMS figure over the whole dish, not a peak deviation at one point.`);
+      notes.push('Feed position along the axis is as critical as the surface: defocusing by a fraction of a wavelength broadens the beam and raises the sidelobes.');
+    }
+    if (id === 'hornPyramidal') {
+      notes.push('The flare must be straight and the throat transition smooth; a step at the waveguide junction shows up as ripple across the band.');
+      notes.push('3D-printed and plated horns work well if the plating is thick compared with the skin depth — specify at least five skin depths of copper before the finish.');
+    }
+    if (id === 'yagi') {
+      notes.push('Element lengths need about 0.5 % tolerance. Insulated element mounts change the effective length — trim on the real boom, not in isolation.');
+      notes.push('The boom is in the field: a metal boom needs its element-length correction applied, a dielectric boom does not.');
+    }
+    if (id === 'monopole' || id === 'collinear') {
+      notes.push('The ground plane or counterpoise is part of the antenna. Specify it on the drawing; do not leave it to whatever the installer bolts it to.');
+      notes.push('A radome changes the resonance. Tune with the radome fitted.');
+    }
+    if (id === 'helixAxial' || id === 'qha') {
+      notes.push('Winding pitch consistency sets the axial ratio. A wound-on-a-mandrel helix holds it; a hand-formed one does not.');
+      notes.push('The feed transition at the ground plane sets the input match — expect to tune it empirically with a small matching section.');
+    }
+    if (id === 'meDipole') {
+      notes.push('The vertical walls and the horizontal plates must be a single conductive assembly; a soldered or welded joint, not a press fit.');
+    }
+    if (id === 'biconical') {
+      notes.push('Cone angle sets the impedance and the slant length sets the low-frequency limit; both are machining dimensions, not tuning dimensions.');
+    }
+    return [...notes, ...common];
+  }
+
+  if (cls.process === 'ceramic') {
+    return [
+      `Dielectric block, εr ≈ ${(c.dims['eps_r (DR)'] ?? 10).toFixed(0)}. Dimensional tolerance on the block sets the resonance directly — specify ±${(lamMm / 400).toFixed(3)} mm (λ/400) on the resonant dimension.`,
+      'The bond line is the main production risk: adhesive thickness and its permittivity are in the resonator, so a repeatable glue thickness matters more than glue strength.',
+      'No conductor on the radiator means no conductor loss, but it also means the feed (probe, slot or microstrip) is the only place loss can enter — design it deliberately.',
+      'Ceramic is brittle and its CTE differs from the board. Allow for it mechanically, or thermal cycling will crack the joint.',
+      `Substrate under the block: ${D.stack.baseMaterial.name}.`,
+      ...common,
+    ];
+  }
+
+  if (cls.process === 'moulded') {
+    return [
+      `Injection-moulded lens, εr ≈ ${(c.dims['Lens eps_r'] ?? 2.35).toFixed(2)}. The tool is the cost; once it exists the part is nearly free, which is why this beats a machined solution in volume.`,
+      `Add a λ/4 matching groove or step to the front face — an untreated face reflects about 4 % of the incident power.`,
+      `Hold the profile to about ±${(lamMm / 100).toFixed(2)} mm (λ/100); the lens works by phase, so profile error is phase error.`,
+      'Sink marks and voids from moulding are permittivity variations. Specify them as a functional requirement, not a cosmetic one.',
+      'The feed-to-lens spacing is a focus adjustment — build it as a shimmed or threaded mount for the first articles.',
+      ...common,
+    ];
+  }
+
+  return [
+    `${c.arch.name} is an assembly rather than a single fabricated part; the general-arrangement drawing above shows the geometry the model synthesised.`,
+    ...common,
+  ];
 }
 
 /* ================================================================ THEORY */

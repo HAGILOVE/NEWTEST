@@ -105,11 +105,16 @@ absorption and P.838 rain; thermal noise floor, sensitivity, margin, Shannon
 capacity, maximum range, Fresnel clearance, radio horizon and MPE distance —
 with the regulatory EIRP limit for the band checked automatically.
 
-**Draws it.** Stack-up cross-section and etch plan view generated from the
-solved dimensions, so the drawing cannot drift out of step with the numbers,
-plus a scale drawing for each of the 29 archetypes — patch stacks, array grids
-with their feed trees, Yagi booms, horn flares, dish optics, helix windings,
-via fences, lens ray paths.
+**Draws it — for whichever antenna you picked.** The Drawings tab follows the
+selection and gives each family the views that mean something for it: a scale
+general-arrangement drawing always, a stack-up section only where there is a
+stack-up, an etch plan only where the thing is etched, an element layout only
+where there are elements to lay out. The dimension schedule attaches a tolerance
+to each feature according to what it controls — λ/400 on anything that sets a
+resonance, λ/100 on an aperture, standard etch on copper — and the build notes
+are written for the actual process: etched PCB, substrate-integrated waveguide,
+machined or sheet metal, ceramic resonator, moulded dielectric. A horn does not
+get PCB surface-finish advice, and a dish gets its Ruze surface-RMS budget.
 
 **Gives you the theory behind it.** A Theory & data tab holding the physical
 background an antenna design needs, evaluated at the current operating point

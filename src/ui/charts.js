@@ -639,16 +639,30 @@ export function heatmap(host, opts) {
     refLabel(c.g, c.sx(hi0) - 6, c.sy(hi0) + 16, 'square', 'end');
   }
   // markers
+  const markerLabels = [];
   (opts.markers || []).forEach((m, i) => {
+    void i;
     const px = c.sx(m.x), py = c.sy(m.y);
     el('circle', { cx: px, cy: py, r: 6.5, fill: 'none', stroke: 'var(--surface-1)', 'stroke-width': 4 }, c.g);
     el('circle', { cx: px, cy: py, r: 6.5, fill: 'none', stroke: m.color || 'var(--series-2)', 'stroke-width': 2.2 }, c.g);
     el('circle', { cx: px, cy: py, r: 1.8, fill: m.color || 'var(--series-2)' }, c.g);
-    // alternate the side so two nearby markers never overprint each other
+    // Place the label in the first slot that stays inside the plot and clears
+    // the labels already placed - anchoring alone is not enough, because an
+    // end-anchored label still extends leftwards past the axis.
     if (m.label) {
-      const right = i % 2 === 0;
-      const lx = right ? Math.min(px + 12, c.m.l + c.iw - 6) : Math.max(px - 12, c.m.l + 6);
-      refLabel(c.g, lx, py + (right ? -10 : 16), m.label, right ? 'start' : 'end');
+      const w = m.label.length * 5.6 + 10;
+      const slots = [
+        [px + 12, py - 10, 'start'], [px + 12, py + 18, 'start'],
+        [px - 12, py - 10, 'end'], [px - 12, py + 18, 'end'],
+      ];
+      for (const [lx, ly, anchor] of slots) {
+        const x0 = anchor === 'start' ? lx : lx - w;
+        const box = { x0, x1: x0 + w, y0: ly - 10, y1: ly + 3 };
+        const inside = box.x0 >= c.m.l + 2 && box.x1 <= c.m.l + c.iw - 2
+          && box.y0 >= c.m.t + 2 && box.y1 <= c.m.t + c.ih - 2;
+        const clash = markerLabels.some((b) => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1));
+        if (inside && !clash) { markerLabels.push(box); refLabel(c.g, lx, ly, m.label, anchor); break; }
+      }
     }
   });
   // colour scale
