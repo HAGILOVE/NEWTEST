@@ -9,7 +9,20 @@
 import { toDB, fromDB, clamp } from './constants.js';
 import { ARCHETYPES, evaluate } from './library.js';
 import { groundPlaneEffect, recommendGroundSize } from './ground.js';
-import { feasibility } from './limits.js';
+import { feasibility, harringtonDirectivity } from './limits.js';
+import { MATERIAL_BY_ID, MATERIALS } from './materials.js';
+
+/**
+ * Archetype models read ctx.material. Callers that hand us a materialId
+ * instead of a resolved material object must not silently lose every model
+ * that touches the dielectric.
+ */
+function withMaterial(spec) {
+  const material = spec.material || MATERIAL_BY_ID[spec.materialId] || MATERIALS[0];
+  // Feed-loss models need a conductivity; annealed copper is the default stock.
+  const sigma = spec.sigma || 5.8e7;
+  return (spec.material && spec.sigma) ? spec : { ...spec, material, sigma };
+}
 
 const PATTERN_MATCH = {
   // requested -> archetype pattern -> score 0..1
@@ -33,7 +46,8 @@ const PATTERN_MATCH = {
  *   groundM        available ground-plane edge [m] (optional)
  *   priority       {gain, size, cost, bandwidth, simplicity} weights 0..1
  */
-export function recommend(spec) {
+export function recommend(rawSpec) {
+  const spec = withMaterial(rawSpec);
   const lambda0 = 299792458 / spec.f;
   // Types that synthesise their own aperture (horn, reflector, array, ...) must
   // size for the target PLUS the losses that are applied afterwards.
@@ -75,7 +89,9 @@ export function recommend(spec) {
     // ---- ground-plane corrected realized gain -------------------------------
     let gain = r.gainDbi;
     let gnd = null;
-    if ((spec.groundXM || spec.groundM) && (arch.category === 'Microstrip' || arch.id === 'slotCavity')) {
+    const GROUND_DEPENDENT = ['Microstrip'].includes(arch.category)
+      || ['slotCavity', 'dra', 'meDipole', 'siwSlotArray', 'reflectarray'].includes(arch.id);
+    if ((spec.groundXM || spec.groundM) && GROUND_DEPENDENT) {
       const gx = spec.groundXM || spec.groundM;
       const gy = spec.groundYM || spec.groundM;
       // size.l runs with the resonant length (x), size.w with the width (y)
@@ -114,6 +130,41 @@ export function recommend(spec) {
         if (r.bwPct < spec.bwPct * 0.5) blockers.push(`Bandwidth is less than half of what is required (${r.bwPct.toFixed(1)} % vs ${spec.bwPct.toFixed(1)} %).`);
       } else {
         reasons.push(`Bandwidth ${r.bwPct.toFixed(1)} % covers the ${spec.bwPct.toFixed(1)} % requirement.`);
+      }
+    }
+
+    // ---- does it physically fit on the board? -------------------------------
+    // The ground plane / board footprint constrains every antenna, not just the
+    // ones that need a ground plane electrically: a Yagi boom, a horn aperture
+    // and a dish diameter all have to sit inside the space the user has.
+    const boardX = spec.groundXM || spec.groundM;
+    const boardY = spec.groundYM || spec.groundM;
+    let boardFit = null;
+    if (boardX && boardY) {
+      const fw = r.size.w / 1e3, fl = r.size.l / 1e3;
+      const asIs = fw <= boardX && fl <= boardY;
+      const turned = fw <= boardY && fl <= boardX;
+      boardFit = {
+        fits: asIs || turned,
+        needsRotation: !asIs && turned,
+        // how much the footprint overruns the board, as a linear ratio
+        overrun: Math.max(Math.min(fw / boardX, fw / boardY), Math.min(fl / boardY, fl / boardX)),
+        footprintUse: (fw * fl) / (boardX * boardY),
+      };
+      if (!boardFit.fits) {
+        blockers.push(`Footprint ${r.size.w.toFixed(0)} × ${r.size.l.toFixed(0)} mm does not fit the ${(boardX * 1e3).toFixed(0)} × ${(boardY * 1e3).toFixed(0)} mm board in either orientation.`);
+      } else {
+        // Reward candidates that use the available board well rather than
+        // leaving most of it empty - unused board is unused aperture.
+        const use = clamp(boardFit.footprintUse, 0, 1);
+        score += clamp(0.25 + 0.75 * Math.sqrt(use), 0, 1) * w.size * 0.9;
+        weightSum += w.size * 0.9;
+        if (boardFit.needsRotation) {
+          reasons.push('Fits only if rotated 90° on the board.');
+        }
+        if (use < 0.12 && arch.pattern === 'directional') {
+          reasons.push(`Uses only ${(use * 100).toFixed(0)} % of the board area — there is aperture here going spare.`);
+        }
       }
     }
 
@@ -188,6 +239,128 @@ export function recommend(spec) {
   });
 
   return { candidates: results, limits: lim, lambda0 };
+}
+
+/**
+ * What this board can do at best.
+ *
+ * The ranked list answers "which type meets my target". This answers the other
+ * question a designer asks first: "given the space I have, how much gain is
+ * even on the table, and which style of antenna gets me there?"
+ *
+ * Two ceilings bound it:
+ *   aperture   G = 4*pi*A*eta_ap / lambda^2 for the board area - no antenna
+ *              that fits on the board can beat this, whatever its type
+ *   Harrington D <= (ka)^2 + 2ka for the enclosing sphere
+ * and then each archetype is grown until its footprint stops fitting, which
+ * gives the best gain actually reachable with a real geometry.
+ *
+ * @param spec same shape as recommend(), with groundXM / groundYM set
+ */
+export function boardCapability(rawSpec) {
+  const spec = withMaterial(rawSpec);
+  const lambda0 = 299792458 / spec.f;
+  const bx = spec.groundXM || spec.groundM;
+  const by = spec.groundYM || spec.groundM;
+  if (!bx || !by) return null;
+
+  const areaM2 = bx * by;
+  // Two different bounds, and they do not apply to the same things.
+  //   aperture    a PLANAR aperture filling the board, 65 % efficient. Any
+  //               flat, board-filling antenna is held to roughly this.
+  //   Harrington  a bound on any current distribution inside the enclosing
+  //               sphere. It applies universally - but the sphere has to
+  //               enclose the WHOLE antenna. A helix, a dish or a collinear
+  //               stack sticks up out of the board plane and is bounded by
+  //               the taller sphere, not by the board outline, so each
+  //               candidate is checked against its own envelope.
+  const apertureEff = 0.65;
+  const apertureCeilingDbi = toDB((4 * Math.PI * areaM2 * apertureEff) / (lambda0 * lambda0));
+  const sphereBoundDbi = (heightM) =>
+    toDB(harringtonDirectivity(Math.hypot(bx, by, heightM || 0) / 2, lambda0) * 0.8);
+
+  // The headline ceiling describes the envelope the user actually constrained:
+  // board only, or board plus the height limit if one is set.
+  const boardCeilingDbi = sphereBoundDbi(0);
+  const envelopeCeilingDbi = spec.maxDimM ? sphereBoundDbi(spec.maxDimM) : null;
+  const ceiling = envelopeCeilingDbi ?? boardCeilingDbi;
+  // Antennas allowed to leave the board plane can legitimately pass the
+  // board-outline figure, so the scan must not stop there.
+  const scanMax = (envelopeCeilingDbi ?? boardCeilingDbi + 12) + 4;
+
+  const feedLoss = spec.feedLossDb || 0;
+
+  const perArch = [];
+  for (const arch of ARCHETYPES) {
+    if (spec.f < arch.fRange[0] || spec.f > arch.fRange[1]) continue;
+    if (spec.polarization && spec.polarization !== 'any' && !arch.pol.includes(spec.polarization)) continue;
+    const pm = (PATTERN_MATCH[spec.pattern] || PATTERN_MATCH.directional)[arch.pattern] ?? 0.2;
+    const GROUND_DEPENDENT = arch.category === 'Microstrip'
+      || ['slotCavity', 'dra', 'meDipole', 'siwSlotArray', 'reflectarray'].includes(arch.id);
+    const tryTarget = (t) => {
+      const r = evaluate(arch, { ...spec, lambda0, targetGainDbi: t + feedLoss + 0.3 });
+      if (r.error) return null;
+      const fw = r.size.w / 1e3, fl = r.size.l / 1e3, fh = r.size.h / 1e3;
+      const fits = (fw <= bx && fl <= by) || (fw <= by && fl <= bx);
+      if (!fits) return null;
+      // The footprint is already bounded by the board, so the envelope field
+      // ("max height / envelope") constrains what stands above it.
+      if (spec.maxDimM && fh > spec.maxDimM) return null;
+      if (spec.lowProfile && arch.profile === '3d') return null;
+      let gain = r.gainDbi;
+      if (GROUND_DEPENDENT) {
+        gain += groundPlaneEffect({
+          lgx: bx, lgy: by, patchL: fl, patchW: fw, lambda0,
+          swr: r.patch ? r.patch.surfaceWaveRatio : 0,
+        }).deltaGdB;
+      }
+      gain -= feedLoss;
+      // Nothing gets past the bound for the sphere that encloses it. This is
+      // the physical sanity check on every model in the library.
+      const boundDbi = sphereBoundDbi(fh);
+      if (!Number.isFinite(gain) || gain > boundDbi) return null;
+      return { gainDbi: gain, boundDbi, sizeMm: r.size, bwPct: r.bwPct,
+               efficiency: r.efficiency, count: r.count, footprintUse: (fw * fl) / areaM2 };
+    };
+    // Coarse scan to find where the footprint stops fitting, then a fine pass
+    // over the last usable interval so the answer is not quantised to the step.
+    let best = null, lastGood = 0;
+    for (let t = 0; t <= scanMax; t += 1.5) {
+      const r = tryTarget(t);
+      if (!r) break;
+      lastGood = t;
+      if (!best || r.gainDbi > best.gainDbi) best = r;
+    }
+    for (let t = lastGood; t <= lastGood + 1.5; t += 0.25) {
+      const r = tryTarget(t);
+      if (!r) break;
+      if (!best || r.gainDbi > best.gainDbi) best = r;
+    }
+    if (best) perArch.push({ arch, ...best, patternMatch: pm });
+  }
+  perArch.sort((a, b) => b.gainDbi - a.gainDbi);
+
+
+  // The headline answer has to be an antenna that produces the pattern the
+  // user asked for. Falling back to a mismatched type would report an omni
+  // mast as the best a board can do for a directional link.
+  const matching = perArch.filter((x) => x.patternMatch >= 0.5);
+  const best = matching[0] || null;
+
+  return {
+    boardXM: bx, boardYM: by, areaM2,
+    areaLambdaSq: areaM2 / (lambda0 * lambda0),
+    apertureCeilingDbi, boardCeilingDbi, envelopeCeilingDbi,
+    harringtonDbi: boardCeilingDbi, ceilingDbi: ceiling,
+    apertureLimited: areaM2 / (lambda0 * lambda0) > 1,
+    best,
+    // the bound that actually applies to the winner, i.e. for its own height
+    bestBoundDbi: best ? best.boundDbi : ceiling,
+    bestAnyPattern: perArch[0] || null,
+    perArch,
+    // how much of the theoretical ceiling a real antenna on this board reaches
+    realisableFraction: best ? fromDB(best.gainDbi - best.boundDbi) : 0,
+  };
 }
 
 /** Convenience: the best non-rejected candidate. */

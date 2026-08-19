@@ -13,7 +13,7 @@ import {
   lineLossDbPerM, microstripFreqLimits, probeReactance,
 } from './microstrip.js';
 import { groundPlaneEffect, groundSweep, recommendGroundSize } from './ground.js';
-import { recommend } from './recommend.js';
+import { recommend, boardCapability } from './recommend.js';
 import { feasibility, fieldRegions, beamwidthFromDirectivity, bodeFano } from './limits.js';
 import { solveThermal, peakPowerLimit, driftBudget, frequencyDrift } from './thermal.js';
 import { monteCarlo } from './tolerance.js';
@@ -260,13 +260,16 @@ export function runDesign(spec) {
   const pattern = patternCuts(sol, { f: spec.f, h: stack.h, frontToBackDb: gnd.frontToBackDb });
   const bw = beamwidthFromDirectivity(sol.D0);
 
-  const rec = recommend({
+  const recSpec = {
     f: spec.f, material: stack.material, h: stack.h, sigma: cu.sigma,
     targetGainDbi: spec.targetGainDbi, pattern: spec.pattern,
     polarization: spec.polarization, bwPct: spec.bwPct,
     maxDimM: spec.maxDimM, groundM, groundXM, groundYM, feedLossDb: spec.feedLossDb || 0,
     lowProfile: spec.lowProfile, priority: spec.priority,
-  });
+  };
+  const rec = recommend(recSpec);
+  // What the board itself allows, independent of the gain target
+  const capability = boardCapability(recSpec);
 
   const thermal = solveThermal({
     pInW: spec.powerW ?? 1, efficiency: sol.etaSpace,
@@ -291,7 +294,7 @@ export function runDesign(spec) {
 
   return {
     spec, stack, sol, feed, s11, pattern, groundM, groundXM, groundYM, gnd, realizedGainDbi,
-    beamwidth: bw, recommendation: rec, thermal, peak, drift, limits: lim,
+    beamwidth: bw, recommendation: rec, capability, thermal, peak, drift, limits: lim,
     fieldRegions: regions, band: bandFor(spec.f), lambda0: lam,
     microstripLimits: microstripFreqLimits(stack.material.er, feed.feedLineWidth, stack.h),
     bodeFano: bodeFano(sol.Qt, spec.bwPct ? spec.bwPct / 100 : sol.fbw2),

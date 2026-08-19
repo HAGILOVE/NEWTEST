@@ -126,7 +126,24 @@ export function surfaceWaveRatio(er, h, f) {
  *   W, L     optional explicit dimensions [m] (otherwise synthesised)
  *   tCu      conductor thickness [m]
  */
+// The pattern integral is 180x180 samples, so a full solve is not free. The
+// same stack-up gets solved repeatedly while sweeping something else (board
+// size, target gain), and the answer only depends on these six numbers.
+const SOLVE_CACHE = new Map();
+const CACHE_LIMIT = 400;
+
 export function solvePatch(p) {
+  const { f, er, df, h, sigma = 5.8e7, tCu = 35e-6 } = p;
+  const key = `${f}|${er}|${df}|${h}|${sigma}|${tCu}|${p.W || 0}|${p.L || 0}`;
+  const hit = SOLVE_CACHE.get(key);
+  if (hit) return hit;
+  const out = solvePatchUncached(p);
+  if (SOLVE_CACHE.size >= CACHE_LIMIT) SOLVE_CACHE.clear();
+  SOLVE_CACHE.set(key, out);
+  return out;
+}
+
+function solvePatchUncached(p) {
   const { f, er, df, h, sigma = 5.8e7, tCu = 35e-6 } = p;
   const W = p.W || patchWidth(f, er);
   const geo = p.L ? { L: p.L, epsEff: epsEffStatic(er, W, h), dL: 0 } : patchLength(f, er, h, W);

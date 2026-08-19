@@ -33,7 +33,7 @@ const DEFAULT_SPEC = {
   groundYMm: 70,
   groundSquare: true,
   autoGround: false,
-  maxDimMm: 120,
+  maxDimMm: 0,
   feedType: 'inset',
   feedLossDb: 0.4,
   powerW: 1,
@@ -219,7 +219,7 @@ function buildSidebar(aside) {
     { value: 'circular', label: 'Circular' },
     { value: 'any', label: 'Any' },
   ]));
-  field(g2, 'Max envelope dimension', 'mm', num('maxDimMm', { min: 0 }));
+  field(g2, 'Max height / envelope (0 = board only)', 'mm', num('maxDimMm', { min: 0 }));
   g2.appendChild(checkbox('lowProfile', 'Must be low-profile (no vertical volume)'));
 
   // --- substrate ---------------------------------------------------------
@@ -260,7 +260,9 @@ function buildSidebar(aside) {
 
   // --- ground / feed -----------------------------------------------------
   const g4 = h('fieldset', { class: 'group' }, aside);
-  h('legend', { text: 'Ground plane & feed' }, g4);
+  h('legend', { text: 'Board / ground plane & feed' }, g4);
+  h('p', { class: 'small muted', style: 'margin:0 0 8px',
+    text: 'This is the board footprint the antenna has to live on. It constrains every candidate and sets the gain ceiling, and for ground-dependent types it is also the electrical ground plane.' }, g4);
   g4.appendChild(checkbox('autoGround', 'Size the ground plane automatically'));
   if (!state.autoGround) {
     field(g4, 'Ground plane shape', '', segmented('groundSquare', [

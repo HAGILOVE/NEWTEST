@@ -21,7 +21,7 @@ import { chuQ, harringtonDirectivity, maxFractionalBandwidth } from '../src/core
 import { fspl, gaseousAttenuation, rainAttenuation, noiseFloorDbm, linkBudget } from '../src/core/propagation.js';
 import { solveThermal, paschenVoltage, frequencyDrift } from '../src/core/thermal.js';
 import { monteCarlo } from '../src/core/tolerance.js';
-import { recommend } from '../src/core/recommend.js';
+import { recommend, boardCapability } from '../src/core/recommend.js';
 import { runDesign, thicknessSweep } from '../src/core/design.js';
 import { patternFor, responseVsFrequency, besselJ1 } from '../src/core/patterns.js';
 
@@ -611,4 +611,129 @@ test('the design run carries X and Y end to end', () => {
   const legacy = runDesign({ ...spec, groundM: 0.070 });
   close(legacy.groundXM, 0.070, 1e-12);
   close(legacy.groundYM, 0.070, 1e-12);
+});
+
+// ---------------------------------------------------------------------------
+// What a given board can actually do
+// ---------------------------------------------------------------------------
+
+const capSpec = (over = {}) => ({
+  f: 2.442e9, material: MATERIAL_BY_ID.fr4, sigma: 5.8e7, h: 1.6e-3,
+  pattern: 'directional', polarization: 'linear', bwPct: 3,
+  feedLossDb: 0.4, powerW: 1, feedType: 'inset', ...over,
+});
+
+test('board capability rises monotonically with board size', () => {
+  const edges = [0.03, 0.05, 0.07, 0.12, 0.20, 0.30];
+  let prev = -Infinity;
+  for (const e of edges) {
+    const cap = boardCapability(capSpec({ groundXM: e, groundYM: e }));
+    assert.ok(cap && cap.best, `${e * 1e3} mm board must support something`);
+    assert.ok(cap.best.gainDbi > prev - 0.01,
+      `a bigger board cannot do worse: ${e * 1e3} mm -> ${cap.best.gainDbi.toFixed(1)} dBi after ${prev.toFixed(1)}`);
+    prev = cap.best.gainDbi;
+  }
+});
+
+test('nothing on any board beats the Harrington bound', () => {
+  for (const e of [0.02, 0.04, 0.07, 0.15, 0.30, 0.60]) {
+    const cap = boardCapability(capSpec({ groundXM: e, groundYM: e }));
+    for (const row of cap.perArch) {
+      // Each candidate is held to the sphere that encloses IT - board outline
+      // plus its own height, which is how a mast legitimately out-gains a
+      // board-outline bound without breaking physics.
+      assert.ok(row.gainDbi <= row.boundDbi + 1e-6,
+        `${row.arch.name} claims ${row.gainDbi.toFixed(1)} dBi on a ${e * 1e3} mm board, `
+        + `over its ${row.boundDbi.toFixed(1)} dBi bound`);
+      const flat = row.sizeMm.h / 1e3 <= 0.02;
+      if (flat) {
+        assert.ok(row.gainDbi <= cap.boardCeilingDbi + 1e-6,
+          `${row.arch.name} is flat, so the board-outline bound applies to it`);
+      }
+    }
+    if (cap.best) assert.ok(cap.realisableFraction > 0 && cap.realisableFraction <= 1);
+  }
+});
+
+test('every capability candidate physically fits the board it was found on', () => {
+  const bx = 0.09, by = 0.045;
+  const cap = boardCapability(capSpec({ groundXM: bx, groundYM: by }));
+  assert.ok(cap.perArch.length > 0);
+  for (const row of cap.perArch) {
+    const w = row.sizeMm.w / 1e3, l = row.sizeMm.l / 1e3;
+    const fits = (w <= bx + 1e-9 && l <= by + 1e-9) || (w <= by + 1e-9 && l <= bx + 1e-9);
+    assert.ok(fits, `${row.arch.name} is ${row.sizeMm.w.toFixed(1)}x${row.sizeMm.l.toFixed(1)} mm `
+      + `on a ${bx * 1e3}x${by * 1e3} mm board`);
+    assert.ok(row.footprintUse > 0 && row.footprintUse <= 1.001);
+  }
+});
+
+test('the ceilings follow the textbook aperture and sphere formulas', () => {
+  const f = 5.8e9, lam = C0 / f;
+  const bx = 0.100, by = 0.080;
+  const cap = boardCapability(capSpec({ f, groundXM: bx, groundYM: by }));
+  close(cap.areaM2, bx * by, 1e-12);
+  close(cap.areaLambdaSq, (bx * by) / (lam * lam), 1e-9);
+  // 4*pi*A*eta / lambda^2 at 65 % aperture efficiency
+  const apExpect = 10 * Math.log10((4 * Math.PI * bx * by * 0.65) / (lam * lam));
+  close(cap.apertureCeilingDbi, apExpect, 1e-6);
+  // Harrington on the enclosing sphere, derated 1 dB for a real radiator
+  const ka = (2 * Math.PI / lam) * (Math.hypot(bx, by) / 2);
+  const dExpect = 10 * Math.log10((ka * ka + 2 * ka) * 0.8);
+  close(cap.harringtonDbi, dExpect, 1e-6);
+  close(cap.ceilingDbi, cap.harringtonDbi, 1e-12);
+  assert.equal(cap.apertureLimited, true, 'a board several wavelengths across is aperture limited');
+});
+
+test('board capability honours the pattern and envelope the user asked for', () => {
+  const board = { groundXM: 0.15, groundYM: 0.15 };
+  // The headline answer must be an antenna that makes the requested pattern -
+  // never a fallback of the wrong kind, however much gain it has.
+  for (const pattern of ['directional', 'omni', 'hemispheric']) {
+    const cap = boardCapability(capSpec({ ...board, pattern }));
+    assert.ok(cap.best.patternMatch >= 0.5,
+      `${pattern}: ${cap.best.arch.name} is a ${cap.best.arch.pattern} type`);
+  }
+  // a height limit must exclude the tall antennas that would otherwise win
+  const free = boardCapability(capSpec({ ...board }));
+  const flat = boardCapability(capSpec({ ...board, maxDimM: 0.006, lowProfile: true }));
+  assert.ok(flat.best.gainDbi <= free.best.gainDbi,
+    'a 6 mm envelope cannot beat an unconstrained one');
+  for (const row of flat.perArch) {
+    assert.ok(row.sizeMm.h / 1e3 <= 0.006 + 1e-9,
+      `${row.arch.name} is ${row.sizeMm.h.toFixed(1)} mm tall inside a 6 mm envelope`);
+  }
+  // The ceiling follows the sphere the user allowed: board outline, plus the
+  // height budget when one is set. Height can only enlarge that sphere.
+  assert.ok(Number.isFinite(flat.envelopeCeilingDbi));
+  assert.ok(flat.envelopeCeilingDbi >= flat.boardCeilingDbi - 1e-9);
+  close(flat.ceilingDbi, flat.envelopeCeilingDbi, 1e-12);
+  assert.equal(free.envelopeCeilingDbi, null, 'no envelope set, no envelope ceiling');
+  close(free.ceilingDbi, free.boardCeilingDbi, 1e-12);
+});
+
+test('a model that returns NaN is treated as broken, not as a candidate', () => {
+  // sigma missing used to make the array feed-loss model produce NaN, which
+  // then poisoned the ranking sort. Both halves are now guarded.
+  const cap = boardCapability({ ...capSpec({ groundXM: 0.3, groundYM: 0.3 }), sigma: undefined });
+  for (const row of cap.perArch) {
+    assert.ok(Number.isFinite(row.gainDbi), `${row.arch.name} produced ${row.gainDbi}`);
+  }
+  for (let i = 1; i < cap.perArch.length; i++) {
+    assert.ok(cap.perArch[i - 1].gainDbi >= cap.perArch[i].gainDbi, 'the ranking is actually sorted');
+  }
+  // a spec given only a material id still resolves to a real dielectric
+  const byId = boardCapability({ ...capSpec({ groundXM: 0.07, groundYM: 0.07 }), material: undefined, materialId: 'fr4' });
+  assert.ok(byId.best && Number.isFinite(byId.best.gainDbi));
+});
+
+test('board capability needs a board and reports the winner it names', () => {
+  assert.equal(boardCapability(capSpec({})), null, 'no board, no answer');
+  const cap = boardCapability(capSpec({ groundM: 0.07 }));
+  close(cap.boardXM, 0.07, 1e-12);
+  close(cap.boardYM, 0.07, 1e-12);
+  assert.ok(cap.best.arch && cap.best.arch.name, 'the winner is a named archetype');
+  assert.ok(cap.perArch[0].gainDbi >= cap.best.gainDbi,
+    'the pattern-matched winner never beats the outright winner');
+  assert.ok(cap.bestAnyPattern.gainDbi >= cap.best.gainDbi);
 });

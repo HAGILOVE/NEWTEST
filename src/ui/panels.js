@@ -107,12 +107,18 @@ export function renderOverview(root, D, state) {
       `A ${(D.spec.maxDimM ? D.spec.maxDimM * 1e3 : Math.max(D.groundXM, D.groundYM) * 1e3).toFixed(0)} mm envelope supports up to ${lim.harringtonGainDbi.toFixed(1)} dBi (Harrington normal-gain limit) and ${(lim.chuBandwidth * 100).toFixed(0)} % bandwidth at ${engFreq(D.spec.f)}.`);
   }
 
+  // ---- what the board itself allows --------------------------------------
+  if (D.capability) renderBoardCapability(root, D, state);
+
   // ---- headline tiles -----------------------------------------------------
   const tl = h('div', { class: 'tiles' }, root);
   const best = rec.candidates[0];
   tile(tl, 'Wavelength λ₀', (D.lambda0 * 1e3).toFixed(1), 'mm', `${engFreq(D.spec.f)}${D.band ? ' · ' + D.band.name : ''}`);
-  tile(tl, 'Best candidate', best.realizedGainDbi.toFixed(1), 'dBi', best.arch.name,
-    best.realizedGainDbi >= D.spec.targetGainDbi ? 'good' : 'warn');
+  const bestViable = best.verdict !== 'rejected' && best.verdict !== 'error';
+  tile(tl, bestViable ? 'Best candidate' : 'Best candidate (does not fit)',
+    best.realizedGainDbi.toFixed(1), 'dBi',
+    bestViable ? best.arch.name : `${best.arch.name} — blocked, see the ranking below`,
+    !bestViable ? 'bad' : best.realizedGainDbi >= D.spec.targetGainDbi ? 'good' : 'warn');
   tile(tl, 'Target gain', D.spec.targetGainDbi.toFixed(1), 'dBi',
     `${(best.realizedGainDbi - D.spec.targetGainDbi >= 0 ? '+' : '')}${(best.realizedGainDbi - D.spec.targetGainDbi).toFixed(1)} dB margin`);
   tile(tl, 'Harrington limit', lim.harringtonGainDbi.toFixed(1), 'dBi', `ka = ${lim.ka.toFixed(2)}`);
@@ -180,6 +186,138 @@ export function renderOverview(root, D, state) {
     hlines: [{ y: D.spec.targetGainDbi, label: 'target', kind: 'spec' }],
     note: 'Only the first three categorical hues are used here: all-pairs colour separation is only validated to three slots.',
   });
+}
+
+/**
+ * The question a designer asks before "which type meets my target": given the
+ * board I actually have, how much gain is even on the table, and what style of
+ * antenna gets me there?
+ */
+function renderBoardCapability(root, D, state) {
+  const cap = D.capability;
+  const lam = D.lambda0;
+  const target = D.spec.targetGainDbi;
+  const best = cap.best;
+  const boardTxt = `${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)} mm`;
+
+  // Nothing of the requested pattern fits. Say so plainly rather than
+  // quietly answering with an antenna of the wrong kind.
+  if (!best) {
+    const alt = cap.bestAnyPattern;
+    callout(root, 'bad',
+      `No ${D.spec.pattern} antenna fits a ${boardTxt} board at ${engFreq(D.spec.f)}`,
+      `${boardTxt} is ${cap.areaLambdaSq.toFixed(2)} λ₀² — too small for any ${D.spec.pattern} type in the library `
+      + `once ${D.spec.polarization} polarisation${D.spec.maxDimM ? ` and the ${(D.spec.maxDimM * 1e3).toFixed(0)} mm height envelope` : ''} is applied. `
+      + (alt ? `The only thing that fits at all is a ${alt.arch.name} (${alt.arch.pattern}, ${alt.gainDbi.toFixed(1)} dBi, `
+             + `${alt.sizeMm.w.toFixed(0)} × ${alt.sizeMm.l.toFixed(0)} × ${alt.sizeMm.h.toFixed(0)} mm). ` : '')
+      + `Grow the board to about ${(estimateBoardFor(Math.max(target, 3), cap, lam) * 1e3).toFixed(0)} mm square, `
+      + `move up in frequency, or accept a different pattern.`);
+    return;
+  }
+
+  const headroom = best.gainDbi - target;
+
+  const c0 = card(root, 'What this board can do',
+    `Every archetype grown until its footprint stops fitting ${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)} mm, then held to the physical bounds. This is the ceiling for the space you have — before any question of which type you prefer.`);
+
+  const tl = h('div', { class: 'tiles' }, c0);
+  tile(tl, 'Board', `${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)}`, 'mm',
+    `${(cap.areaM2 * 1e4).toFixed(1)} cm² = ${cap.areaLambdaSq.toFixed(2)} λ₀²`);
+  tile(tl, 'Best achievable gain', best.gainDbi.toFixed(1), 'dBi',
+    `${best.arch.name}${best.count > 1 ? `, ${best.count} elements` : ''}`,
+    headroom >= 0 ? 'good' : 'bad');
+  tile(tl, 'Your target', target.toFixed(1), 'dBi',
+    headroom >= 0 ? `${headroom.toFixed(1)} dB of headroom on this board`
+                  : `${Math.abs(headroom).toFixed(1)} dB MORE than this board can give`,
+    headroom >= 2 ? 'good' : headroom >= 0 ? 'warn' : 'bad');
+  tile(tl, 'Physical ceiling', cap.ceilingDbi.toFixed(1), 'dBi',
+    D.spec.maxDimM
+      ? `Harrington bound on the sphere around the board and its ${(D.spec.maxDimM * 1e3).toFixed(0)} mm height budget`
+      : 'Harrington bound on the sphere around the board — an antenna allowed to stand above it gets a larger sphere');
+  tile(tl, 'Planar aperture ceiling', cap.apertureCeilingDbi.toFixed(1), 'dBi',
+    cap.apertureLimited ? 'a flat, board-filling aperture at 65 % efficiency'
+                        : 'board is under 1 λ² — a flat aperture is not the binding limit here');
+  tile(tl, 'Gap to the bound', `${(best.gainDbi - best.boundDbi).toFixed(1)}`, 'dB',
+    `how close ${best.arch.name} gets to the ${best.boundDbi.toFixed(1)} dBi bound for its own envelope`);
+
+  // If a separate envelope limit is doing the constraining rather than the
+  // board, say so - otherwise growing the board looks like it does nothing.
+  if (D.spec.maxDimM) {
+    const boardMax = Math.max(cap.boardXM, cap.boardYM);
+    if (D.spec.maxDimM < boardMax * 0.95) {
+      callout(root, 'warn',
+        `The ${(D.spec.maxDimM * 1e3).toFixed(0)} mm envelope is binding, not the board`,
+        `You have a ${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)} mm board but a `
+        + `${(D.spec.maxDimM * 1e3).toFixed(0)} mm limit on any single dimension, so growing the board further changes nothing. `
+        + `Clear the envelope field (set it to 0) to let the board be the only constraint.`);
+    }
+  }
+
+  if (headroom < 0) {
+    callout(root, 'bad',
+      `A ${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)} mm board cannot reach ${target.toFixed(1)} dBi`,
+      `The best any antenna style manages in that footprint at ${engFreq(D.spec.f)} is ${best.gainDbi.toFixed(1)} dBi (${best.arch.name}), and the physical ceiling is ${cap.ceilingDbi.toFixed(1)} dBi. `
+      + `To close the gap: grow the board to about ${(estimateBoardFor(target, cap, lam) * 1e3).toFixed(0)} mm square, lower the target, or move up in frequency — gain for a given size scales with (size/λ)².`);
+  } else if (headroom > 6) {
+    callout(root, 'good',
+      `This board has ${headroom.toFixed(1)} dB of headroom over the ${target.toFixed(1)} dBi target`,
+      `${best.arch.name} would reach ${best.gainDbi.toFixed(1)} dBi here. Either the target is conservative, or the board could shrink — `
+      + `${(estimateBoardFor(target + 1, cap, lam) * 1e3).toFixed(0)} mm square is enough for ${(target + 1).toFixed(1)} dBi with a decibel to spare.`);
+  }
+
+  // ---- which styles this board supports, ranked by what they can reach ----
+  const matching = cap.perArch.filter((x) => x.patternMatch >= 0.5).slice(0, 10);
+  if (matching.length) {
+    const c1 = card(root, `Antenna styles this board supports, and how far each can go`,
+      `Each bar is the most that style can deliver inside ${(cap.boardXM * 1e3).toFixed(0)} × ${(cap.boardYM * 1e3).toFixed(0)} mm — grown until it stops fitting. Types that cannot produce the requested ${D.spec.pattern} pattern or ${D.spec.polarization} polarisation are already excluded.`);
+    barChart(chartBox(c1), {
+      height: 330,
+      items: matching.map((x) => ({
+        label: x.arch.name.replace(/ \(.*\)/, ''),
+        value: x.gainDbi,
+        color: x.gainDbi >= target ? 'var(--series-3)' : 'var(--series-2)',
+        highlight: x === best,
+        sub: `${x.sizeMm.w.toFixed(0)} × ${x.sizeMm.l.toFixed(0)} × ${x.sizeMm.h.toFixed(0)} mm · uses ${(x.footprintUse * 100).toFixed(0)} % of the board · ${x.bwPct.toFixed(1)} % BW`,
+      })),
+      yLabel: 'best gain achievable on this board [dBi]',
+      valueFmt: (v) => v.toFixed(1),
+      hlines: [{ y: target, label: `target ${target.toFixed(1)} dBi` }],
+      note: 'Green clears the target on this board; orange cannot, however it is arranged. Hover a bar for the size it needs and how much of the board it uses.',
+    });
+  }
+
+  // ---- how the ceiling moves with board size -----------------------------
+  const c2 = card(root, 'How much gain the board size buys',
+    'Gain against board edge length for this frequency, with the current board marked. Aperture-limited gain rises 6 dB per doubling of edge length — this is the curve that decides whether a size problem is solvable at all.');
+  const pts = [];
+  for (let i = 0; i <= 60; i++) {
+    const edgeL = 0.2 + (i / 60) * 4.3;                       // 0.2 to 4.5 lambda
+    const a = Math.pow(edgeL * lam, 2);
+    pts.push({
+      x: edgeL * lam * 1e3,
+      aperture: toDB((4 * Math.PI * a * 0.65) / (lam * lam)),
+      harrington: toDB(harringtonDirectivity((Math.SQRT2 * edgeL * lam) / 2, lam) * 0.8),
+    });
+  }
+  lineChart(chartBox(c2), {
+    height: 320,
+    series: [
+      { name: 'Harrington bound (any geometry)', points: pts.map((p) => ({ x: p.x, y: p.harrington })) },
+      { name: 'planar aperture at 65 %', points: pts.map((p) => ({ x: p.x, y: p.aperture })), color: 'var(--series-2)' },
+    ],
+    xLabel: 'square board edge length [mm]', yLabel: 'gain ceiling [dBi]',
+    vlines: [{ x: Math.sqrt(cap.areaM2) * 1e3, label: `this board`, kind: 'spec' }],
+    hlines: [{ y: target, label: `target ${target.toFixed(1)} dBi` },
+             { y: best.gainDbi, label: `best real geometry ${best.gainDbi.toFixed(1)} dBi`, kind: 'good' }],
+    tipFmt: (p) => `${p.y.toFixed(1)} dBi`, directLabels: false, table: false,
+    note: `At ${engFreq(D.spec.f)}, 1 λ₀ = ${(lam * 1e3).toFixed(1)} mm. A real antenna lands a few decibels under the bound; the gap is efficiency, feed loss and the fact that no practical geometry fills its enclosing sphere.`,
+  });
+}
+
+/** Rough board edge needed for a target gain, from the aperture relation. */
+function estimateBoardFor(gainDbi, cap, lam) {
+  const need = fromDB(gainDbi + 3);          // allow ~3 dB between bound and reality
+  return Math.sqrt((need * lam * lam) / (4 * Math.PI * 0.65));
 }
 
 function renderCandidate(parent, c, i, D, state) {

@@ -679,6 +679,12 @@ export const ARCHETYPE_BY_ID = Object.fromEntries(ARCHETYPES.map((a) => [a.id, a
 export function evaluate(arch, ctx) {
   try {
     const r = arch.model(ctx);
+    // A model that produces NaN is broken, not merely pessimistic. Letting it
+    // through poisons every sort it lands in, so it is reported as an error.
+    if (!Number.isFinite(r.gainDbi) || !Number.isFinite(r.size.w)
+        || !Number.isFinite(r.size.l) || !Number.isFinite(r.size.h)) {
+      throw new Error('model returned a non-finite gain or size');
+    }
     const D0 = fromDB(r.gainDbi) / Math.max(r.efficiency, 1e-3);
     const bw = beamwidthFromDirectivity(D0, arch.pattern === 'omni' ? 4 : 1);
     const maxDim = Math.max(r.size.w, r.size.l, r.size.h) / 1e3;

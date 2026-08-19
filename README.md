@@ -40,6 +40,21 @@ model, so the ranking falls out of computed gain, bandwidth, size, efficiency,
 cost and build complexity rather than from an opinion. Rejected candidates say
 why they were rejected.
 
+**Answers "what can this board actually do?" before anything else.** Enter a
+board size and the tool grows every archetype in the library until its footprint
+stops fitting that outline, then reports the best realized gain the board can
+deliver, which styles reach it, and how much of the board each one needs. Two
+bounds are drawn separately because they do not apply to the same things: the
+planar aperture ceiling (4πA·η/λ², at 65 %) holds any flat, board-filling
+antenna, while the Harrington bound on the sphere that encloses the antenna
+holds everything — and a helix, a dish or a collinear stack legitimately beats
+the planar figure by using the height the board outline does not describe, so
+each candidate is checked against the sphere that encloses *it*. Nothing in the
+library is allowed past its own bound. If the target is unreachable the tool
+says how big the board would have to be; if no antenna of the requested pattern
+fits at all, it says that rather than quietly answering with the wrong kind of
+antenna.
+
 **Checks the specification against physics first.** Chu–McLean bounds the
 bandwidth an envelope can support; Harrington bounds the directivity. A request
 for 30 dBi from a 50 mm box at 100 MHz is reported as impossible before any
