@@ -10,7 +10,7 @@ Everything is computed from published models. There is no lookup table of
 "typical" numbers anywhere in the engine.
 
 ```
-npm test          # 32 physics regression tests
+npm test          # 38 physics regression tests
 npm run dev       # serve at http://localhost:8777
 npm run build     # -> dist/rf-antenna-studio.html  (one file, works offline)
 ```
@@ -51,9 +51,24 @@ and bandwidth against substrate thickness for several materials at once, the
 permittivity–aperture–directivity relationship, and the surface-wave power that
 never leaves the board.
 
-**Sizes the ground plane.** Aperture truncation, λ/2-periodic edge-diffraction
-ripple and surface-wave spill-over, with a recommended size and the
-front-to-back ratio you get for it.
+**Sizes the ground plane for whatever antenna you picked.** "How big should the
+ground plane be" has a different answer for every family, because the ground
+does a different job in each — so the Ground & platform tab routes each type to
+its own model:
+
+| Model | Applies to | What the size controls |
+|---|---|---|
+| Image plane | patch family, arrays, slots, DRA, SIW | aperture truncation, λ/2-periodic edge-diffraction ripple, surface-wave spill-over |
+| Counterpoise | monopole, whip | how far the pattern peak tilts off the horizon, and the input impedance |
+| Chassis | PIFA, IFA, chip antennas | gain and bandwidth peak at the chassis half-wave wavemode resonance |
+| Backing disc | axial helix, QHA | back-lobe suppression |
+| Mounting height | dipole, Yagi, LPDA, horn, dish, biconical | two-ray interference with the surface: up to 6 dB of ground gain and the elevation of the first lobe |
+
+Each gives a gain curve against size, the secondary effect that goes with it
+(front-to-back, beam tilt, bandwidth factor, lobe elevation), a recommended
+size with the reason, a sizing table, and — for the ground-plane and
+counterpoise cases — the same antenna's pattern drawn on three different
+ground planes so the effect is visible rather than tabulated.
 
 **Solves the thermal problem.** Conduction through the laminate, spreading in
 the ground plane, thermal vias, natural or forced convection and grey-body
@@ -78,6 +93,17 @@ solved dimensions, so the drawing cannot drift out of step with the numbers,
 plus a scale drawing for each of the 29 archetypes — patch stacks, array grids
 with their feed trees, Yagi booms, horn flares, dish optics, helix windings,
 via fences, lens ray paths.
+
+**Gives you the theory behind it.** A Theory & data tab holding the physical
+background an antenna design needs, evaluated at the current operating point
+rather than printed as static tables: the derived quantities at this frequency,
+every design equation with this design's numbers substituted in so it can be
+checked by hand, the Chu and Harrington bounds with this design marked on them,
+aperture–gain–beamwidth relationships, the full substrate database re-evaluated
+at the operating frequency, skin depth and roughness data for every conductor,
+microstrip line tables, the band and regulation list, atmospheric and rain
+coefficients, VSWR/dB/power/noise conversion tables, and the constants and
+primary references the engine is built on.
 
 **Exports.** Printable report, JSON payload and CSV summary.
 
@@ -106,6 +132,9 @@ The patch engine was checked against published data before any UI was written.
 | Pyramidal horn, 100 × 66 mm at 30 mm | E 23° / H 21° | E 24° / H 22° |
 | 300 mm dish at 30 mm | 7°, sidelobe −24 dB | 8°, −24 dB |
 | 4 × 4 array, 0.7 λ, cosine taper | ~22°, −20 dB | 22°, −21 dB |
+| Monopole beam tilt at 0.25 / 0.5 / 1 / 2 λ ground radius | 45 / 30 / 18 / 10° | 45 / 30 / 18 / 10° |
+| Dipole λ/4 above a perfect ground | 8.15 dBi (+6.0 dB) | 8.17 dBi (+6.02 dB) |
+| First lobe elevation over ground | asin(λ/4h) | matches to 0.6° from 0.5 to 3 λ |
 
 `npm test` locks all of these in. If a model change moves any of them, the test
 fails and the change has to be argued for rather than slipping through.
@@ -126,6 +155,7 @@ fails and the change has to be argued for rather than slipping through.
 | Surface wave | Jackson & Alexopoulos thin-substrate asymptotics, coefficient calibrated to published full-wave data | k₀h ≲ 0.3 |
 | Finite ground plane | GTD/UTD edge diffraction reduced to closed form, calibrated to Huang 1983 and Kishk & Shafai 1986 | engineering estimate, ±0.5 dB |
 | Fundamental limits | Chu 1948, McLean 1996, Harrington 1960, Bode–Fano | exact |
+| Ground plane / platform | per family: GTD-style truncation and edge diffraction (image plane), method-of-moments-fitted tilt and ripple (counterpoise), chassis wavemode resonance after Vainikainen (chassis), two-ray image interference (mounting height) | engineering estimates, ±0.5 dB; the two-ray case is exact for a perfect reflector |
 | Radiation patterns | per family: cavity model (patch), ordinary end-fire array factor (Yagi), uniform/cosine rectangular aperture (horn), Airy and parabolic-taper circular aperture (dish, lens), element × array factor with real spacing and taper (arrays), thin-dipole and small-loop closed forms | beamwidth and sidelobe level measured off the computed cut |
 | Atmosphere | Line-shape model calibrated to the ITU-R P.676 sea-level curve | ±30 % in the windows, 1–300 GHz |
 | Rain | ITU-R P.838-3 k/α coefficients | 1–100 GHz |
@@ -179,7 +209,7 @@ src/ui/
   charts.js                dependency-free SVG chart library
   diagrams.js              stack-up, plan view, array layout
   antennaArt.js            scale drawing for each of the 29 archetypes
-  panels.js                the ten analysis panels
+  panels.js                the eleven analysis panels
   app.js                   shell, specification form, routing
 src/styles/main.css        design tokens, light and dark
 tools/build.mjs            single-file bundler

@@ -377,6 +377,31 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .chart-table th:first-child, .chart-table td:first-child { text-align: left; }
 .chart-table th { color: var(--text-muted); font-weight: 600; }
 
+/* --------------------------------------------------------- section chips */
+.chip-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip {
+  font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--surface-1);
+  color: var(--text-secondary);
+}
+.chip:hover { background: var(--surface-2); }
+.chip[aria-pressed="true"] {
+  background: var(--series-1); border-color: transparent; color: #fff; font-weight: 600;
+}
+
+/* Equation blocks in the theory panel: the relation, then the same relation
+   with this design's numbers in it. */
+.eq-block { margin-bottom: 16px; }
+.eq-title { font-size: 12.5px; font-weight: 620; margin-bottom: 5px; }
+.eq.evaluated {
+  border-left: 3px solid var(--series-1);
+  background: var(--surface-1); color: var(--text-primary);
+}
+.eq-block .chart-note { margin-top: 5px; }
+
+table.data tr.row-current { background: color-mix(in srgb, var(--series-1) 12%, transparent); }
+table.data tr.row-current td { font-weight: 600; }
+
 /* ------------------------------------------------------------------- misc */
 code, .mono { font-family: var(--mono); font-size: 12px; }
 .muted { color: var(--text-muted); }

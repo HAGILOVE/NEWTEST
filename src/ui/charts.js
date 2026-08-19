@@ -229,8 +229,12 @@ export function lineChart(host, opts) {
   const xs = series.flatMap((s) => s.points.map((p) => p.x));
   const ys = series.flatMap((s) => s.points.map((p) => p.y)).filter(Number.isFinite);
   const xDom = opts.xDomain || { min: Math.min(...xs), max: Math.max(...xs) };
-  const yr = niceTicks(opts.yDomain ? opts.yDomain.min : Math.min(...ys),
-                       opts.yDomain ? opts.yDomain.max : Math.max(...ys), opts.yTickCount || 6);
+  // Reference lines must be inside the plot or their labels end up outside the
+  // frame, so the y range is widened to contain them before the ticks are made.
+  const refYs = (opts.hlines || []).map((r) => r.y).filter(Number.isFinite);
+  const yLo = opts.yDomain ? opts.yDomain.min : Math.min(...ys, ...refYs);
+  const yHi = opts.yDomain ? opts.yDomain.max : Math.max(...ys, ...refYs);
+  const yr = niceTicks(yLo, yHi, opts.yTickCount || 6);
   const yDom = opts.yDomain || { min: yr.min, max: yr.max };
   c.axes({ x: xDom, y: yDom, xLabel: opts.xLabel, yLabel: opts.yLabel, xFmt: opts.xFmt, yFmt: opts.yFmt, xLog: opts.xLog });
 
@@ -731,35 +735,49 @@ export function scatterChart(host, opts) {
     el('line', { x1: c.m.l, x2: c.m.l + c.iw, y1: y, y2: y, class: `ref-line ${r.kind || ''}` }, c.g);
     if (r.label) el('text', { x: c.m.l + c.iw - 4, y: y - 5, class: 'ref-label', 'text-anchor': 'end' }, c.g).textContent = r.label;
   }
-  const placed = [];   // label collision avoidance
-  pts.forEach((p) => {
+  // Two passes: every marker first, then the labels on top. Drawing them
+  // interleaved lets a later marker land on an earlier label, and lets a
+  // label be rejected by its own marker.
+  const markers = pts.map((p) => {
+    const px = c.sx(p.x), py = c.sy(p.y), r = p.r || 6;
     const g = el('g', {}, c.g);
-    const px = c.sx(p.x), py = c.sy(p.y);
     el('circle', {
-      cx: px, cy: py, r: p.r || 6,
+      cx: px, cy: py, r,
       fill: p.color || SERIES_VARS[0], stroke: 'var(--surface-1)', 'stroke-width': 2,
     }, g);
-    if (p.label) {
-      const wEst = p.label.length * 5.4 + 12;
-      // try right of the point, then left, then above; skip if all collide
-      const slots = [[px + 10, py + 4, 'start'], [px - 10, py + 4, 'end'], [px, py - 12, 'middle']];
-      for (const [lx, ly, anchor] of slots) {
-        const x0 = anchor === 'start' ? lx : anchor === 'end' ? lx - wEst : lx - wEst / 2;
-        const box = { x0, x1: x0 + wEst, y0: ly - 9, y1: ly + 4 };
-        const hits = placed.some((b) => !(box.x1 < b.x0 || box.x0 > b.x1 || box.y1 < b.y0 || box.y0 > b.y1));
-        const inside = box.x0 > c.m.l - 30 && box.x1 < c.m.l + c.iw + 30;
-        if (!hits && inside) {
-          placed.push(box);
-          el('text', { x: lx, y: ly, class: 'direct-label', 'text-anchor': anchor }, c.g).textContent = p.label;
-          break;
-        }
+    g.addEventListener('pointerenter', () => c.showTip(
+      `<div class="tip-head">${p.label || p.name || ''}</div><div class="tip-row">${opts.xLabel}<b>${fmt(p.x, 4)}</b></div><div class="tip-row">${opts.yLabel}<b>${fmt(p.y, 4)}</b></div>${p.sub ? `<div class="tip-sub">${p.sub}</div>` : ''}`,
+      px, py));
+    g.addEventListener('pointerleave', () => c.hideTip());
+    return { p, px, py, r, box: { x0: px - r - 2, x1: px + r + 2, y0: py - r - 2, y1: py + r + 2 } };
+  });
+
+  const placed = markers.map((m) => m.box);   // labels must clear every marker
+  for (const m of markers) {
+    if (!m.p.label) continue;
+    const wEst = m.p.label.length * 5.4 + 10;
+    const off = m.r + 7;
+    const slots = [
+      [m.px + off, m.py + 4, 'start'],
+      [m.px - off, m.py + 4, 'end'],
+      [m.px, m.py - off - 4, 'middle'],
+      [m.px, m.py + off + 10, 'middle'],
+    ];
+    for (const [lx, ly, anchor] of slots) {
+      const x0 = anchor === 'start' ? lx : anchor === 'end' ? lx - wEst : lx - wEst / 2;
+      const box = { x0, x1: x0 + wEst, y0: ly - 9, y1: ly + 4 };
+      const hits = placed.some((b) => b !== m.box
+        && !(box.x1 <= b.x0 || box.x0 >= b.x1 || box.y1 <= b.y0 || box.y0 >= b.y1));
+      const inside = box.x0 > c.m.l - 34 && box.x1 < c.m.l + c.iw + 34
+        && box.y0 > c.m.t - 4 && box.y1 < c.m.t + c.ih + 4;
+      if (!hits && inside) {
+        placed.push(box);
+        el('text', { x: lx, y: ly, class: 'direct-label', 'text-anchor': anchor }, c.g).textContent = m.p.label;
+        break;
       }
     }
-    g.addEventListener('pointerenter', () => c.showTip(
-      `<div class="tip-head">${p.label || ''}</div><div class="tip-row">${opts.xLabel}<b>${fmt(p.x, 4)}</b></div><div class="tip-row">${opts.yLabel}<b>${fmt(p.y, 4)}</b></div>${p.sub ? `<div class="tip-sub">${p.sub}</div>` : ''}`,
-      c.sx(p.x), c.sy(p.y)));
-    g.addEventListener('pointerleave', () => c.hideTip());
-  });
+  }
+
   if (opts.table !== false) {
     c.table([opts.pointLabel || 'Point', opts.xLabel || 'x', opts.yLabel || 'y'],
       pts.map((p) => [p.label || '', fmt(p.x, 4), fmt(p.y, 4)]));

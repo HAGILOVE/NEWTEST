@@ -15,7 +15,8 @@ import { MATERIAL_BY_ID, dispersiveEr } from '../src/core/materials.js';
 import { z0Microstrip, synthesizeWidth, epsEffStatic, lineLossDbPerM } from '../src/core/microstrip.js';
 import { solvePatch, patchWidth, patchLength, resonantFrequency, compositeEr, besselJ0,
          slotConductance, mutualConductance } from '../src/core/patch.js';
-import { groundPlaneEffect } from '../src/core/ground.js';
+import { groundPlaneEffect, groundModeFor, groundResponse, monopoleGround,
+         chassisGround, heightAboveGround, discGround } from '../src/core/ground.js';
 import { chuQ, harringtonDirectivity, maxFractionalBandwidth } from '../src/core/limits.js';
 import { fspl, gaseousAttenuation, rainAttenuation, noiseFloorDbm, linkBudget } from '../src/core/propagation.js';
 import { solveThermal, paschenVoltage, frequencyDrift } from '../src/core/thermal.js';
@@ -436,4 +437,101 @@ test('a steered phased array moves, broadens and pulls toward broadside', () => 
   // attenuates the outer flank more than the inner one, so the realised
   // broadening is less than the textbook 1/cos figure.
   assert.ok(b45.bw > b0.bw, `beam must broaden when scanned: ${b0.bw} -> ${b45.bw}`);
+});
+
+/* --------------------------------------------- per-family ground models */
+
+test('every archetype is routed to a ground model that matches its physics', () => {
+  const expected = {
+    patch: 'plane', patchArray: 'plane', slotCavity: 'plane', dra: 'plane',
+    monopole: 'radial', pifa: 'chassis', ifa: 'chassis',
+    helixAxial: 'disc', dipole: 'height', yagi: 'height', reflector: 'height',
+  };
+  for (const [id, mode] of Object.entries(expected)) {
+    assert.equal(groundModeFor(id), mode, `${id} should use the ${mode} model`);
+  }
+});
+
+test('monopole over a circular ground: tilt and gain follow the published curve', () => {
+  const lam = 0.1228;
+  // Pattern-peak elevation from method-of-moments studies: 45 deg at a = 0.25
+  // lambda, 30 at 0.5, 18 at 1, 10 at 2.
+  for (const [a, tilt] of [[0.25, 45], [0.5, 30], [1, 18], [2, 10]]) {
+    close(monopoleGround({ radius: a * lam, lambda0: lam }).tiltDeg, tilt, 1.5, `tilt at a = ${a} lambda`);
+  }
+  const big = monopoleGround({ radius: 3 * lam, lambda0: lam });
+  close(big.peakGainDbi, 5.15, 0.6, 'large ground approaches the infinite-ground 5.15 dBi');
+  // A small counterpoise costs gain and pushes the beam off the horizon
+  const small = monopoleGround({ radius: 0.15 * lam, lambda0: lam });
+  assert.ok(small.peakGainDbi < big.peakGainDbi, 'small ground loses peak gain');
+  assert.ok(small.horizonGainDbi < small.peakGainDbi - 2,
+    `a tilted beam must cost gain at the horizon: peak ${small.peakGainDbi.toFixed(2)}, horizon ${small.horizonGainDbi.toFixed(2)}`);
+  assert.ok(big.horizonGainDbi > big.peakGainDbi - 0.5, 'a large ground puts the beam back on the horizon');
+});
+
+test('chassis-coupled antennas peak at the half-wave chassis resonance', () => {
+  const lam = 0.3279;   // 915 MHz
+  const at = (x) => chassisGround({ length: x * lam, lambda0: lam, baseGainDbi: 0 });
+  const half = at(0.5), quarter = at(0.25), tiny = at(0.08), full = at(1.0);
+  assert.ok(half.gainDbi > quarter.gainDbi, 'half-wave chassis beats a quarter-wave one');
+  assert.ok(half.gainDbi > tiny.gainDbi + 3, 'a tiny chassis is far worse');
+  assert.ok(half.bandwidthFactor > quarter.bandwidthFactor,
+    'bandwidth follows the same resonance as gain - that is the point of the model');
+  assert.ok(full.gainDbi > at(0.8).gainDbi, 'a weaker second peak exists near one wavelength');
+  assert.ok(half.atResonance && !quarter.atResonance);
+});
+
+test('two-ray height model reproduces the classic ground-gain figures', () => {
+  const lam = 0.1228;
+  // A horizontal dipole a quarter wave above a perfect ground gains 6 dB
+  const q = heightAboveGround({ height: 0.25 * lam, lambda0: lam, baseGainDbi: 2.15, reflection: 1 });
+  close(q.peakGainDbi, 2.15 + 6.02, 0.15, 'lambda/4 high, perfect ground');
+  close(q.groundGainDb, 6.02, 0.15, 'ground gain');
+  // The first lobe sits at asin(lambda / 4h)
+  for (const h of [0.5, 1, 2, 3]) {
+    const r = heightAboveGround({ height: h * lam, lambda0: lam, baseGainDbi: 0, reflection: 1 });
+    close(r.firstLobeDeg, (Math.asin(0.25 / h) * 180) / Math.PI, 0.6, `first lobe at h = ${h} lambda`);
+  }
+  // Horizontal polarisation nulls along the surface; vertical does not
+  const hp = heightAboveGround({ height: lam, lambda0: lam, baseGainDbi: 0, reflection: 1, lowElevDeg: 0.5 });
+  const vp = heightAboveGround({ height: lam, lambda0: lam, baseGainDbi: 0, reflection: 1, vertical: true, lowElevDeg: 0.5 });
+  assert.ok(hp.lowElevGainDbi < -15, `horizontal pol must null at the surface: ${hp.lowElevGainDbi.toFixed(1)} dB`);
+  close(vp.lowElevGainDbi, 6.02, 0.3, 'vertical pol keeps the full ground gain at the horizon');
+});
+
+test('groundResponse produces a usable sweep for every archetype', () => {
+  const D = runDesign({
+    f: 2.442e9, materialId: 'fr4', stackMode: 'solid', h: 1.6e-3, targetGainDbi: 7,
+    pattern: 'directional', polarization: 'linear', bwPct: 3.42, groundM: 0.07,
+    feedLossDb: 0.4, powerW: 1, feedType: 'inset',
+  });
+  for (const c of D.recommendation.candidates) {
+    if (c.verdict === 'error') continue;
+    const gr = groundResponse(c.arch.id, {
+      lambda0: D.lambda0, baseGainDbi: c.gainDbi,
+      radiatorDim: Math.max(c.size.w, c.size.l) / 1e3,
+      surfaceWaveRatio: c.patch ? c.patch.surfaceWaveRatio : 0,
+      currentSize: D.groundM,
+    });
+    const valid = gr.points.filter((q) => Number.isFinite(q.gainDbi));
+    assert.ok(valid.length > 20, `${c.arch.id}: sweep is too short (${valid.length} points)`);
+    assert.ok(valid.every((q) => Number.isFinite(q.secondary)), `${c.arch.id}: NaN in the secondary metric`);
+    assert.ok(Number.isFinite(gr.recommended.gainDbi) && Number.isFinite(gr.recommended.xMm),
+      `${c.arch.id}: no usable recommendation`);
+    assert.ok(gr.mechanism.length > 40 && gr.notes.length >= 2, `${c.arch.id}: missing explanation`);
+    // the curve has to be smooth enough to plot
+    for (let i = 1; i < valid.length; i++) {
+      assert.ok(Math.abs(valid[i].gainDbi - valid[i - 1].gainDbi) < 4,
+        `${c.arch.id}: ${Math.abs(valid[i].gainDbi - valid[i - 1].gainDbi).toFixed(1)} dB step at ${valid[i].xLambda.toFixed(2)} lambda`);
+    }
+  }
+});
+
+test('a ground plane smaller than the radiator is reported, not silently zeroed', () => {
+  const gr = groundResponse('patchArray', {
+    lambda0: 0.1228, baseGainDbi: 14, radiatorDim: 0.25, currentSize: 0.07,
+  });
+  assert.equal(gr.currentFits, false, 'a 70 mm ground cannot hold a 250 mm array');
+  assert.equal(gr.current, null, 'no gain figure is offered for a size the model cannot evaluate');
+  assert.ok(gr.minimumMm > 250, `minimum reported size should exceed the radiator: ${gr.minimumMm}`);
 });

@@ -3,8 +3,9 @@
  */
 import { h, engFreq } from './charts.js';
 import {
-  renderOverview, renderSelected, renderPatch, renderSubstrate, renderGround,
-  renderThermal, renderTolerance, renderLink, renderDrawings, renderReport,
+  renderOverview, renderSelected, renderGroundEffect, renderPatch, renderSubstrate,
+  renderThermal, renderTolerance, renderLink, renderDrawings,
+  renderTheory, renderReport,
 } from './panels.js';
 import { runDesign, MATERIALS, MATERIAL_BY_ID, CONDUCTORS } from '../core/design.js';
 import { BANDS, bandFor, bandFractional } from '../core/bands.js';
@@ -49,13 +50,14 @@ const DEFAULT_SPEC = {
 const TABS = [
   { id: 'overview', label: 'Recommendations', render: renderOverview },
   { id: 'selected', label: 'Antenna detail', render: renderSelected },
+  { id: 'groundEffect', label: 'Ground & platform', render: renderGroundEffect },
   { id: 'patch', label: 'Patch design', render: renderPatch },
   { id: 'substrate', label: 'Substrate trade', render: renderSubstrate },
-  { id: 'ground', label: 'Ground plane', render: renderGround },
   { id: 'thermal', label: 'Thermal & power', render: renderThermal },
   { id: 'tolerance', label: 'Tolerance & yield', render: renderTolerance },
   { id: 'link', label: 'Link budget', render: renderLink },
   { id: 'drawings', label: 'Drawings', render: renderDrawings },
+  { id: 'theory', label: 'Theory & data', render: renderTheory },
   { id: 'report', label: 'Report', render: renderReport },
 ];
 
@@ -64,6 +66,7 @@ const state = {
   tab: 'overview',
   selected: null,
   scanDeg: 0,
+  theorySection: 'operating',
   showAll: false,
   includeSurfaceWave: true,
   process: 'standard',

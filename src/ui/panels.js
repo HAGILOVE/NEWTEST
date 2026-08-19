@@ -7,12 +7,17 @@ import { antennaDrawing } from './antennaArt.js';
 import { patternFor, responseVsFrequency } from '../core/patterns.js';
 import {
   thicknessSweep, permittivitySweep, substrateTrade, groundSweep, recommendGroundSize,
-  monteCarlo, MATERIALS, MATERIAL_BY_ID, solvePatch, toDB, fromDB, C0,
+  monteCarlo, MATERIALS, MATERIAL_BY_ID, solvePatch, toDB, fromDB, C0, CONDUCTORS,
 } from '../core/design.js';
-import { linkBudget, maxRange, gaseousAttenuation, rainAttenuation, fspl, fresnelRadius, mpeDistance } from '../core/propagation.js';
+import { groundResponse, groundModeFor, groundPlaneEffect, monopoleGround } from '../core/ground.js';
+import { linkBudget, maxRange, gaseousAttenuation, rainAttenuation, fspl, fresnelRadius, mpeDistance, noiseFloorDbm } from '../core/propagation.js';
 import { solveThermal, frequencyDrift, paschenVoltage, pulsedRise, traceCurrentLimit, feedCurrent } from '../core/thermal.js';
-import { BANDS } from '../core/bands.js';
+import { BANDS, bandFractional } from '../core/bands.js';
 import { PROCESS_CLASSES, defaultDkTolerance } from '../core/tolerance.js';
+import { dispersiveEr } from '../core/materials.js';
+import { skinDepth, surfaceResistance } from '../core/constants.js';
+import { synthesizeWidth, epsEffStatic, lineLossDbPerM } from '../core/microstrip.js';
+import { chuQ, harringtonDirectivity, effectiveAperture } from '../core/limits.js';
 
 /* ------------------------------------------------------------- ui helpers */
 
@@ -423,6 +428,198 @@ export function renderSelected(root, D, state) {
     arrayLayout(chartBox(c5), c.count, (c.dims.Spacing ?? c.dims.Pitch ?? 0.7 * D.lambda0 * 1e3),
       c.patch.W * 1e3, c.patch.L * 1e3);
   }
+}
+
+/* ====================================================== GROUND & PLATFORM */
+
+/**
+ * How the selected antenna's gain moves with the size of its ground plane -
+ * or, for the types that carry no ground of their own, with its mounting
+ * height above a reflecting surface.
+ */
+export function renderGroundEffect(root, D, state) {
+  const cands = D.recommendation.candidates.filter((c) => c.verdict !== 'error');
+  const c = cands.find((x) => x.arch.id === state.selected) || cands[0];
+  if (!c) { callout(root, 'warn', 'No candidate selected', 'Pick an antenna on the Recommendations tab.'); return; }
+  state.selected = c.arch.id;
+
+  // ---- selector ----------------------------------------------------------
+  const bar = h('div', { class: 'ctrl-row' }, root);
+  const pick = h('label', { class: 'ctrl' }, bar);
+  h('span', { text: 'Antenna type' }, pick);
+  const sel = h('select', { style: 'width:auto;min-width:250px' }, pick);
+  for (const x of cands) {
+    h('option', { value: x.arch.id, text: `${x.arch.name} — ${x.realizedGainDbi.toFixed(1)} dBi`,
+      selected: x.arch.id === c.arch.id ? 'selected' : null }, sel);
+  }
+  sel.value = c.arch.id;
+  sel.addEventListener('change', () => { state.selected = sel.value; state.rerender(); });
+
+  const mode = groundModeFor(c.arch.id);
+  const MODE_LABEL = {
+    plane: 'Image plane — size sets the gain',
+    radial: 'Counterpoise — the other half of the antenna',
+    chassis: 'Chassis is the radiator',
+    disc: 'Backing reflector',
+    height: 'No ground of its own — mounting height instead',
+  };
+  h('span', { class: 'pill info', text: MODE_LABEL[mode] }, bar);
+
+  const radiatorDim = Math.max(c.size.w, c.size.l) / 1e3;
+  const vertical = ['monopole', 'collinear', 'biconical'].includes(c.arch.id);
+  // the size currently in play: the design ground for planar types, otherwise
+  // a sensible default so the marker has somewhere to sit
+  const currentSize = mode === 'plane' ? D.groundM
+    : mode === 'radial' ? (D.spec.maxDimM ? D.spec.maxDimM / 2 : 0.25 * D.lambda0)
+    : mode === 'chassis' ? (D.spec.maxDimM || 0.4 * D.lambda0)
+    : mode === 'disc' ? 0.8 * D.lambda0
+    : 0.25 * D.lambda0;
+
+  const gr = groundResponse(c.arch.id, {
+    lambda0: D.lambda0,
+    baseGainDbi: mode === 'plane' ? c.gainDbi - (D.spec.feedLossDb || 0) : c.gainDbi,
+    radiatorDim,
+    surfaceWaveRatio: c.patch ? c.patch.surfaceWaveRatio : 0,
+    currentSize, vertical,
+  });
+  const valid = gr.points.filter((q) => Number.isFinite(q.gainDbi));
+  const best = valid.reduce((a, b) => (b.gainDbi > a.gainDbi ? b : a), valid[0]);
+
+  // ---- tiles -------------------------------------------------------------
+  const tl = h('div', { class: 'tiles' }, root);
+  const unit = mode === 'radial' ? 'radius' : mode === 'disc' ? 'diameter' : mode === 'height' ? 'height' : 'edge';
+  tile(tl, `Current ${unit}`, (currentSize * 1e3).toFixed(0), 'mm',
+    `${(currentSize / D.lambda0).toFixed(2)} λ₀ at ${engFreq(D.spec.f)}`);
+  tile(tl, 'Gain there', gr.current ? gr.current.gainDbi.toFixed(2) : 'n/a', gr.current ? 'dBi' : '',
+    gr.current
+      ? `${(gr.current.gainDbi - D.spec.targetGainDbi >= 0 ? '+' : '')}${(gr.current.gainDbi - D.spec.targetGainDbi).toFixed(1)} dB against target`
+      : `the radiator itself is ${(radiatorDim * 1e3).toFixed(0)} mm — it does not fit`,
+    gr.current ? (gr.current.gainDbi >= D.spec.targetGainDbi ? 'good' : 'warn') : 'bad');
+  tile(tl, `Recommended ${unit}`, (gr.recommended.xMm).toFixed(0), 'mm',
+    `${gr.recommended.xLambda.toFixed(2)} λ₀`);
+  tile(tl, 'Gain there', gr.recommended.gainDbi.toFixed(2), 'dBi',
+    gr.current ? `${(gr.recommended.gainDbi - gr.current.gainDbi >= 0 ? '+' : '')}${(gr.recommended.gainDbi - gr.current.gainDbi).toFixed(2)} dB versus now` : gr.recommended.reason.slice(0, 60));
+  tile(tl, 'Best in the sweep', best.gainDbi.toFixed(2), 'dBi', `at ${best.xMm.toFixed(0)} mm (${best.xLambda.toFixed(2)} λ₀)`);
+  const secNow = gr.current ? gr.current.secondary : null;
+  tile(tl, gr.secondaryLabel.replace(/ \[.*/, ''), secNow === null || !Number.isFinite(secNow) ? 'n/a' : secNow.toFixed(mode === 'chassis' ? 2 : 0),
+    mode === 'radial' || mode === 'height' ? '°' : mode === 'chassis' ? '×' : 'dB', 'at the current size');
+
+  if (!gr.currentFits) {
+    callout(root, 'bad',
+      `The ${(currentSize * 1e3).toFixed(0)} mm ground plane is smaller than the antenna on it`,
+      `This type needs at least ${gr.minimumMm.toFixed(0)} mm just to hold the radiator (${(radiatorDim * 1e3).toFixed(0)} mm across), and ${gr.recommended.xMm.toFixed(0)} mm to reach ${gr.recommended.gainDbi.toFixed(1)} dBi. Raise the ground plane in the sidebar, or pick a type that fits the board you have.`);
+  } else if (gr.current && gr.recommended.gainDbi - gr.current.gainDbi > 0.5) {
+    callout(root, 'warn', `${(gr.recommended.gainDbi - gr.current.gainDbi).toFixed(1)} dB is being left on the table`,
+      `Growing the ${unit} from ${(currentSize * 1e3).toFixed(0)} mm to ${gr.recommended.xMm.toFixed(0)} mm recovers it — ${gr.recommended.reason}.`);
+  } else if (gr.current) {
+    callout(root, 'good', `The current ${unit} is within ${Math.abs(gr.recommended.gainDbi - gr.current.gainDbi).toFixed(2)} dB of the practical optimum`,
+      gr.recommended.reason.charAt(0).toUpperCase() + gr.recommended.reason.slice(1) + '.');
+  }
+
+  // ---- the main chart ----------------------------------------------------
+  const c1 = card(root, `Gain against ${gr.xLabel}`, gr.mechanism);
+  const series = [{ name: mode === 'radial' || mode === 'height' ? 'peak gain' : 'realized gain',
+    points: valid.map((q) => ({ x: q.xLambda, y: q.gainDbi })) }];
+  if (mode === 'radial') {
+    series.push({ name: 'gain toward the horizon', color: 'var(--series-2)',
+      points: valid.map((q) => ({ x: q.xLambda, y: q.horizonGainDbi })) });
+  }
+  if (mode === 'height') {
+    series.push({ name: `gain at ${valid[0].detail.lowElevDeg}° elevation`, color: 'var(--series-2)',
+      points: valid.map((q) => ({ x: q.xLambda, y: q.lowElevGainDbi })) });
+  }
+  lineChart(chartBox(c1), {
+    height: 360,
+    series,
+    xLabel: `${gr.xLabel} [λ₀]  ·  1 λ₀ = ${(D.lambda0 * 1e3).toFixed(1)} mm`,
+    yLabel: 'gain [dBi]',
+    xFmt: (v) => v.toFixed(2),
+    vlines: [
+      ...(gr.current ? [{ x: gr.current.xLambda, label: `current ${(currentSize * 1e3).toFixed(0)} mm`, kind: 'spec' }] : []),
+      { x: gr.recommended.xLambda, label: `recommended ${gr.recommended.xMm.toFixed(0)} mm`, kind: 'good' },
+    ],
+    hlines: [{ y: D.spec.targetGainDbi, label: `target ${D.spec.targetGainDbi.toFixed(1)} dBi` }],
+    tipFmt: (p) => `${p.y.toFixed(2)} dBi`,
+    directLabels: false,
+    note: `Physical scale: the sweep runs from ${valid[0].xMm.toFixed(0)} mm to ${valid[valid.length - 1].xMm.toFixed(0)} mm at ${engFreq(D.spec.f)}.`,
+  });
+
+  // ---- secondary effect --------------------------------------------------
+  const c2 = card(root, 'What else changes with it',
+    mode === 'plane' ? 'Gain is only half the story: the back lobe is what a small ground really costs you.'
+    : mode === 'radial' ? 'The peak gain figure hides the important effect — where the beam points.'
+    : mode === 'chassis' ? 'Bandwidth follows the same chassis resonance as gain, which is why both improve together.'
+    : mode === 'height' ? 'Raising the antenna lowers the first lobe toward the horizon, which is what a terrestrial link needs.'
+    : 'The disc is there to suppress the back lobe, so that is the number to watch.');
+  lineChart(chartBox(c2), {
+    height: 300,
+    series: [{ name: gr.secondaryLabel, color: 'var(--series-3)',
+      points: valid.filter((q) => Number.isFinite(q.secondary)).map((q) => ({ x: q.xLambda, y: q.secondary })) }],
+    xLabel: `${gr.xLabel} [λ₀]`, yLabel: gr.secondaryLabel,
+    xFmt: (v) => v.toFixed(2),
+    vlines: gr.current ? [{ x: gr.current.xLambda, label: 'current', kind: 'spec' }] : [],
+    tipFmt: (p) => p.y.toFixed(2),
+    directLabels: false,
+  });
+
+  // ---- pattern at three sizes -------------------------------------------
+  if (mode === 'plane' || mode === 'radial') {
+    const c3 = card(root, 'The same antenna on three different ground planes',
+      'Same element, same feed, same frequency — only the ground changes. This is the effect the gain curve is a summary of.');
+    const picks = mode === 'plane'
+      ? [0.5, gr.current ? gr.current.xLambda : 1.0, 2.5]
+      : [0.15, gr.current ? gr.current.xLambda : 0.5, 1.5];
+    const colors = ['var(--series-2)', 'var(--series-1)', 'var(--series-3)'];
+    const patSeries = picks.map((xL, i) => {
+      const opts = {
+        D0: fromDB(c.gainDbi) / Math.max(c.efficiency, 1e-3),
+        gainDbi: c.gainDbi, count: c.count, lambda0: D.lambda0, dims: c.dims,
+        patch: c.patch ? { Le: c.patch.Le, W: c.patch.W, h: D.stack.h } : null,
+      };
+      if (mode === 'plane') {
+        opts.fbDb = groundPlaneEffect({ lg: xL * D.lambda0, patchDim: radiatorDim,
+          lambda0: D.lambda0, swr: c.patch ? c.patch.surfaceWaveRatio : 0 }).frontToBackDb;
+      } else {
+        opts.tiltDeg = monopoleGround({ radius: xL * D.lambda0, lambda0: D.lambda0 }).tiltDeg;
+      }
+      const pp = patternFor(c.arch.id, opts);
+      return { name: `${(xL * D.lambda0 * 1e3).toFixed(0)} mm (${xL.toFixed(2)} λ₀)`, points: pp.E, color: colors[i], meta: pp.meta };
+    });
+    const g3 = h('div', { class: 'grid2' }, c3);
+    polarChart(chartBox(g3), {
+      size: 360, title: mode === 'plane' ? 'E-plane pattern' : 'Elevation pattern',
+      subtitle: 'normalised to each pattern\'s own peak',
+      floor: -40, series: patSeries,
+      note: mode === 'plane'
+        ? 'A small ground plane does not just cost forward gain — it puts a large fraction of the power behind the antenna.'
+        : 'Watch the beam peak lift off the horizon as the counterpoise shrinks.',
+    });
+    dataTable(h('div', {}, g3), [mode === 'plane' ? 'Ground size' : 'Ground radius', 'Gain', mode === 'plane' ? 'F/B' : 'Peak elevation', 'Beamwidth'],
+      picks.map((xL, i) => {
+        const q = valid.reduce((a, b) => (Math.abs(b.xLambda - xL) < Math.abs(a.xLambda - xL) ? b : a));
+        return [`${(xL * D.lambda0 * 1e3).toFixed(0)} mm (${xL.toFixed(2)} λ₀)`,
+          `${q.gainDbi.toFixed(2)} dBi`,
+          mode === 'plane' ? `${q.secondary.toFixed(1)} dB` : `${q.secondary.toFixed(0)}°`,
+          `${patSeries[i].meta.hpbwE.toFixed(0)}°`];
+      }));
+  }
+
+  // ---- discrete table ----------------------------------------------------
+  const c4 = card(root, 'Sizing table');
+  const marks = mode === 'height' ? [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3]
+    : mode === 'chassis' ? [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+    : mode === 'radial' ? [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2]
+    : [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  dataTable(c4, [`${gr.xLabel} [λ₀]`, 'in mm', 'Gain [dBi]', 'Δ vs best', gr.secondaryLabel, 'Verdict'],
+    marks.map((x) => {
+      const q = valid.reduce((a, b) => (Math.abs(b.xLambda - x) < Math.abs(a.xLambda - x) ? b : a), valid[0]);
+      const d = q.gainDbi - best.gainDbi;
+      return [x.toFixed(2), q.xMm.toFixed(0), q.gainDbi.toFixed(2), `${d.toFixed(2)} dB`,
+        Number.isFinite(q.secondary) ? q.secondary.toFixed(mode === 'chassis' ? 2 : 1) : '-',
+        d > -0.3 ? 'Fully developed' : d > -1.0 ? 'Acceptable' : d > -2.5 ? 'Degraded' : 'Not usable'];
+    }));
+  const ul = h('ul', { class: 'ref-list' }, c4);
+  gr.notes.forEach((n) => h('li', { text: n }, ul));
 }
 
 /* =========================================================== PATCH DESIGN */
@@ -1145,6 +1342,590 @@ export function renderDrawings(root, D) {
     `Far-field measurement distance must exceed ${(D.fieldRegions.farField * 1e3).toFixed(0)} mm (2D²/λ) — measuring closer under-reads the gain.`,
   ];
   notes.forEach((n) => h('li', { text: n }, ul));
+}
+
+/* ================================================================ THEORY */
+
+const THEORY_SECTIONS = [
+  ['operating', 'Operating point'],
+  ['equations', 'Design equations'],
+  ['limits', 'Fundamental limits'],
+  ['aperture', 'Aperture, gain & beamwidth'],
+  ['materials', 'Substrate data'],
+  ['conductors', 'Conductors & skin effect'],
+  ['lines', 'Transmission lines'],
+  ['bands', 'Bands & regulations'],
+  ['atmosphere', 'Atmosphere & propagation'],
+  ['conversions', 'Conversions & noise'],
+  ['constants', 'Constants & symbols'],
+];
+
+/**
+ * The physical and theoretical background an antenna designer needs, evaluated
+ * at the current operating point rather than printed as a static table - so it
+ * doubles as a worked example of the design being carried out.
+ */
+export function renderTheory(root, D, state) {
+  const sec = state.theorySection || 'operating';
+  const nav = h('div', { class: 'chip-nav' }, root);
+  for (const [id, label] of THEORY_SECTIONS) {
+    const b = h('button', { class: 'chip', text: label }, nav);
+    b.setAttribute('aria-pressed', String(id === sec));
+    b.addEventListener('click', () => { state.theorySection = id; state.rerender(); });
+  }
+  const f = D.spec.f, lam = D.lambda0;
+  const mat = D.stack.material;
+  const cu = D.conductor;
+
+  const fn = {
+    operating: theoryOperating, equations: theoryEquations, limits: theoryLimits,
+    aperture: theoryAperture, materials: theoryMaterials, conductors: theoryConductors,
+    lines: theoryLines, bands: theoryBands, atmosphere: theoryAtmosphere,
+    conversions: theoryConversions, constants: theoryConstants,
+  }[sec] || theoryOperating;
+  fn(root, D, state, { f, lam, mat, cu });
+}
+
+function theoryOperating(root, D, state, k) {
+  const { f, lam, mat, cu } = k;
+  const c1 = card(root, 'Operating point',
+    'Every quantity below is derived from the frequency and stack-up currently in the sidebar. Change either and this page changes with it.');
+  const g = h('div', { class: 'grid2' }, c1);
+  const lamG = lam / Math.sqrt(D.sol.epsEff);
+  const omega = 2 * Math.PI * f;
+  dataTable(h('div', {}, g), ['Quantity', 'Symbol', 'Value'], [
+    ['Frequency', 'f', engFreq(f)],
+    ['Angular frequency', 'ω = 2πf', `${(omega / 1e9).toFixed(4)} Grad/s`],
+    ['Period', 'T = 1/f', `${(1e12 / f).toFixed(2)} ps`],
+    ['Free-space wavelength', 'λ₀ = c/f', `${(lam * 1e3).toFixed(3)} mm`],
+    ['Free-space wavenumber', 'k₀ = 2π/λ₀', `${((2 * Math.PI) / lam).toFixed(2)} rad/m`],
+    ['Quarter wavelength', 'λ₀/4', `${((lam / 4) * 1e3).toFixed(3)} mm`],
+    ['Guided wavelength', 'λg = λ₀/√εeff', `${(lamG * 1e3).toFixed(3)} mm`],
+    ['Effective permittivity', 'εeff', D.sol.epsEff.toFixed(4)],
+    ['Substrate permittivity at f', 'εr(f)', `${mat.er.toFixed(4)} (dispersion applied)`],
+    ['Loss tangent at f', 'tanδ(f)', mat.df.toFixed(5)],
+    ['Dielectric Q ceiling', 'Q_d = 1/tanδ', mat.df > 0 ? (1 / mat.df).toFixed(1) : '∞'],
+    ['Electrical height', 'h/λ₀', (D.stack.h / lam).toFixed(4)],
+  ]);
+  dataTable(h('div', {}, g), ['Quantity', 'Symbol', 'Value'], [
+    ['Conductor', '', cu.name],
+    ['Conductivity', 'σ', `${(cu.sigma / 1e7).toFixed(3)} × 10⁷ S/m`],
+    ['Skin depth', 'δ = 1/√(πfμσ)', `${(skinDepth(f, cu.sigma) * 1e6).toFixed(3)} µm`],
+    ['Copper thickness in skin depths', 't/δ', ((D.spec.tCu ?? 35e-6) / skinDepth(f, cu.sigma)).toFixed(2)],
+    ['Surface resistance', 'Rs = √(πfμ/σ)', `${(surfaceResistance(f, cu.sigma) * 1e3).toFixed(2)} mΩ/sq`],
+    ['Reactive near-field boundary', '0.62√(D³/λ)', `${(D.fieldRegions.reactiveNearField * 1e3).toFixed(1)} mm`],
+    ['Far-field (Fraunhofer)', '2D²/λ', `${(D.fieldRegions.fraunhofer * 1e3).toFixed(1)} mm`],
+    ['Far-field criterion in use', 'max(2D²/λ, 3λ)', `${(D.fieldRegions.farField * 1e3).toFixed(1)} mm`],
+    ['Free-space impedance', 'η₀ = √(µ₀/ε₀)', '376.730 Ω'],
+    ['Substrate wave impedance', 'η₀/√εr', `${(376.730 / Math.sqrt(mat.er)).toFixed(2)} Ω`],
+    ['Path loss at 1 m', '20log₁₀(4πd/λ)', `${fspl(f, 1).toFixed(2)} dB`],
+    ['Thermal noise in 1 MHz', 'kTB at 290 K', `${noiseFloorDbm(1e6).toFixed(2)} dBm`],
+  ]);
+
+  const c2 = card(root, 'Wavelength across the spectrum',
+    'The single number that sets every antenna dimension. The marker is the current design frequency.');
+  const pts = [];
+  for (let i = 0; i <= 200; i++) {
+    const fg = Math.pow(10, -1.5 + (i / 200) * 4);   // 30 MHz to 300 GHz
+    pts.push({ x: fg, y: (C0 / (fg * 1e9)) * 1e3 });
+  }
+  lineChart(chartBox(c2), {
+    height: 300, xLog: true,
+    series: [{ name: 'λ₀', points: pts }],
+    xLabel: 'frequency [GHz]', yLabel: 'free-space wavelength [mm]',
+    xFmt: (v) => (v >= 1 ? v.toFixed(0) : v.toFixed(2)),
+    yFmt: (v) => (v >= 1000 ? `${(v / 1000).toFixed(0)} m` : v.toFixed(0)),
+    vlines: [{ x: f / 1e9, label: engFreq(f), kind: 'spec' }],
+    tipFmt: (p) => (p.y >= 1000 ? `${(p.y / 1000).toFixed(2)} m` : `${p.y.toFixed(1)} mm`),
+    directLabels: false, table: false,
+    note: 'A half-wave resonator is λ₀/2 in air and λ₀/(2√εeff) on a substrate — the whole miniaturisation trade in one line.',
+  });
+}
+
+function theoryEquations(root, D, state, k) {
+  const { f, lam, mat } = k;
+  const s = D.sol;
+  const c1 = card(root, 'The equations, with this design substituted in',
+    'Each block shows the governing relation and then the same relation evaluated at the current operating point, so the numbers can be checked by hand.');
+
+  const block = (title, eq, evaluated, why) => {
+    const b = h('div', { class: 'eq-block' }, c1);
+    h('div', { class: 'eq-title', text: title }, b);
+    h('span', { class: 'eq', text: eq }, b);
+    h('span', { class: 'eq evaluated', text: evaluated }, b);
+    if (why) h('p', { class: 'chart-note', text: why }, b);
+  };
+
+  block('Patch width for best efficiency (Balanis 14-6)',
+    'W = (c / 2f) · √(2 / (εr + 1))',
+    `W = (2.99792e8 / (2 × ${(f / 1e9).toFixed(4)}e9)) × √(2 / (${mat.er.toFixed(3)} + 1)) = ${(s.W * 1e3).toFixed(3)} mm`,
+    'Wider radiates better but risks exciting the next mode; this is the standard compromise.');
+
+  // Hammerstad's exponent is -a*b, not the -1/2 of the textbook shorthand;
+  // solving for it here keeps the printed arithmetic reproducible by hand.
+  const uWH = s.W / D.stack.h;
+  const abExp = Math.log((s.epsEff - (mat.er + 1) / 2) / ((mat.er - 1) / 2)) / Math.log(1 + 10 / uWH);
+  block('Effective permittivity (Hammerstad & Jensen)',
+    'εeff = (εr+1)/2 + ((εr−1)/2) · (1 + 10h/W)^(−a·b)\n   a = f(W/h),  b = f(εr)   [the textbook shorthand uses (1+12h/W)^(−1/2)]',
+    `εeff = ${((mat.er + 1) / 2).toFixed(3)} + ${((mat.er - 1) / 2).toFixed(3)} × (1 + 10/${uWH.toFixed(3)})^(−${Math.abs(abExp).toFixed(4)}) = ${s.epsEff.toFixed(4)}`,
+    'Part of the field is in air, so the guided wave sees less than the bulk permittivity. The exponent a·b is close to 0.5 for ordinary W/h, which is where the shorthand comes from.');
+
+  block('Fringing extension',
+    'ΔL/h = 0.412 · (εeff+0.3)(W/h+0.264) / ((εeff−0.258)(W/h+0.8))',
+    `ΔL = ${(s.dL * 1e3).toFixed(4)} mm per radiating edge, so Le = L + 2ΔL = ${(s.Le * 1e3).toFixed(3)} mm`,
+    'The patch is electrically longer than it is physically — this is where the radiation comes from.');
+
+  block('Resonant length',
+    'L = c / (2f√εeff) − 2ΔL',
+    `L = ${(C0 / (2 * f * Math.sqrt(s.epsEff)) * 1e3).toFixed(3)} − 2 × ${(s.dL * 1e3).toFixed(4)} = ${(s.L * 1e3).toFixed(3)} mm`);
+
+  block('Radiation quality factor',
+    'Q_rad = 2π²·εeff·Le / (k₀·h·W·I),   I = ∮ |F(θ,φ)|² dΩ',
+    `Q_rad = 2π² × ${s.epsEff.toFixed(3)} × ${(s.Le * 1e3).toFixed(2)}e−3 / (${((2 * Math.PI) / lam).toFixed(1)} × ${(D.stack.h * 1e3).toFixed(2)}e−3 × ${(s.W * 1e3).toFixed(2)}e−3 × ${s.patternIntegral.toFixed(3)}) = ${s.Qrad.toFixed(1)}`,
+    'Derived from the physical aperture rather than a fitted formula, so it stays correct for thick and low-permittivity substrates.');
+
+  block('Loss channels combine as parallel Qs',
+    '1/Q_t = 1/Q_rad + 1/Q_d + 1/Q_c + 1/Q_sw',
+    `1/${s.Qt.toFixed(1)} = 1/${s.Qrad.toFixed(1)} + 1/${s.Qd.toFixed(1)} + 1/${s.Qc.toFixed(0)} + 1/${s.Qsw > 1e6 ? '∞' : s.Qsw.toFixed(0)}`,
+    'The smallest Q dominates. That is the one worth engineering — everything else is second order.');
+
+  block('Radiation efficiency and bandwidth',
+    'η = Q_t / Q_rad          BW(VSWR = S) = (S−1) / (Q_t·√S)',
+    `η = ${s.Qt.toFixed(1)} / ${s.Qrad.toFixed(1)} = ${(s.etaSpace * 100).toFixed(1)} %      BW(2:1) = 1/(${s.Qt.toFixed(1)} × 1.414) = ${(s.fbw2 * 100).toFixed(3)} %`,
+    'Efficiency and bandwidth are the same trade seen from two sides: both improve with a thicker, lower-loss substrate.');
+
+  block('Edge resistance and inset feed',
+    'Rin = 1 / (2(G₁ + G₁₂)),   Rin(y₀) = Rin(0)·cos²(π y₀ / L)',
+    `Rin = 1 / (2 × (${(s.G1 * 1e3).toFixed(4)} + ${(s.G12 * 1e3).toFixed(4)}) mS) = ${s.Rin.toFixed(1)} Ω${D.feed.insetDepth !== undefined ? `, so y₀ = ${(D.feed.insetDepth * 1e3).toFixed(3)} mm reaches 50 Ω` : ''}`);
+
+  block('Surface-wave power ratio (thin-substrate asymptotics)',
+    'P_sw / P_sp ≈ (3π/8) · k₀h · (εr−1)³ / εr^2.5',
+    `= (3π/8) × ${(((2 * Math.PI) / lam) * D.stack.h).toFixed(4)} × (${mat.er.toFixed(2)}−1)³ / ${mat.er.toFixed(2)}^2.5 = ${s.surfaceWaveRatio.toFixed(4)}`,
+    'Grows with both thickness and permittivity — the reason high-Dk mmWave boards go thin or go to SIW.');
+
+  block('Free-space path loss (Friis)',
+    'FSPL = 20 log₁₀(4πd/λ)',
+    `at 1 km: 20 log₁₀(4π × 1000 / ${(lam).toFixed(4)}) = ${fspl(f, 1000).toFixed(2)} dB`);
+
+  block('Chu–McLean lower bound on Q',
+    'Q_min = 1/(ka)³ + 1/(ka)          BW(2:1) ≤ 1 / (√2 · Q_min / η)',
+    `ka = ${D.limits.ka.toFixed(3)} → Q_min = 1/${Math.pow(D.limits.ka, 3).toFixed(3)} + 1/${D.limits.ka.toFixed(3)} = ${D.limits.chuQ.toFixed(3)}\n`
+    + `with η = ${(D.sol.etaSpace * 100).toFixed(1)} %:  BW(2:1) ≤ 1 / (1.414 × ${(D.limits.chuQ / D.sol.etaSpace).toFixed(3)}) = ${(D.limits.chuBandwidth * 100).toFixed(2)} %`,
+    'No geometry beats this for a given enclosing sphere. If the spec needs more, the antenna must get bigger or less efficient.');
+}
+
+function theoryLimits(root, D, state, k) {
+  const { lam } = k;
+  const c1 = card(root, 'What physics allows before any design starts',
+    'Two bounds decide whether a specification is possible at all. Chu and McLean bound the bandwidth an enclosing sphere can support; Harrington bounds the directivity. Both depend only on size in wavelengths.');
+
+  const kaPts = [];
+  for (let i = 0; i <= 200; i++) {
+    const ka = 0.15 + (i / 200) * 11.85;
+    kaPts.push({ ka, q: chuQ(ka), d: toDB(harringtonDirectivity((ka * lam) / (2 * Math.PI), lam)),
+      bw: (1 / (chuQ(ka) * Math.SQRT2)) * 100 });
+  }
+  const g = h('div', { class: 'grid2' }, c1);
+  lineChart(chartBox(g), {
+    height: 320, title: 'Minimum radiation Q against electrical size',
+    series: [{ name: 'Q_min', points: kaPts.map((p) => ({ x: p.ka, y: p.q })) }],
+    xLabel: 'ka  (a = radius of the enclosing sphere)', yLabel: 'minimum radiation Q',
+    yDomain: { min: 0, max: 40 },
+    vlines: [{ x: D.limits.ka, label: `this design, ka = ${D.limits.ka.toFixed(2)}`, kind: 'spec' },
+             { x: 1, label: 'ka = 1: electrically small', kind: '' }],
+    tipFmt: (p) => p.y.toFixed(2), directLabels: false, table: false,
+    note: 'Q rises as 1/(ka)³ — halving an antenna multiplies its minimum Q roughly eightfold, which is why small antennas are narrowband.',
+  });
+  lineChart(chartBox(g), {
+    height: 320, title: 'Maximum bandwidth and directivity',
+    series: [
+      { name: 'max VSWR-2 bandwidth [%]', points: kaPts.map((p) => ({ x: p.ka, y: p.bw })) },
+      { name: 'Harrington directivity [dBi]', points: kaPts.map((p) => ({ x: p.ka, y: p.d })), color: 'var(--series-2)' },
+    ],
+    xLabel: 'ka', yLabel: 'per-axis value (see legend)',
+    yDomain: { min: 0, max: 40 },
+    vlines: [{ x: D.limits.ka, label: 'this design', kind: 'spec' }],
+    tipFmt: (p) => p.y.toFixed(2), directLabels: false, table: false,
+    note: 'Both curves are plotted against the same ka axis and both are dimensionless-to-dB quantities of similar range; the legend names which is which.',
+  });
+
+  const c2 = card(root, 'Where this design sits');
+  dataTable(c2, ['Bound', 'Statement', 'Value here', 'Status'], [
+    ['Chu–McLean Q', 'Q ≥ 1/(ka)³ + 1/(ka)', `Q_min = ${D.limits.chuQ.toFixed(2)} at ka = ${D.limits.ka.toFixed(3)}`,
+      D.sol.Qt >= D.limits.chuQ ? `design Q_t = ${D.sol.Qt.toFixed(1)} — above the bound, as it must be` : 'below the bound — check the inputs'],
+    ['Chu bandwidth', 'BW ≤ (S−1)/(Q_min√S)', `${(D.limits.chuBandwidth * 100).toFixed(2)} %`,
+      D.spec.bwPct ? (D.spec.bwPct <= D.limits.chuBandwidth * 100 ? `requirement ${D.spec.bwPct.toFixed(1)} % is achievable` : `requirement ${D.spec.bwPct.toFixed(1)} % is IMPOSSIBLE at this size`) : '-'],
+    ['Harrington directivity', 'D ≤ (ka)² + 2ka', `${D.limits.harringtonGainDbi.toFixed(2)} dBi at ${(D.sol.etaSpace * 100).toFixed(0)} % efficiency`,
+      D.spec.targetGainDbi <= D.limits.harringtonGainDbi ? `target ${D.spec.targetGainDbi.toFixed(1)} dBi is achievable` : 'target exceeds the bound'],
+    ['Aperture gain', 'G = 4πAe/λ²', `${D.limits.apertureGainDbi.toFixed(2)} dBi for the full footprint at 80 % aperture efficiency`, 'upper bound for an aperture of this size'],
+    ['Bode–Fano', '|Γ|min = exp(−π/(Q·BW))', `${D.bodeFano.returnLossDb.toFixed(1)} dB return loss`, 'best any lossless matching network can do over the required band'],
+    ['Wheeler / radiansphere', 'ka = 1 divides small from resonant', `ka = ${D.limits.ka.toFixed(3)}`,
+      D.limits.electricallySmall ? 'electrically SMALL — efficiency and bandwidth are size-limited' : 'resonant-sized — normal design rules apply'],
+  ]);
+  h('p', { class: 'chart-note', text: 'These are not modelling assumptions: they follow from expanding the field outside a sphere in spherical modes. An antenna that appears to beat them is either larger than assumed, lossy, or measured wrongly.' }, c2);
+}
+
+function theoryAperture(root, D, state, k) {
+  const { lam } = k;
+  const c1 = card(root, 'Aperture, gain and beamwidth',
+    'For anything larger than a wavelength these three quantities are the same fact stated three ways. The relations below are what lets you size an antenna before choosing its type.');
+  const g = h('div', { class: 'grid2' }, c1);
+  const pts = [];
+  for (let i = 0; i <= 200; i++) {
+    const dL = 0.3 + (i / 200) * 29.7;                 // aperture diameter in lambda
+    pts.push({ dL, g: toDB(0.6 * Math.pow(Math.PI * dL, 2)), bw: 70 / dL });
+  }
+  lineChart(chartBox(g), {
+    height: 320, title: 'Gain of a circular aperture', xLog: true,
+    series: [{ name: 'gain at 60 % aperture efficiency', points: pts.map((p) => ({ x: p.dL, y: p.g })) }],
+    xLabel: 'aperture diameter [λ₀]', yLabel: 'gain [dBi]',
+    xFmt: (v) => (v >= 1 ? v.toFixed(0) : v.toFixed(1)),
+    tipFmt: (p) => `${p.y.toFixed(1)} dBi`, directLabels: false, table: false,
+    note: 'Gain rises 6 dB per doubling of diameter. There is no way around it: high gain is aperture.',
+  });
+  lineChart(chartBox(g), {
+    height: 320, title: 'Beamwidth of the same aperture', xLog: true,
+    series: [{ name: '3 dB beamwidth', points: pts.map((p) => ({ x: p.dL, y: p.bw })), color: 'var(--series-2)' }],
+    xLabel: 'aperture diameter [λ₀]', yLabel: '3 dB beamwidth [deg]',
+    xFmt: (v) => (v >= 1 ? v.toFixed(0) : v.toFixed(1)),
+    tipFmt: (p) => `${p.y.toFixed(1)}°`, directLabels: false, table: false,
+    note: 'Beamwidth ≈ 70λ/D. A 30 dBi antenna has a 2° beam, and a 2° beam needs a mount that can hold 0.5°.',
+  });
+
+  const c2 = card(root, 'Relationships worth memorising');
+  dataTable(c2, ['Relation', 'Formula', 'At this design'], [
+    ['Directivity from beamwidths', 'D₀ ≈ 32400 / (θ_E · θ_H)', `${D.beamwidth.thetaE.toFixed(0)}° × ${D.beamwidth.thetaH.toFixed(0)}° → ${toDB(32400 / (D.beamwidth.thetaE * D.beamwidth.thetaH)).toFixed(1)} dBi`],
+    ['Effective aperture', 'Ae = Gλ²/4π', `${(effectiveAperture(D.realizedGainDbi, lam) * 1e4).toFixed(2)} cm²`],
+    ['Aperture efficiency', 'ηap = Ae / Aphysical', `${((effectiveAperture(D.realizedGainDbi, lam) / (D.groundM * D.groundM)) * 100).toFixed(1)} % of the ground-plane footprint`],
+    ['Array gain', 'G = G_element + 10log₁₀(N) − feed loss', 'each doubling of elements is +3 dB minus what the feed takes back'],
+    ['Element spacing for no grating lobe', 'd/λ < 1/(1 + |sin θ_scan|)', 'broadside: d < λ. ±60° scan: d < 0.54λ'],
+    ['Gain–bandwidth of a small antenna', 'G·BW bounded by (ka)³', 'the Chu bound restated — you may trade them, not beat them'],
+    ['Polarisation loss', 'PLF = cos²(Δψ)', '30° misalignment costs 1.25 dB; cross-polarised is a total loss'],
+    ['Axial ratio to polarisation loss', 'worst case = 20log₁₀((AR₁AR₂+1)/(AR₁+AR₂))', '3 dB AR against a pure circular source ≈ 0.5 dB worst case'],
+  ]);
+}
+
+function theoryMaterials(root, D, state, k) {
+  const { f, mat } = k;
+  const c1 = card(root, `Substrate data at ${engFreq(f)}`,
+    'Dk and Df are shown at the current operating frequency using the Djordjevic–Sarkar causal dispersion model, not at the datasheet frequency — the difference matters above a few GHz. The row in use is highlighted.');
+  const rows = MATERIALS.map((m) => {
+    const d = dispersiveEr(m, f);
+    return { m, d, isCurrent: D.stack.baseMaterial && m.id === D.stack.baseMaterial.id };
+  }).sort((a, b) => a.d.er - b.d.er);
+  const t = dataTable(c1, ['Material', 'Family', `εr @ ${(f / 1e9).toFixed(2)} GHz`, `tanδ @ f`, 'Q_d', 'TCDk [ppm/°C]', 'k [W/m·K]', 'CTE z [ppm]', 'Tg [°C]', 'Cost', 'f max'],
+    rows.map((r) => [
+      r.m.name, r.m.family, r.d.er.toFixed(3), r.d.df.toFixed(5),
+      r.d.df > 0 ? (1 / r.d.df).toFixed(0) : '∞',
+      r.m.tcdk, r.m.k.toFixed(2), r.m.cte, r.m.tg, `${r.m.cost.toFixed(1)}×`,
+      `${(r.m.fMax / 1e9).toFixed(0)} GHz`]));
+  [...t.querySelectorAll('tbody tr')].forEach((tr, i) => { if (rows[i].isCurrent) tr.classList.add('row-current'); });
+
+  const c2 = card(root, 'Loss tangent against permittivity',
+    'The two properties that decide whether a substrate can radiate. Down and to the left is efficient and physically large; up and to the right is compact and lossy.');
+  // Label only the reference points a designer navigates by; everything else
+  // is on hover. A label on all 24 points would be unreadable.
+  const LANDMARKS = { air: 'air', rt5880: 'RT5880', ro3003: 'RO3003', ro4003c: 'RO4003C',
+                      fr4: 'FR-4', ro6010: 'RT6010', alumina96: 'alumina', ltccDp951: 'LTCC' };
+  scatterChart(chartBox(c2), {
+    height: 340,
+    points: rows.map((r) => ({
+      x: r.d.er, y: r.d.df * 1000,
+      label: r.isCurrent ? `${LANDMARKS[r.m.id] || r.m.name.split(' ')[0]} (in use)` : LANDMARKS[r.m.id],
+      color: r.isCurrent ? 'var(--series-2)' : 'var(--series-1)',
+      r: r.isCurrent ? 8 : 5,
+      sub: `${r.m.name} — ${r.m.family} · cost ${r.m.cost}× · Tg ${r.m.tg} °C`,
+    })),
+    xLabel: 'relative permittivity εr', yLabel: 'loss tangent × 1000',
+    yDomain: { min: 0, max: 22 },
+    tipFmt: (p) => p.y.toFixed(2), table: false,
+    note: 'The current substrate is the orange point. Only landmark materials are labelled — hover any point for its name, family, cost and Tg.',
+  });
+
+  const c3 = card(root, 'How to read this table');
+  const ul = h('ul', { class: 'ref-list' }, c3);
+  [
+    'εr sets the size: linear dimensions scale as 1/√εeff, so εr = 10 makes a patch about 3× smaller in each direction than air.',
+    'tanδ sets the ceiling on efficiency: Q_d = 1/tanδ can never be exceeded by the radiation Q, so a thin antenna on a high-Df laminate cannot be efficient at any thickness.',
+    'TCDk sets how far the resonance walks over temperature: Δf/f ≈ −½·TCDk·ΔT. RO3003 at 13 ppm/°C holds a 77 GHz radar band that FR-4 at −200 ppm/°C would lose.',
+    'Thermal conductivity matters only when the antenna shares a substrate with a power amplifier; alumina at 24 W/m·K is two orders above every laminate here.',
+    'z-axis CTE is a plated-through-hole reliability number, not an RF one — but PTFE at 200+ ppm/°C is why those boards need special drilling and no thermal shock.',
+    'Cost index is relative to standard FR-4 for the bare laminate; the finished-board ratio is usually smaller because processing dominates at low volume.',
+  ].forEach((x) => h('li', { text: x }, ul));
+}
+
+function theoryConductors(root, D, state, k) {
+  const { f, cu } = k;
+  const c1 = card(root, 'Skin effect',
+    'Above a few megahertz the current rides on the surface. Everything about conductor loss, plating choice and surface roughness follows from how thin that layer is.');
+  const fs = [];
+  for (let i = 0; i <= 200; i++) fs.push(Math.pow(10, -2 + (i / 200) * 4.5));   // 10 MHz - 300 GHz
+  const metals = ['copper', 'silver', 'aluminium', 'brass', 'enig'];
+  lineChart(chartBox(c1), {
+    height: 340, xLog: true,
+    series: metals.map((mid) => ({
+      name: CONDUCTORS[mid].name,
+      points: fs.map((g) => ({ x: g, y: skinDepth(g * 1e9, CONDUCTORS[mid].sigma) * 1e6 })),
+    })),
+    xLabel: 'frequency [GHz]', yLabel: 'skin depth [µm]',
+    xFmt: (v) => (v >= 1 ? v.toFixed(0) : v.toFixed(2)),
+    yFmt: (v) => v.toFixed(1),
+    vlines: [{ x: f / 1e9, label: engFreq(f), kind: 'spec' }],
+    hlines: [{ y: (D.spec.tCu ?? 35e-6) * 1e6, label: `copper thickness ${((D.spec.tCu ?? 35e-6) * 1e6).toFixed(0)} µm` }],
+    tipFmt: (p) => `${p.y.toFixed(3)} µm`, table: false,
+    note: 'Where the copper is thinner than about three skin depths the conductor is not fully used; where it is much thicker, adding more copper buys nothing electrically.',
+  });
+
+  const c2 = card(root, 'Conductor properties');
+  dataTable(c2, ['Metal', 'σ [S/m]', `δ at ${engFreq(f)}`, 'Rs [mΩ/sq]', 'Relative Rs', 'k [W/m·K]', 'Temp. coeff.'], 
+    Object.entries(CONDUCTORS).map(([, m]) => {
+      const rs = surfaceResistance(f, m.sigma);
+      return [m.name, m.sigma.toExponential(2), `${(skinDepth(f, m.sigma) * 1e6).toFixed(3)} µm`,
+        (rs * 1e3).toFixed(2), `${(rs / surfaceResistance(f, CONDUCTORS.copper.sigma)).toFixed(2)}×`,
+        m.k, `${(m.alphaR * 1e3).toFixed(2)} ×10⁻³/K`];
+    }));
+  h('p', { class: 'chart-note', text: 'ENIG puts 3–6 µm of nickel between the copper and the gold. Nickel is roughly four times more resistive than copper AND magnetic, so at microwave frequencies an ENIG finish over a radiating surface costs real efficiency. Use OSP or immersion silver on the antenna layer.' }, c2);
+
+  const c3 = card(root, 'Surface roughness',
+    'Rolled foil is smooth; the tooth that bonds cheap foil to laminate is not. Once the roughness approaches the skin depth the current has to follow a longer path.');
+  const rq = [];
+  for (let i = 0; i <= 150; i++) {
+    const ratio = (i / 150) * 5;
+    rq.push({ x: ratio, y: 1 + (2 / Math.PI) * Math.atan(1.4 * ratio * ratio) });
+  }
+  lineChart(chartBox(c3), {
+    height: 300,
+    series: [{ name: 'Hammerstad correction Kr', points: rq }],
+    xLabel: 'RMS roughness / skin depth  (Rq/δ)', yLabel: 'conductor-loss multiplier',
+    vlines: [{ x: (D.spec.roughnessRq ?? 1e-6) / skinDepth(f, cu.sigma),
+      label: `this design: Rq ${((D.spec.roughnessRq ?? 1e-6) * 1e6).toFixed(1)} µm`, kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(3)}×`, directLabels: false, table: false,
+    note: `Typical RMS roughness: standard foil 2 µm, VLP 1 µm, HVLP 0.5 µm, rolled annealed 0.3 µm. Skin depth here is ${(skinDepth(f, cu.sigma) * 1e6).toFixed(2)} µm.`,
+  });
+}
+
+function theoryLines(root, D, state, k) {
+  const { f, mat } = k;
+  const c1 = card(root, '50 Ω microstrip width against substrate height',
+    'The first number every layout needs. Computed with Hammerstad–Jensen at the current frequency for each candidate laminate.');
+  const ids = ['fr4', 'ro4003c', 'rt5880', 'ro3003', 'ro6010'];
+  const hs = [];
+  for (let i = 1; i <= 120; i++) hs.push((i / 120) * 3.2e-3);
+  lineChart(chartBox(c1), {
+    height: 340,
+    series: ids.map((id) => {
+      const m = MATERIAL_BY_ID[id];
+      const d = dispersiveEr(m, f);
+      return { name: `${m.name} (εr ${d.er.toFixed(2)})`,
+        points: hs.map((hh) => ({ x: hh * 1e3, y: synthesizeWidth(d.er, 50, hh) * 1e3 })) };
+    }),
+    xLabel: 'substrate height h [mm]', yLabel: '50 Ω trace width [mm]',
+    vlines: [{ x: D.stack.h * 1e3, label: 'this stack', kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(3)} mm`, table: false,
+    note: 'W/h is nearly constant for a given permittivity, so halving the substrate halves the trace width — which is what makes thin high-Dk mmWave boards hard to etch.',
+  });
+
+  const c2 = card(root, 'Line loss against frequency',
+    'Conductor loss rises as √f, dielectric loss rises linearly with f. Where they cross tells you which one to attack.');
+  const w50 = D.feed.feedLineWidth;
+  const fsw = [];
+  for (let i = 0; i <= 160; i++) fsw.push(Math.pow(10, -1 + (i / 160) * 2.5));
+  lineChart(chartBox(c2), {
+    height: 320, xLog: true,
+    series: [
+      { name: 'conductor', points: fsw.map((g) => ({ x: g, y: lineLossDbPerM({ er: mat.er, df: mat.df, w: w50, h: D.stack.h, f: g * 1e9, sigma: k.cu.sigma, rq: D.spec.roughnessRq ?? 1e-6 }).conductor / 100 })) },
+      { name: 'dielectric', points: fsw.map((g) => ({ x: g, y: lineLossDbPerM({ er: mat.er, df: mat.df, w: w50, h: D.stack.h, f: g * 1e9, sigma: k.cu.sigma }).dielectric / 100 })), color: 'var(--series-2)' },
+      { name: 'total', points: fsw.map((g) => ({ x: g, y: lineLossDbPerM({ er: mat.er, df: mat.df, w: w50, h: D.stack.h, f: g * 1e9, sigma: k.cu.sigma, rq: D.spec.roughnessRq ?? 1e-6 }).total / 100 })), color: 'var(--series-3)' },
+    ],
+    xLabel: 'frequency [GHz]', yLabel: 'loss [dB/cm]',
+    xFmt: (v) => (v >= 1 ? v.toFixed(0) : v.toFixed(1)),
+    vlines: [{ x: f / 1e9, label: engFreq(f), kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(4)} dB/cm`, table: false,
+    note: `On ${mat.name} with a ${(w50 * 1e3).toFixed(2)} mm line, ${lineLossDbPerM({ er: mat.er, df: mat.df, w: w50, h: D.stack.h, f, sigma: k.cu.sigma }).dielectric > lineLossDbPerM({ er: mat.er, df: mat.df, w: w50, h: D.stack.h, f, sigma: k.cu.sigma, rq: D.spec.roughnessRq ?? 1e-6 }).conductor ? 'dielectric loss dominates — a better laminate helps, more copper does not' : 'conductor loss dominates — smoother foil and wider lines help'}.`,
+  });
+
+  const c3 = card(root, 'Line reference at this operating point');
+  const zs = [25, 35.4, 50, 70.7, 100];
+  dataTable(c3, ['Z₀ [Ω]', 'Width [mm]', 'W/h', 'εeff', 'λg [mm]', 'λg/4 [mm]', 'Loss [dB/cm]', 'Typical use'], 
+    zs.map((z) => {
+      const w = synthesizeWidth(mat.er, z, D.stack.h);
+      const ee = epsEffStatic(mat.er, w, D.stack.h);
+      const lg = C0 / (f * Math.sqrt(ee));
+      const use = { 25: 'low-Z stubs, wide feeds', 35.4: 'λ/4 between 25 and 50 Ω', 50: 'standard reference',
+                    70.7: 'λ/4 between 50 and 100 Ω', 100: 'array branch lines' }[z];
+      return [z.toFixed(1), (w * 1e3).toFixed(3), (w / D.stack.h).toFixed(2), ee.toFixed(3),
+        (lg * 1e3).toFixed(2), ((lg / 4) * 1e3).toFixed(3),
+        (lineLossDbPerM({ er: mat.er, df: mat.df, w, h: D.stack.h, f, sigma: k.cu.sigma }).total / 100).toFixed(4), use];
+    }));
+  const lim = D.microstripLimits;
+  h('p', { class: 'chart-note', text: `Mode limits on this stack: the first higher-order TM surface wave appears at ${(lim.fTM1 / 1e9).toFixed(1)} GHz and transverse resonance of the 50 Ω line at ${(lim.fTransverse / 1e9).toFixed(1)} GHz, so keep microstrip below about ${(lim.fMaxRecommended / 1e9).toFixed(1)} GHz here.` }, c3);
+}
+
+function theoryBands(root, D, state, k) {
+  const { f } = k;
+  const c1 = card(root, 'Service bands',
+    'Wavelength, fractional bandwidth and the headline EIRP limit for each band. The fractional bandwidth column is what decides whether one resonant antenna can cover the whole allocation.');
+  const cur = D.band;
+  const t = dataTable(c1, ['Band', 'Range [GHz]', 'Centre', 'λ₀ [mm]', 'λ₀/2 [mm]', 'Fractional BW', 'EIRP limit', 'Region', 'Note'],
+    BANDS.map((b) => {
+      const fc = (b.lo + b.hi) / 2;
+      return [b.name, `${(b.lo / 1e9).toFixed(3)} – ${(b.hi / 1e9).toFixed(3)}`, engFreq(fc),
+        ((C0 / fc) * 1e3).toFixed(1), ((C0 / fc / 2) * 1e3).toFixed(1),
+        `${(bandFractional(b) * 100).toFixed(2)} %`,
+        b.eirpDbm === null ? '—' : `${b.eirpDbm} dBm`, b.region, b.note];
+    }));
+  [...t.querySelectorAll('tbody tr')].forEach((tr, i) => { if (cur && BANDS[i].id === cur.id) tr.classList.add('row-current'); });
+
+  const c2 = card(root, 'Bandwidth demanded by each band, against what a patch can give',
+    'The dashed line is the VSWR-2 bandwidth of the patch currently configured. Bands above it need a wideband topology — stacked, aperture-coupled, air-gapped, or a different antenna entirely.');
+  barChart(chartBox(c2), {
+    height: 340,
+    items: BANDS.filter((b) => b.hi < 200e9).map((b) => ({
+      label: b.name.replace(/ \(.*\)/, '').slice(0, 16),
+      value: bandFractional(b) * 100,
+      color: bandFractional(b) * 100 <= D.sol.fbw2 * 100 ? 'var(--series-3)' : 'var(--series-1)',
+      highlight: cur && b.id === cur.id,
+      sub: `${(b.lo / 1e9).toFixed(2)}–${(b.hi / 1e9).toFixed(2)} GHz`,
+    })),
+    yLabel: 'fractional bandwidth [%]',
+    valueFmt: (v) => v.toFixed(1),
+    hlines: [{ y: D.sol.fbw2 * 100, label: `this patch: ${(D.sol.fbw2 * 100).toFixed(2)} %` }],
+    note: 'Green bands fit inside the current patch bandwidth; blue ones do not.',
+  });
+}
+
+function theoryAtmosphere(root, D, state, k) {
+  const { f } = k;
+  const c1 = card(root, 'Atmospheric absorption',
+    'Specific attenuation of dry air and water vapour at sea level, following ITU-R P.676. The resonances are not engineering choices — they decide which bands can carry a long link at all.');
+  const fsG = [];
+  for (let i = 0; i <= 300; i++) fsG.push(1 + i);
+  lineChart(chartBox(c1), {
+    height: 340,
+    series: [
+      { name: 'dry air (O₂)', points: fsG.map((g) => ({ x: g, y: gaseousAttenuation(g * 1e9, 15, 1013.25, 0.001).oxygen })) },
+      { name: 'water vapour (7.5 g/m³)', points: fsG.map((g) => ({ x: g, y: gaseousAttenuation(g * 1e9, 15, 1013.25, 7.5).water })), color: 'var(--series-2)' },
+    ],
+    xLabel: 'frequency [GHz]', yLabel: 'specific attenuation [dB/km]',
+    yDomain: { min: 0, max: 30 },
+    vlines: [{ x: f / 1e9, label: engFreq(f), kind: 'spec' }],
+    tipFmt: (p) => `${p.y.toFixed(3)} dB/km`, table: false,
+  });
+
+  const c2 = card(root, 'Reference values');
+  const marks = [2.45, 5.8, 10, 24, 28, 39, 60, 77, 94, 122, 140, 183];
+  dataTable(c2, ['f [GHz]', 'λ₀ [mm]', 'O₂ [dB/km]', 'H₂O [dB/km]', 'Total [dB/km]', 'Rain 25 mm/h [dB/km]', 'Character'],
+    marks.map((g) => {
+      const a = gaseousAttenuation(g * 1e9);
+      const r = rainAttenuation(Math.min(g, 100) * 1e9, 25).gammaR;
+      const ch = a.total > 5 ? 'absorption band — short range by physics'
+        : a.total > 0.5 ? 'usable, plan the link budget for it'
+        : 'atmospheric window';
+      return [g.toFixed(0), ((C0 / (g * 1e9)) * 1e3).toFixed(2), a.oxygen.toFixed(3), a.water.toFixed(3),
+        a.total.toFixed(3), r.toFixed(2), ch];
+    }));
+
+  const c3 = card(root, 'Rain attenuation coefficients (ITU-R P.838-3)',
+    'γR = k·R^α with R in mm/h. Rain, not gas, is what closes a Ku- or Ka-band link budget.');
+  dataTable(c3, ['f [GHz]', 'k (horizontal)', 'α (horizontal)', '5 mm/h', '25 mm/h', '50 mm/h', '100 mm/h'],
+    [4, 10, 15, 20, 30, 40, 60, 80, 100].map((g) => {
+      const r = rainAttenuation(g * 1e9, 25);
+      return [g, r.k.toFixed(5), r.alpha.toFixed(3),
+        ...[5, 25, 50, 100].map((rr) => `${(r.k * Math.pow(rr, r.alpha)).toFixed(2)} dB/km`)];
+    }));
+}
+
+function theoryConversions(root, D, state, k) {
+  const c1 = card(root, 'Match: VSWR, return loss and mismatch loss',
+    'Three ways of stating the same reflection. Mismatch loss is the one that matters to a link budget — it is how much of the delivered power never enters the antenna.');
+  const g = h('div', { class: 'grid2' }, c1);
+  dataTable(h('div', {}, g), ['VSWR', '|Γ|', 'Return loss [dB]', 'Mismatch loss [dB]', 'Power reflected'],
+    [1.0, 1.1, 1.2, 1.5, 1.92, 2.0, 2.5, 3.0, 4.0, 5.0, 10].map((v) => {
+      const gm = (v - 1) / (v + 1);
+      return [v.toFixed(2), gm.toFixed(4), v === 1 ? '∞' : (-20 * Math.log10(gm)).toFixed(2),
+        (-10 * Math.log10(1 - gm * gm)).toFixed(3), `${(gm * gm * 100).toFixed(2)} %`];
+    }));
+  dataTable(h('div', {}, g), ['dB', 'Power ratio', 'Voltage ratio', 'Meaning'],
+    [[-20, 'a hundredth'], [-10, 'a tenth'], [-6, 'a quarter'], [-3, 'half'], [-1, '79 %'],
+     [0, 'unity'], [1, '1.26×'], [3, 'double'], [6, 'four times'], [10, 'ten times'], [20, 'a hundred times']]
+      .map(([d, meaning]) => [d > 0 ? `+${d}` : `${d}`, fromDB(d).toFixed(d === 0 ? 0 : 4),
+        Math.pow(10, d / 20).toFixed(4), meaning]));
+
+  const c2 = card(root, 'Power');
+  const g2 = h('div', { class: 'grid2' }, c2);
+  dataTable(h('div', {}, g2), ['dBm', 'Watts', 'dBW', 'Typical source'],
+    [[-100, 'thermal noise floor in 1 MHz + 14 dB NF'], [-80, 'weak received signal'], [-30, '1 µW'],
+     [0, '1 mW — reference'], [10, '10 mW, BLE'], [14, '25 mW, EU SRD limit'], [20, '100 mW, Wi-Fi EIRP (EU)'],
+     [30, '1 W'], [36, '4 W, US point-to-multipoint EIRP'], [43, '20 W'], [50, '100 W'], [60, '1 kW']]
+      .map(([d, note]) => [d, fromDB(d - 30) >= 1 ? `${fromDB(d - 30).toFixed(fromDB(d - 30) >= 10 ? 0 : 2)} W` : `${(fromDB(d - 30) * 1e3).toFixed(3)} mW`,
+        (d - 30).toFixed(0), note]));
+  dataTable(h('div', {}, g2), ['Bandwidth', 'kTB at 290 K [dBm]', 'With 6 dB NF', 'Sensitivity at 10 dB SNR'],
+    [1e3, 1e4, 1e5, 1e6, 1e7, 2e7, 1e8, 1e9].map((b) => [
+      b >= 1e6 ? `${(b / 1e6).toFixed(0)} MHz` : `${(b / 1e3).toFixed(0)} kHz`,
+      noiseFloorDbm(b).toFixed(2), (noiseFloorDbm(b) + 6).toFixed(2), (noiseFloorDbm(b) + 16).toFixed(2)]));
+
+  const c3 = card(root, 'Field strength and power density',
+    'For EMC work and exposure assessment, all referred to the EIRP of the current design.');
+  const eirp = 20 + D.realizedGainDbi - 0.5;
+  dataTable(c3, ['Distance', 'Power density [W/m²]', 'E field [V/m]', 'H field [A/m]', 'Against the 10 W/m² public limit'],
+    [0.05, 0.1, 0.2, 0.5, 1, 3, 10].map((d) => {
+      const pd = fromDB(eirp - 30) / (4 * Math.PI * d * d);
+      const e = Math.sqrt(pd * 376.73);
+      return [`${(d * 100).toFixed(0)} cm`, pd.toExponential(3), e.toFixed(2), (e / 376.73).toFixed(4),
+        pd > 10 ? 'EXCEEDS' : `${(pd / 10 * 100).toFixed(2)} % of the limit`];
+    }));
+  h('p', { class: 'chart-note', text: `Assumes ${(20).toFixed(0)} dBm at the connector and the ${D.realizedGainDbi.toFixed(1)} dBi of this design (EIRP ${eirp.toFixed(1)} dBm), far-field formulas applied at all distances — inside the reactive near field (${(D.fieldRegions.reactiveNearField * 1e3).toFixed(0)} mm) they overestimate.` }, c3);
+}
+
+function theoryConstants(root, D, state, k) {
+  const c1 = card(root, 'Physical constants', 'CODATA 2018 values, as used throughout the engine.');
+  dataTable(c1, ['Constant', 'Symbol', 'Value', 'Unit'], [
+    ['Speed of light in vacuum', 'c₀', '299 792 458', 'm/s'],
+    ['Vacuum permeability', 'µ₀', '4π × 10⁻⁷ = 1.256 637 × 10⁻⁶', 'H/m'],
+    ['Vacuum permittivity', 'ε₀', '8.854 188 × 10⁻¹²', 'F/m'],
+    ['Free-space impedance', 'η₀ = µ₀c₀', '376.730 313', 'Ω'],
+    ['Boltzmann constant', 'k_B', '1.380 649 × 10⁻²³', 'J/K'],
+    ['Stefan–Boltzmann constant', 'σ_SB', '5.670 374 × 10⁻⁸', 'W/(m²·K⁴)'],
+    ['Reference noise temperature', 'T₀', '290', 'K'],
+    ['Standard atmosphere', 'p₀', '101 325', 'Pa'],
+  ]);
+
+  const c2 = card(root, 'Symbols used in this tool');
+  dataTable(c2, ['Symbol', 'Quantity', 'Where it appears'], [
+    ['λ₀, λg', 'free-space and guided wavelength', 'every dimension'],
+    ['k₀', 'free-space wavenumber, 2π/λ₀', 'pattern integrals, Q'],
+    ['εr, εeff', 'bulk and effective permittivity', 'substrate, microstrip'],
+    ['tanδ, Df', 'loss tangent', 'dielectric loss, Q_d'],
+    ['Q_rad, Q_d, Q_c, Q_sw, Q_t', 'radiation, dielectric, conductor, surface-wave and loaded quality factors', 'efficiency and bandwidth'],
+    ['η', 'radiation efficiency', 'gain = directivity × efficiency'],
+    ['D₀, G', 'directivity and gain', 'pattern and link budget'],
+    ['ka', 'electrical size of the enclosing sphere', 'Chu and Harrington bounds'],
+    ['Γ, VSWR', 'reflection coefficient and standing-wave ratio', 'match'],
+    ['δ, Rs', 'skin depth and surface resistance', 'conductor loss'],
+    ['σ', 'conductivity', 'conductor loss, Q_c'],
+    ['Rθ', 'thermal resistance [K/W]', 'power handling'],
+  ]);
+
+  const c3 = card(root, 'Primary references',
+    'Every model in this tool traces to one of these. Where a coefficient has been calibrated rather than derived, the source code says so at the point of use.');
+  const ul = h('ul', { class: 'ref-list' }, c3);
+  [
+    'C. A. Balanis, Antenna Theory: Analysis and Design, 4th ed., Wiley 2016 — cavity and transmission-line patch models, ch. 14.',
+    'E. O. Hammerstad and Ø. Jensen, "Accurate models for microstrip computer-aided design", IEEE MTT-S 1980.',
+    'M. Kirschning and R. H. Jansen, "Accurate model for effective dielectric constant of microstrip with validity up to millimetre-wave frequencies", Electronics Letters 18(6), 1982.',
+    'A. R. Djordjevic et al., "Wideband frequency-domain characterization of FR-4 and time-domain causality", IEEE T-EMC 43(4), 2001.',
+    'D. R. Jackson and N. G. Alexopoulos, "Simple approximate formulas for input resistance, bandwidth and efficiency of a resonant rectangular patch", IEEE T-AP 39(3), 1991.',
+    'D. M. Pozar, "Considerations for millimeter wave printed antennas", IEEE T-AP 31(5), 1983.',
+    'J. Huang, "The finite ground plane effect on the microstrip antenna radiation patterns", IEEE T-AP 31(4), 1983.',
+    'A. A. Kishk and L. Shafai, "The effect of various parameters of circular microstrip antennas on their radiation efficiency and the mode excitation", IEEE T-AP 34(8), 1986.',
+    'L. J. Chu, "Physical limitations of omni-directional antennas", J. Appl. Phys. 19, 1948; J. S. McLean, IEEE T-AP 44(5), 1996.',
+    'R. F. Harrington, "Effect of antenna size on gain, bandwidth and efficiency", J. Res. NBS 64D, 1960.',
+    'P. Vainikainen et al., "Resonator-based analysis of the combination of mobile handset antenna and chassis", IEEE T-AP 50(10), 2002.',
+    'J. D. Kraus, "The helical antenna", Proc. IRE 37, 1949 — axial-mode gain formula.',
+    'H. W. Ehrenspeck and H. Poehler, "A new method for obtaining maximum gain from Yagi antennas", IRE T-AP 7, 1959.',
+    'ITU-R P.525 (free space), P.676 (gaseous attenuation), P.838 (rain), P.2001 (wide-range terrestrial).',
+    'IPC-2152 (current capacity), IPC-4101 (laminate specification).',
+  ].forEach((r) => h('li', { text: r }, ul));
 }
 
 /* ================================================================ REPORT */
