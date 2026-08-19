@@ -22,6 +22,7 @@ import { solveThermal, paschenVoltage, frequencyDrift } from '../src/core/therma
 import { monteCarlo } from '../src/core/tolerance.js';
 import { recommend } from '../src/core/recommend.js';
 import { runDesign, thicknessSweep } from '../src/core/design.js';
+import { patternFor, responseVsFrequency, besselJ1 } from '../src/core/patterns.js';
 
 const close = (a, b, tol, msg) =>
   assert.ok(Math.abs(a - b) <= tol, `${msg || ''}: got ${a}, expected ${b} ± ${tol}`);
@@ -353,4 +354,86 @@ test('radiation pattern is continuous and normalised', () => {
   }
   const back = D.pattern.E.find((p) => p.deg === 180).db;
   close(back, -D.gnd.frontToBackDb, 0.5, 'back lobe equals the computed F/B');
+});
+
+/* -------------------------------------------------------------- patterns */
+
+test('Bessel J1 matches reference values', () => {
+  close(besselJ1(0), 0, 1e-7);
+  close(besselJ1(1), 0.4400505857, 1e-7);
+  close(besselJ1(3.831705970), 0, 1e-6, 'first zero');
+  close(besselJ1(10), 0.0434727462, 1e-6);
+});
+
+test('per-family patterns reproduce textbook beamwidths and sidelobes', () => {
+  const cases = [
+    // id, params, expected HPBW (E-plane), tolerance, expected first sidelobe, tol
+    ['dipole', { D0: 1.64 }, 78, 3, null, null],
+    ['loopSmall', { D0: 1.5 }, 90, 4, null, null],
+    // uniform linear array of 6 at 0.525 lambda: HPBW ~17 deg, SLL -13.2 dB
+    ['collinear', { D0: 12, count: 6 }, 18, 3, -13.2, 2],
+    // Pyramidal horn, 100 x 66 mm aperture at 30 mm: E-plane HPBW 51*l/b = 23 deg,
+    // H-plane 70*l/a = 21 deg. The ideal uniform line source gives a -13.2 dB
+    // first sidelobe; the obliquity factor of an aperture radiating into a half
+    // space pushes the modelled value to -14..-16 dB, which is what real horns
+    // actually measure.
+    ['hornPyramidal', { D0: 50, dims: { 'Aperture a': 100, 'Aperture b': 66 }, lambda0: 0.03, fbDb: 30 }, 23, 3, -14.8, 2.2],
+    // 300 mm dish at 30 mm: HPBW = 70*l/D = 7 deg, parabolic taper SLL ~ -24 dB
+    ['reflector', { D0: 1000, dims: { 'Dish diameter': 300 }, lambda0: 0.03, fbDb: 32 }, 7, 2, -24, 2.5],
+    // 4 x 4 patch array at 0.7 lambda with a cosine taper: SLL around -20 dB
+    ['patchArray', { D0: 60, count: 16 }, 22, 4, -21, 4],
+  ];
+  for (const [id, p, bw, bwTol, sll, sllTol] of cases) {
+    const r = patternFor(id, p);
+    close(r.meta.hpbwE, bw, bwTol, `${id} HPBW`);
+    if (sll !== null) close(r.meta.sllE, sll, sllTol, `${id} first sidelobe`);
+    assert.ok(r.E.length === 361 && r.H.length === 361, `${id}: cuts must cover -180..180`);
+    close(Math.max(...r.E.map((q) => q.db)), 0, 1e-9, `${id}: peak normalised`);
+  }
+});
+
+test('every archetype produces a finite, continuous pattern', () => {
+  const D = runDesign({
+    f: 2.442e9, materialId: 'fr4', stackMode: 'solid', h: 1.6e-3, targetGainDbi: 7,
+    pattern: 'directional', polarization: 'linear', bwPct: 3.42, groundM: 0.07,
+    feedLossDb: 0.4, powerW: 1, feedType: 'inset',
+  });
+  for (const c of D.recommendation.candidates) {
+    if (c.verdict === 'error') continue;
+    const r = patternFor(c.arch.id, {
+      D0: Math.pow(10, c.gainDbi / 10) / Math.max(c.efficiency, 1e-3),
+      gainDbi: c.gainDbi, count: c.count, lambda0: D.lambda0, dims: c.dims,
+      patch: c.patch ? { Le: c.patch.Le, W: c.patch.W, h: D.stack.h } : null,
+    });
+    for (const [name, cut] of [['E', r.E], ['H', r.H]]) {
+      assert.ok(cut.every((q) => Number.isFinite(q.db)), `${c.arch.id} ${name}: NaN in the cut`);
+      for (let i = 1; i < cut.length; i++) {
+        assert.ok(Math.abs(cut[i].db - cut[i - 1].db) < 30,
+          `${c.arch.id} ${name}: ${Math.abs(cut[i].db - cut[i - 1].db).toFixed(0)} dB jump at ${cut[i].deg} deg`);
+      }
+    }
+    assert.ok(r.meta.hpbwE > 0, `${c.arch.id}: zero beamwidth`);
+    const resp = responseVsFrequency(c.arch.id, { f0: D.spec.f, bwPct: c.bwPct, gainDbi: c.realizedGainDbi });
+    assert.ok(resp.every((q) => Number.isFinite(q.gain) && Number.isFinite(q.vswr) && q.vswr >= 1),
+      `${c.arch.id}: bad frequency response`);
+  }
+});
+
+test('a steered phased array moves, broadens and pulls toward broadside', () => {
+  const at = (deg) => {
+    const r = patternFor('phasedArray', { D0: 60, count: 16, scanDeg: deg });
+    const peak = r.E.reduce((a, b) => (b.db > a.db ? b : a));
+    return { peak: peak.deg, bw: r.meta.hpbwE };
+  };
+  const b0 = at(0), b25 = at(25), b45 = at(45);
+  close(b0.peak, 0, 2, 'unscanned beam points at boresight');
+  assert.ok(b25.peak > 5 && b45.peak > b25.peak, `beam follows the command: ${b25.peak} then ${b45.peak}`);
+  // The element pattern multiplies the array factor, so the realised peak sits
+  // a few degrees inside the commanded angle - real beam pulling, not an error.
+  assert.ok(b45.peak > 0.7 * 45 && b45.peak <= 45 + 2,
+    `pulled toward broadside but still near the command: ${b45.peak} deg for a 45 deg command`);
+  // The array factor broadens as 1/cos(theta), but the element pattern
+  // attenuates the outer flank more than the inner one, so the realised
+  // broadening is less than the textbook 1/cos figure.
+  assert.ok(b45.bw > b0.bw, `beam must broaden when scanned: ${b0.bw} -> ${b45.bw}`);
 });

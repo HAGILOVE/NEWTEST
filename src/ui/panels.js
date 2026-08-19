@@ -1,8 +1,10 @@
 /**
  * Tab panel renderers. Each takes the container and the current design result.
  */
-import { h, el, lineChart, barChart, stackedBar, histogramChart, polarChart, smithChart, scatterChart, fmt, engFreq, SERIES_VARS } from './charts.js';
+import { h, el, lineChart, barChart, hBarChart, stackedBar, histogramChart, polarChart, smithChart, scatterChart, fmt, engFreq, SERIES_VARS } from './charts.js';
 import { stackupDiagram, planView, arrayLayout } from './diagrams.js';
+import { antennaDrawing } from './antennaArt.js';
+import { patternFor, responseVsFrequency } from '../core/patterns.js';
 import {
   thicknessSweep, permittivitySweep, substrateTrade, groundSweep, recommendGroundSize,
   monteCarlo, MATERIALS, MATERIAL_BY_ID, solvePatch, toDB, fromDB, C0,
@@ -123,7 +125,7 @@ export function renderOverview(root, D, state) {
   const passing = viable;
   const rejected = shown.filter((c) => c.verdict === 'rejected');
 
-  passing.slice(0, state.showAll ? 99 : 6).forEach((c, i) => renderCandidate(c1, c, i, D));
+  passing.slice(0, state.showAll ? 99 : 6).forEach((c, i) => renderCandidate(c1, c, i, D, state));
 
   if (passing.length > 6) {
     const b = h('button', { text: state.showAll ? 'Show fewer' : `Show all ${passing.length} viable candidates` }, c1);
@@ -136,6 +138,7 @@ export function renderOverview(root, D, state) {
     const body = h('div', { class: 'body' }, det);
     dataTable(body, ['Antenna type', 'Realized gain', 'Blocking reason'],
       rejected.map((c) => [c.arch.name, `${c.realizedGainDbi.toFixed(1)} dBi`, c.blockers[0] || '-']));
+    h('p', { class: 'chart-note', text: 'A rejected type can still be inspected — pick it from the selector on the Antenna detail tab.' }, body);
   }
 
   // ---- comparison chart ---------------------------------------------------
@@ -153,7 +156,7 @@ export function renderOverview(root, D, state) {
     yLabel: 'realized gain [dBi]',
     valueFmt: (v) => v.toFixed(1),
     hlines: [{ y: D.spec.targetGainDbi, label: `spec ${D.spec.targetGainDbi.toFixed(1)} dBi` }],
-    note: 'Blue clears the target; orange falls short. Hover a bar for bandwidth, efficiency and size.',
+    note: 'Blue clears the target; orange falls short. Hover a bar for bandwidth, efficiency and size; click any candidate card above to open its full detail view.',
   });
 
   // ---- gain vs size scatter ----------------------------------------------
@@ -174,8 +177,13 @@ export function renderOverview(root, D, state) {
   });
 }
 
-function renderCandidate(parent, c, i, D) {
+function renderCandidate(parent, c, i, D, state) {
   const box = h('div', { class: `cand ${i === 0 ? 'top' : ''} ${c.verdict === 'rejected' ? 'rejected' : ''}` }, parent);
+  box.setAttribute('role', 'button');
+  box.setAttribute('tabindex', '0');
+  const open = () => { state.selected = c.arch.id; state.tab = 'selected'; state.rerender(); window.scrollTo({ top: 0 }); };
+  box.addEventListener('click', (ev) => { if (!ev.target.closest('details, summary, button, a')) open(); });
+  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
   const head = h('div', { class: 'cand-head' }, box);
   h('span', { class: 'rank', text: `#${i + 1}` }, head);
   h('h3', { text: c.arch.name }, head);
@@ -186,6 +194,8 @@ function renderCandidate(parent, c, i, D) {
   h('span', { class: 'pill info', text: c.arch.category }, head);
 
   h('p', { class: 'summary', text: c.arch.summary }, box);
+  const openBtn = h('button', { class: 'cand-open', text: 'View pattern, drawing and response →' }, box);
+  openBtn.addEventListener('click', (ev) => { ev.stopPropagation(); open(); });
 
   const m = h('div', { class: 'cand-metrics' }, box);
   const met = (k, v) => { const s = h('span', {}, m); s.textContent = k + ' '; h('b', { text: v }, s); };
@@ -209,6 +219,209 @@ function renderCandidate(parent, c, i, D) {
     if (c.count && c.count > 1 && c.arch.category === 'Microstrip' && c.patch) {
       arrayLayout(h('div', { style: 'margin-top:10px' }, body), c.count, 0.7 * D.lambda0 * 1e3, c.patch.W * 1e3, c.patch.L * 1e3);
     }
+  }
+}
+
+/* ========================================================= ANTENNA DETAIL */
+
+/**
+ * Everything about one selected antenna type on a single screen: what it looks
+ * like, how it radiates, how it behaves across the band, and where it sits
+ * against the alternatives.
+ */
+export function renderSelected(root, D, state) {
+  const cands = D.recommendation.candidates.filter((c) => c.verdict !== 'error');
+  const c = cands.find((x) => x.arch.id === state.selected) || cands[0];
+  if (!c) { callout(root, 'warn', 'No candidate to show', 'Adjust the specification in the sidebar.'); return; }
+  state.selected = c.arch.id;
+
+  // ---- type selector -----------------------------------------------------
+  const bar = h('div', { class: 'ctrl-row' }, root);
+  const pick = h('label', { class: 'ctrl' }, bar);
+  h('span', { text: 'Antenna type' }, pick);
+  const sel = h('select', { style: 'width:auto;min-width:250px' }, pick);
+  for (const group of ['recommended', 'marginal', 'rejected']) {
+    const inGroup = cands.filter((x) => x.verdict === group);
+    if (!inGroup.length) continue;
+    const og = h('optgroup', { label: `${group} (${inGroup.length})` }, sel);
+    for (const x of inGroup) {
+      h('option', { value: x.arch.id, text: `${x.arch.name} — ${x.realizedGainDbi.toFixed(1)} dBi`,
+        selected: x.arch.id === c.arch.id ? 'selected' : null }, og);
+    }
+  }
+  sel.value = c.arch.id;
+  sel.addEventListener('change', () => { state.selected = sel.value; state.rerender(); });
+  const rank = cands.indexOf(c) + 1;
+  h('span', { class: `pill ${c.verdict === 'recommended' ? 'good' : c.verdict === 'rejected' ? 'bad' : 'warn'}`,
+    text: c.verdict === 'rejected' ? 'rejected' : `ranked #${rank}` }, bar);
+  h('span', { class: 'pill info', text: c.arch.category }, bar);
+  h('span', { class: 'pill info', text: c.arch.pol.join(' / ') + ' polarisation' }, bar);
+
+  // ---- pattern + response ------------------------------------------------
+  const pat = patternFor(c.arch.id, {
+    D0: fromDB(c.gainDbi) / Math.max(c.efficiency, 1e-3),
+    gainDbi: c.gainDbi,
+    count: c.count,
+    lambda0: D.lambda0,
+    dims: c.dims,
+    patch: c.patch ? { Le: c.patch.Le, W: c.patch.W, h: c.patch.h ?? D.stack.h } : null,
+    boomLambda: c.dims && c.dims['Boom length'] ? c.dims['Boom length'] / 1e3 / D.lambda0 : null,
+    fbDb: c.groundEffect ? c.groundEffect.frontToBackDb : null,
+    scanDeg: state.scanDeg ?? 0,
+  });
+  const resp = responseVsFrequency(c.arch.id, { f0: D.spec.f, bwPct: c.bwPct, gainDbi: c.realizedGainDbi });
+
+  // ---- headline ----------------------------------------------------------
+  const tl = h('div', { class: 'tiles' }, root);
+  tile(tl, 'Realized gain', c.realizedGainDbi.toFixed(1), 'dBi',
+    `target ${D.spec.targetGainDbi.toFixed(1)} dBi · ${(c.realizedGainDbi - D.spec.targetGainDbi >= 0 ? '+' : '')}${(c.realizedGainDbi - D.spec.targetGainDbi).toFixed(1)} dB`,
+    c.realizedGainDbi >= D.spec.targetGainDbi ? 'good' : 'warn');
+  tile(tl, 'Efficiency', (c.efficiency * 100).toFixed(0), '%', `${toDB(c.efficiency).toFixed(2)} dB of loss`,
+    c.efficiency > 0.8 ? 'good' : c.efficiency > 0.5 ? 'warn' : 'bad');
+  tile(tl, 'Bandwidth', c.bwPct.toFixed(1), '%', D.spec.bwPct ? `required ${D.spec.bwPct.toFixed(1)} %` : 'VSWR 2:1',
+    !D.spec.bwPct || c.bwPct >= D.spec.bwPct ? 'good' : 'warn');
+  tile(tl, 'Beamwidth E / H', `${pat.meta.hpbwE.toFixed(0)}° / ${pat.meta.hpbwH >= 360 ? '360' : pat.meta.hpbwH.toFixed(0)}°`, '',
+    pat.frame === 'omni' || pat.frame === 'omniHalf' ? 'elevation / azimuth' : 'half-power');
+  tile(tl, 'Sidelobe level', pat.meta.sllE <= -55 ? 'none' : pat.meta.sllE.toFixed(1), pat.meta.sllE <= -55 ? '' : 'dB',
+    pat.meta.sllE <= -55 ? 'single-lobe pattern' : 'first sidelobe, E-plane');
+  tile(tl, 'Front-to-back', pat.meta.fbE >= 39 ? '> 40' : pat.meta.fbE.toFixed(0), 'dB',
+    `envelope ${c.size.w.toFixed(0)} × ${c.size.l.toFixed(0)} × ${c.size.h.toFixed(1)} mm`);
+
+  // ---- drawing + patterns ------------------------------------------------
+  const c1 = card(root, 'What it looks like, and how it radiates',
+    c.arch.summary);
+  antennaDrawing(chartBox(c1), c, D);
+
+  const g1 = h('div', { class: 'grid2' }, c1);
+  polarChart(chartBox(g1), {
+    size: 360, title: 'Radiation pattern — principal planes',
+    subtitle: pat.meta.axisLabelE.replace(/ \(.*/, '') + ' and ' + pat.meta.axisLabelH.replace(/ \(.*/, ''),
+    floor: -40,
+    series: [
+      { name: pat.frame === 'omni' || pat.frame === 'omniHalf' ? 'Elevation' : 'E-plane', points: pat.E },
+      { name: pat.frame === 'omni' || pat.frame === 'omniHalf' ? 'Azimuth' : 'H-plane', points: pat.H, color: 'var(--series-2)' },
+    ],
+    note: `0° is the main beam. ${pat.note}`,
+  });
+  lineChart(chartBox(g1), {
+    height: 320, title: 'Pattern cuts in rectangular form',
+    subtitle: 'Easier than a polar plot for reading sidelobe levels and beamwidth',
+    series: [
+      { name: pat.frame.startsWith('omni') ? 'Elevation' : 'E-plane', points: pat.E.map((p) => ({ x: p.deg, y: p.db })) },
+      { name: pat.frame.startsWith('omni') ? 'Azimuth' : 'H-plane', points: pat.H.map((p) => ({ x: p.deg, y: p.db })), color: 'var(--series-2)' },
+    ],
+    xLabel: pat.meta.axisLabelE, yLabel: 'relative level [dB]',
+    xDomain: { min: -180, max: 180 }, yDomain: { min: -40, max: 2 },
+    xFmt: (v) => `${v.toFixed(0)}°`,
+    hlines: [{ y: -3, label: 'half power (−3 dB)', kind: 'good' }],
+    tipFmt: (p) => `${p.y.toFixed(1)} dB`,
+    directLabels: false,
+    note: `Half-power beamwidth ${pat.meta.hpbwE.toFixed(0)}° in the first plane${pat.meta.sllE > -55 ? `, first sidelobe ${pat.meta.sllE.toFixed(1)} dB` : ''}.`,
+  });
+
+  if (c.arch.id === 'phasedArray') {
+    const sc = h('div', { class: 'ctrl-row' }, c1);
+    const w = h('label', { class: 'ctrl' }, sc);
+    h('span', { text: 'Scan angle' }, w);
+    const r = h('input', { type: 'range', min: '-60', max: '60', step: '5', value: String(state.scanDeg ?? 0), style: 'width:200px' }, w);
+    h('span', { class: 'ctrl-unit', text: `${state.scanDeg ?? 0}°` }, w);
+    r.addEventListener('change', () => { state.scanDeg = parseFloat(r.value); state.rerender(); });
+    h('span', { class: 'small muted', text: 'Steer the beam and watch the main lobe move, broaden by 1/cos(θ), and the grating lobe approach.' }, sc);
+  }
+
+  // ---- frequency response ------------------------------------------------
+  const c2 = card(root, 'Behaviour across the band',
+    'Gain and match against frequency for this type at the computed bandwidth. Resonant types roll off with their loaded Q; travelling-wave and aperture types stay flat and fall off only at the band edges.');
+  const g2 = h('div', { class: 'grid2' }, c2);
+  const band = D.spec.bwPct ? [D.spec.f * (1 - D.spec.bwPct / 200), D.spec.f * (1 + D.spec.bwPct / 200)] : null;
+  lineChart(chartBox(g2), {
+    height: 300, title: 'Realized gain',
+    series: [{ name: 'gain', points: resp.map((p) => ({ x: p.f, y: p.gain })) }],
+    xLabel: 'frequency [GHz]', yLabel: 'realized gain [dBi]',
+    xFmt: (v) => (v / 1e9).toFixed(3),
+    hlines: [{ y: D.spec.targetGainDbi, label: `target ${D.spec.targetGainDbi.toFixed(1)} dBi`, kind: 'spec' }],
+    bands: band ? [{ from: band[0], to: band[1], label: 'required band' }] : [],
+    tipFmt: (p) => `${p.y.toFixed(2)} dBi`, directLabels: false,
+  });
+  lineChart(chartBox(g2), {
+    height: 300, title: 'VSWR',
+    series: [{ name: 'VSWR', points: resp.map((p) => ({ x: p.f, y: p.vswr })), color: 'var(--series-2)' }],
+    xLabel: 'frequency [GHz]', yLabel: 'VSWR',
+    xFmt: (v) => (v / 1e9).toFixed(3),
+    yDomain: { min: 1, max: 6 },
+    hlines: [{ y: 2, label: 'VSWR 2:1', kind: 'good' }],
+    bands: band ? [{ from: band[0], to: band[1], label: 'required band' }] : [],
+    tipFmt: (p) => p.y.toFixed(2), directLabels: false,
+    note: 'Modelled from the computed bandwidth, not measured — use it to compare types, then confirm the winner in a full-wave solver.',
+  });
+
+  // ---- profile against the field ----------------------------------------
+  const c3 = card(root, 'How this type scores against the alternatives',
+    'Bar length is this type\'s standing against every other viable candidate for this specification; the number on the bar is the actual value. The dashed mark is the best competing candidate. A short bar is a trade, not a fault — the whole point of the comparison is to see what each type gives up.');
+  const pool = cands.filter((x) => x.verdict !== 'rejected');
+  // Bandwidth and size span two orders of magnitude across the archetype
+  // library, so a linear normalisation lets one outlier (a 160 % Vivaldi, a
+  // 300 mm dish) crush everything else to zero. Those attributes are scored on
+  // a log scale; gain is already logarithmic and cost/complexity are ordinal.
+  const norm = (val, arr, invert = false, log = false) => {
+    const f = log ? (x) => Math.log10(Math.max(x, 1e-3)) : (x) => x;
+    const vals = arr.map(f);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi - lo < 1e-9) return 100;
+    const t = (f(val) - lo) / (hi - lo);
+    return 100 * (invert ? 1 - t : t);
+  };
+  const others = pool.filter((x) => x !== c);
+  const attrs = [
+    { label: 'Gain', get: (x) => x.realizedGainDbi, display: `${c.realizedGainDbi.toFixed(1)} dBi`,
+      note: `target is ${D.spec.targetGainDbi.toFixed(1)} dBi` },
+    { label: 'Bandwidth', get: (x) => x.bwPct, log: true, display: `${c.bwPct.toFixed(1)} %`,
+      note: D.spec.bwPct ? `requirement is ${D.spec.bwPct.toFixed(1)} %, so this ${c.bwPct >= D.spec.bwPct ? 'passes' : 'falls short'}` : 'at VSWR 2:1' },
+    { label: 'Efficiency', get: (x) => x.efficiency, display: `${(c.efficiency * 100).toFixed(0)} %`,
+      note: `${toDB(c.efficiency).toFixed(2)} dB of the accepted power is lost` },
+    { label: 'Compactness', get: (x) => Math.max(x.size.w, x.size.l, x.size.h), invert: true, log: true,
+      display: `${Math.max(c.size.w, c.size.l, c.size.h).toFixed(0)} mm`,
+      note: `largest dimension, ${(Math.max(c.size.w, c.size.l, c.size.h) / 1e3 / D.lambda0).toFixed(2)} λ₀` },
+    { label: 'Low cost', get: (x) => x.arch.cost, invert: true, display: `${c.arch.cost}/5`,
+      note: '1 = etched copper only, 5 = machined or actively beamformed' },
+    { label: 'Simple build', get: (x) => x.arch.complexity, invert: true, display: `${c.arch.complexity}/5`,
+      note: '1 = one etched layer, 5 = multilayer assembly with calibration' },
+  ];
+  hBarChart(chartBox(c3), {
+    items: attrs.map((a) => {
+      const all = pool.map(a.get);
+      const mine = norm(a.get(c), all, a.invert, a.log);
+      const best = others.length ? Math.max(...others.map((x) => norm(a.get(x), all, a.invert, a.log))) : null;
+      return { label: a.label, value: mine, reference: best, note: a.note, display: a.display,
+               color: mine >= 80 ? 'var(--series-3)' : mine >= 45 ? 'var(--series-1)' : 'var(--series-2)' };
+    }),
+    xLabel: `relative standing among the ${pool.length} viable candidates`,
+    max: 100,
+    note: 'Green leads the field, blue is mid-pack, orange trails it. Bandwidth and size are ranked on a log scale so a single wideband or large-aperture outlier does not flatten the rest.',
+  });
+
+  // ---- dimensions and notes ---------------------------------------------
+  const c4 = card(root, 'Synthesised dimensions and build notes');
+  const g4 = h('div', { class: 'grid2' }, c4);
+  const dimRows = Object.entries(c.dims || {}).map(([k, v]) =>
+    [k, typeof v === 'number' ? (Math.abs(v) >= 1000 ? v.toFixed(0) : Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2)) : v]);
+  dimRows.push(['Envelope W × L × H', `${c.size.w.toFixed(1)} × ${c.size.l.toFixed(1)} × ${c.size.h.toFixed(1)} mm`]);
+  dimRows.push(['Largest dimension in λ₀', (Math.max(c.size.w, c.size.l, c.size.h) / 1e3 / D.lambda0).toFixed(3)]);
+  dataTable(h('div', {}, g4), ['Parameter', 'Value'], dimRows);
+
+  const notes = h('div', {}, g4);
+  const ul = h('ul', { class: 'ref-list' }, notes);
+  [...(c.notes || []), ...(c.reasons || [])].slice(0, 6).forEach((n) => h('li', { text: n }, ul));
+  if (c.blockers && c.blockers.length) {
+    const w2 = h('div', { style: 'margin-top:10px' }, notes);
+    callout(w2, 'bad', 'Why this type was rejected', c.blockers.join(' '));
+  }
+  h('p', { class: 'chart-note', text: `Pattern model: ${pat.note}` }, notes);
+
+  if (c.count && c.count > 1 && c.patch) {
+    const c5 = card(root, 'Element layout');
+    arrayLayout(chartBox(c5), c.count, (c.dims.Spacing ?? c.dims.Pitch ?? 0.7 * D.lambda0 * 1e3),
+      c.patch.W * 1e3, c.patch.L * 1e3);
   }
 }
 

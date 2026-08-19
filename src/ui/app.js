@@ -3,7 +3,7 @@
  */
 import { h, engFreq } from './charts.js';
 import {
-  renderOverview, renderPatch, renderSubstrate, renderGround,
+  renderOverview, renderSelected, renderPatch, renderSubstrate, renderGround,
   renderThermal, renderTolerance, renderLink, renderDrawings, renderReport,
 } from './panels.js';
 import { runDesign, MATERIALS, MATERIAL_BY_ID, CONDUCTORS } from '../core/design.js';
@@ -48,6 +48,7 @@ const DEFAULT_SPEC = {
 
 const TABS = [
   { id: 'overview', label: 'Recommendations', render: renderOverview },
+  { id: 'selected', label: 'Antenna detail', render: renderSelected },
   { id: 'patch', label: 'Patch design', render: renderPatch },
   { id: 'substrate', label: 'Substrate trade', render: renderSubstrate },
   { id: 'ground', label: 'Ground plane', render: renderGround },
@@ -61,6 +62,8 @@ const TABS = [
 const state = {
   ...structuredClone(DEFAULT_SPEC),
   tab: 'overview',
+  selected: null,
+  scanDeg: 0,
   showAll: false,
   includeSurfaceWave: true,
   process: 'standard',

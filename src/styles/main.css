@@ -276,6 +276,15 @@ table.data tbody tr:hover { background: var(--surface-2); }
 /* ------------------------------------------------------------- candidates */
 .cand { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; background: var(--surface-1); margin-bottom: 10px; }
 .cand.top { border-color: var(--series-1); box-shadow: inset 3px 0 0 var(--series-1); }
+.cand[role="button"] { cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.cand[role="button"]:hover { border-color: var(--series-1); background: var(--surface-2); }
+.cand[role="button"]:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.cand-open {
+  margin-top: 8px; font-size: 12px; padding: 4px 10px;
+  background: transparent; border-color: var(--border);
+  color: var(--series-1); font-weight: 550;
+}
+.cand-open:hover { background: var(--surface-2); }
 .cand.rejected { opacity: 0.72; }
 .cand-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .cand-head .rank { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
@@ -340,6 +349,9 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .chart-svg .leader { stroke: var(--axis); stroke-width: 0.8; }
 .chart-svg .diagram-label { fill: var(--text-secondary); font-size: 10.5px; }
 .chart-svg .diagram-dim { fill: var(--text-primary); font-size: 10.5px; font-family: var(--mono); }
+/* Scale drawings are capped so their annotation text stays at a readable size
+   instead of being blown up with the container. */
+.chart-svg.antenna-art { max-width: 760px; margin: 0 auto; }
 .bar-g:hover rect, .chart-svg g:hover > circle { filter: brightness(1.12); }
 
 .chart-tip {

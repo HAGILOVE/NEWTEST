@@ -10,7 +10,7 @@ Everything is computed from published models. There is no lookup table of
 "typical" numbers anywhere in the engine.
 
 ```
-npm test          # 28 physics regression tests
+npm test          # 32 physics regression tests
 npm run dev       # serve at http://localhost:8777
 npm run build     # -> dist/rf-antenna-studio.html  (one file, works offline)
 ```
@@ -21,6 +21,14 @@ modules directly. The build script only exists to produce a single portable file
 ---
 
 ## What it does
+
+**Shows you each antenna, not just its numbers.** Click any candidate and the
+Antenna detail tab opens a full picture of that type: a scale drawing generated
+from its own synthesised dimensions, its radiation pattern in polar and
+rectangular form with measured beamwidth, sidelobe level and front-to-back,
+gain and VSWR across the band, and where it stands against every other viable
+candidate. Rejected types can be inspected too — the drawing and pattern are
+often the fastest way to see *why* a type does not suit the job.
 
 **Recommends antenna types.** 29 archetypes — patch, stacked patch, air-gap
 patch, aperture-coupled patch, patch array, series-fed column, SIW slot array,
@@ -66,7 +74,10 @@ capacity, maximum range, Fresnel clearance, radio horizon and MPE distance —
 with the regulatory EIRP limit for the band checked automatically.
 
 **Draws it.** Stack-up cross-section and etch plan view generated from the
-solved dimensions, so the drawing cannot drift out of step with the numbers.
+solved dimensions, so the drawing cannot drift out of step with the numbers,
+plus a scale drawing for each of the 29 archetypes — patch stacks, array grids
+with their feed trees, Yagi booms, horn flares, dish optics, helix windings,
+via fences, lens ray paths.
 
 **Exports.** Printable report, JSON payload and CSV summary.
 
@@ -89,6 +100,12 @@ The patch engine was checked against published data before any UI was written.
 | Realized gain on 70×70 mm ground | −0.6 / 1.6 / 3.2 / 5.1 / 7.7 dBi | −0.4 / 1.6 / 2.8 / 4.7 / 7.3 dBi |
 | ITU-R P.676 at 10 / 22 / 60 / 94 / 183 GHz | 0.011 / 0.20 / 15.1 / 0.45 / 29 dB/km | within ±30 % in the windows, exact at the resonances |
 | Paschen breakdown, 1.6 mm air at sea level | 5–8 kV | 7.4 kV |
+| Half-wave dipole beamwidth | 78° | 78° |
+| Small loop beamwidth | 90° | 90° |
+| 6-element uniform array, sidelobe | −13.2 dB | −13.9 dB |
+| Pyramidal horn, 100 × 66 mm at 30 mm | E 23° / H 21° | E 24° / H 22° |
+| 300 mm dish at 30 mm | 7°, sidelobe −24 dB | 8°, −24 dB |
+| 4 × 4 array, 0.7 λ, cosine taper | ~22°, −20 dB | 22°, −21 dB |
 
 `npm test` locks all of these in. If a model change moves any of them, the test
 fails and the change has to be argued for rather than slipping through.
@@ -109,6 +126,7 @@ fails and the change has to be argued for rather than slipping through.
 | Surface wave | Jackson & Alexopoulos thin-substrate asymptotics, coefficient calibrated to published full-wave data | k₀h ≲ 0.3 |
 | Finite ground plane | GTD/UTD edge diffraction reduced to closed form, calibrated to Huang 1983 and Kishk & Shafai 1986 | engineering estimate, ±0.5 dB |
 | Fundamental limits | Chu 1948, McLean 1996, Harrington 1960, Bode–Fano | exact |
+| Radiation patterns | per family: cavity model (patch), ordinary end-fire array factor (Yagi), uniform/cosine rectangular aperture (horn), Airy and parabolic-taper circular aperture (dish, lens), element × array factor with real spacing and taper (arrays), thin-dipole and small-loop closed forms | beamwidth and sidelobe level measured off the computed cut |
 | Atmosphere | Line-shape model calibrated to the ITU-R P.676 sea-level curve | ±30 % in the windows, 1–300 GHz |
 | Rain | ITU-R P.838-3 k/α coefficients | 1–100 GHz |
 | Thermal | Churchill–Chu and McAdams convection, grey-body radiation, lumped conduction | steady state and single-pole transient |
@@ -150,6 +168,7 @@ src/core/
   ground.js                finite ground plane
   limits.js                Chu, Harrington, Bode-Fano, field regions
   library.js               29 antenna archetypes with quantitative models
+  patterns.js              per-family far-field models and frequency response
   recommend.js             candidate scoring and rejection reasons
   propagation.js           path loss, atmosphere, rain, link budget
   thermal.js               heat transfer, breakdown, drift
@@ -159,7 +178,8 @@ src/core/
 src/ui/
   charts.js                dependency-free SVG chart library
   diagrams.js              stack-up, plan view, array layout
-  panels.js                the nine analysis panels
+  antennaArt.js            scale drawing for each of the 29 archetypes
+  panels.js                the ten analysis panels
   app.js                   shell, specification form, routing
 src/styles/main.css        design tokens, light and dark
 tools/build.mjs            single-file bundler

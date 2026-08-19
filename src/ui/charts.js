@@ -417,6 +417,68 @@ export function barChart(host, opts) {
   return c;
 }
 
+/* --------------------------------------------------------- horizontal bars */
+
+/**
+ * Horizontal bar chart - the right form for a profile of named 0..100 scores,
+ * where the labels are words and the comparison is between rows.
+ * @param items [{ label, value, note?, color?, reference? }]
+ */
+export function hBarChart(host, opts) {
+  const items = opts.items;
+  const rowH = opts.rowH || 30;
+  const height = items.length * rowH + 46;
+  const c = new Chart(host, Object.assign({}, opts, {
+    height, margin: { t: 18, r: 66, b: 46, l: opts.labelWidth || 150 },
+  }));
+  const max = opts.max ?? Math.max(100, ...items.map((d) => d.value));
+  c.axes({
+    x: { min: 0, max }, y: { min: 0, max: items.length },
+    xLabel: opts.xLabel, xFmt: opts.xFmt, yTickCount: 0,
+  });
+  // the y axis here is categorical, so drop the numeric ticks the scaffold drew
+  c.g.querySelectorAll('.tick-y').forEach((n) => n.remove());
+
+  items.forEach((d, i) => {
+    const y = c.m.t + i * rowH + 5;
+    const bh = rowH - 12;
+    const w = Math.max((clampNum(d.value, 0, max) / max) * c.iw, 2);
+    const g = el('g', {}, c.g);
+    el('rect', { x: c.m.l, y, width: c.iw, height: bh, fill: 'var(--surface-2)', rx: 4 }, g);
+    el('rect', { x: c.m.l, y, width: w, height: bh, fill: d.color || 'var(--series-1)', rx: 4 }, g);
+    if (w > 8) el('rect', { x: c.m.l, y, width: 4, height: bh, fill: d.color || 'var(--series-1)' }, g);
+    el('text', { x: c.m.l - 10, y: y + bh / 2 + 4, class: 'tick', 'text-anchor': 'end' }, g).textContent = d.label;
+    // The bar length carries the relative standing; the printed label carries
+    // the real quantity, because "5.5 %" is what the engineer needs to read,
+    // not "ranked lowest of seven".
+    const text = d.display ?? (opts.valueFmt ? opts.valueFmt(d.value) : d.value.toFixed(0));
+    const inside = w > c.iw * 0.55;
+    el('text', {
+      x: inside ? c.m.l + w - 8 : c.m.l + w + 11, y: y + bh / 2 + 4,
+      class: 'bar-value', 'text-anchor': inside ? 'end' : 'start',
+      fill: inside ? 'var(--surface-1)' : 'var(--text-primary)',
+    }, g).textContent = text;
+    if (Number.isFinite(d.reference)) {
+      const rx = c.m.l + (clampNum(d.reference, 0, max) / max) * c.iw;
+      el('line', { x1: rx, x2: rx, y1: y - 2, y2: y + bh + 2, class: 'ref-line spec' }, g);
+    }
+    if (d.note) {
+      g.addEventListener('pointerenter', () => c.showTip(
+        `<div class="tip-head">${d.label}</div>${d.display ? `<div class="tip-row">value<b>${d.display}</b></div>` : ''}<div class="tip-row">rank score<b>${d.value.toFixed(0)}/100</b></div><div class="tip-sub">${d.note}</div>`,
+        c.m.l + w / 2, y));
+      g.addEventListener('pointerleave', () => c.hideTip());
+    }
+  });
+  if (opts.table !== false) {
+    c.table([opts.labelHeader || 'Attribute', 'Value', 'Relative score'],
+      items.map((d) => [d.label, d.display ?? '-', d.value.toFixed(0)]));
+  }
+  c.note(opts.note);
+  return c;
+}
+
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
+
 /* ------------------------------------------------------------ stacked bars */
 
 export function stackedBar(host, opts) {
