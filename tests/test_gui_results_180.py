@@ -176,25 +176,82 @@ def test_port_properties_offer_reverse_and_edit_polarity(dipole_tab):
     pg.get_by_text("⇄ Reverse polarity").click()
     pg.wait_for_function("()=>STATE.design.ports[0].direction[2]<0", timeout=10000)
     pg.evaluate("()=>dlgPolarity('P1')")
-    pg.wait_for_selector("#pgz", timeout=10000)
+    pg.wait_for_selector("#pg-sz", timeout=10000)
     num = lambda sel: float(pg.input_value(sel).rstrip("mu"))        # "1mm" -> 1.0
-    assert num("#pgz") > 0 > num("#psz")              # reversed: ground is high
-    pg.get_by_text("⇄ Swap ground / signal").click()
-    assert num("#pgz") < 0 < num("#psz")
+    assert num("#pg-sz") > 0 > num("#pg-gz")          # reversed: signal high, ground low
+    pg.get_by_text("⇄ Swap").click()
+    assert num("#pg-sz") < 0 < num("#pg-gz")
     pg.locator(".dialog .foot .pri").click()
     pg.wait_for_function("()=>STATE.design.ports[0].direction[2]>0", timeout=10000)
     assert not pg.errs
 
 
-def test_assign_lumped_port_dialog_has_ground_signal_fields(dipole_tab):
+def test_assign_lumped_port_dialog_has_signal_ground_fields(dipole_tab):
     pg = dipole_tab
     pg.evaluate("()=>dlgExcitation('lumped')")
     pg.wait_for_selector("#pl-axis", timeout=10000)
     assert pg.locator("#plgz").count() == 1 and pg.locator("#plsz").count() == 1
+    assert pg.get_by_text("New Line…").count() >= 1
     pg.select_option("#pl-axis", "custom")
-    pg.fill("#plgz", "1mm")
-    pg.fill("#plsz", "-1mm")
-    pg.get_by_text("⇄ Swap ground / signal").click()
-    assert pg.input_value("#plgz") == "-1mm" and pg.input_value("#plsz") == "1mm"
+    pg.fill("#plsz", "1mm")
+    pg.fill("#plgz", "-1mm")
+    pg.get_by_text("⇄ Swap").click()
+    assert pg.input_value("#plsz") == "-1mm" and pg.input_value("#plgz") == "1mm"
+    pg.keyboard.press("Escape")
+    assert not pg.errs
+
+
+def test_new_line_picks_signal_then_ground_with_the_mouse(dipole_tab):
+    pg = dipole_tab
+    pg.evaluate("()=>dlgExcitation('lumped')")
+    pg.wait_for_selector("#pl-axis", timeout=10000)
+    pg.evaluate("""()=>{
+      window.__pts=[[0,0,-0.002],[0,0,0.003]]; window.__i=0;
+      VP.pickFeature=()=>({name:'t',point:window.__pts[Math.min(window.__i,1)],snapKind:'vertex'});}""")
+    pg.get_by_text("New Line…").first.click()
+    pg.wait_for_selector("#vp-pline", timeout=10000)
+    assert pg.evaluate("()=>!document.querySelector('#modal-back').classList.contains('on')")
+    box = pg.locator("#gl").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    pg.mouse.move(cx, cy)
+    pg.wait_for_timeout(150)
+    assert "-2" in pg.input_value("#plp-sz")             # live coordinates under the cursor
+    pg.mouse.click(cx, cy)                               # first click: signal end
+    pg.evaluate("()=>{window.__i=1}")
+    pg.mouse.move(cx + 40, cy - 40)
+    pg.wait_for_timeout(150)
+    assert pg.evaluate("()=>!!VP.draftBuf")              # arrow preview while moving
+    pg.mouse.click(cx + 40, cy - 40)                     # second click: ground end
+    pg.wait_for_function("()=>document.querySelector('#modal-back').classList.contains('on')", timeout=10000)
+    assert pg.locator("#vp-pline").count() == 0
+    num = lambda sel: float(pg.input_value(sel).rstrip("mu"))
+    assert num("#plsz") == pytest.approx(-2.0) and num("#plgz") == pytest.approx(3.0)   # mm
+    assert pg.input_value("#pl-axis") == "custom"
+    pg.keyboard.press("Escape")
+    assert not pg.errs
+
+
+def test_new_line_accepts_typed_coordinates_and_esc_cancels(dipole_tab):
+    pg = dipole_tab
+    pg.evaluate("()=>dlgExcitation('wave')")
+    pg.wait_for_selector("#ex-useline", timeout=10000)
+    pg.check("#ex-useline")
+    pg.wait_for_selector("#pl-axis", timeout=10000)
+    pg.get_by_text("New Line…").first.click()
+    pg.wait_for_selector("#vp-pline", timeout=10000)
+    pg.keyboard.press("Tab")                              # Tab = type the coordinates
+    assert pg.evaluate("()=>document.activeElement.id") == "plp-sx"
+    for sel, v in (("#plp-sx", "1mm"), ("#plp-sy", "0mm"), ("#plp-sz", "0mm"),
+                   ("#plp-gx", "5mm"), ("#plp-gy", "0mm"), ("#plp-gz", "0mm")):
+        pg.fill(sel, v)
+    pg.press("#plp-gz", "Enter")
+    pg.wait_for_function("()=>document.querySelector('#modal-back').classList.contains('on')", timeout=10000)
+    assert pg.input_value("#plsx") == "1mm" and pg.input_value("#plgx") == "5mm"
+    # Esc leaves the picking mode and brings the dialog back untouched
+    pg.get_by_text("New Line…").first.click()
+    pg.wait_for_selector("#vp-pline", timeout=10000)
+    pg.keyboard.press("Escape")
+    pg.wait_for_function("()=>document.querySelector('#modal-back').classList.contains('on')", timeout=10000)
+    assert pg.locator("#vp-pline").count() == 0 and pg.input_value("#plsx") == "1mm"
     pg.keyboard.press("Escape")
     assert not pg.errs

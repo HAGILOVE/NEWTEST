@@ -87,7 +87,17 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 - 필드 패널의 `Plot opacity`, `Model opacity`로 방사 패턴 안쪽의 안테나가 보이도록 투명도를 조절.
 - **결과 저장**: 해석을 마친 프로젝트를 저장하면 `프로젝트.aedt.aeres`가 함께 저장되고, 다시 열면 재해석 없이 결과가 복원됨. `.aedt`를 수정했다면(다른 파일로 바뀐 것이므로) 결과는 불러오지 않음. 두 파일을 함께 옮겨야 함.
 
-**Lumped 포트의 Ground / Signal 방향** — 포트 필드는 **Ground 끝에서 Signal 끝 방향**임(HFSS의 적분선). `Assign Lumped Port…`에서 방향 축(±X/±Y/±Z)을 고르고 `Detect from selection`을 누르면 선택한 면의 크기로 두 끝점이 채워지며(직접 수정 가능, `⇄ Swap`), 3D 뷰에 ground→signal 화살표가 그려짐. 이미 만든 포트는 속성창 또는 우클릭의 `Reverse Polarity` / `Edit Polarity…`로 바꿈(Undo 한 번으로 복구, `.aedt`에 저장됨). 두 포트의 극성이 서로 반대면 S21 위상이 180° 틀어지므로 확인해야 함.
+**포트 방향 — New Line (HFSS 방식)** — Lumped/Wave 포트 모두 같은 방법임: 포트 면을 선택하고 `Assign Lumped Port…`(또는 Wave)에서 `🖱 New Line…`을 누르면 대화상자가 잠시 사라지고, 3D 뷰에서 **signal 쪽 점 → ground 쪽 점** 순서로 클릭함.
+
+- 점은 꼭짓점/모서리 중점에 달라붙고(12 px 이내), 두 번째 점을 정하는 동안 **signal → ground 화살표가 미리 보임**. 좌표는 패널에 실시간으로 표시됨.
+- **Tab**을 누르면 좌표 입력 칸으로 이동해 직접 입력할 수 있고 `Enter`로 확정, `Esc`로 취소. `⇄ Swap`으로 방향을 뒤집음.
+- 선은 signal에서 ground로 향하며 **포트의 전계(E)가 그 방향**임(전계는 + 에서 − 로). Wave 포트의 모드 극성 규칙(∫e·l̂ > 0, HFSS 규약)과 같은 방향임. 대화상자의 `Detect from selection`은 선택한 면의 크기로 축 방향 끝점을 채움.
+- 이미 만든 포트는 속성창 또는 우클릭의 `Reverse Polarity` / `Edit Polarity…`(여기에서도 New Line 사용). Undo 한 번으로 복구되고 `.aedt`에 저장됨. 3D 뷰에는 모든 Lumped 포트의 화살표가 그려짐.
+- **주의(동작 변경):** 두 면을 클릭하는 `Lumped / Wave Port (pick)` 도구로 만든 포트는 이제 signal → ground 방향임(이전 ground → signal). 두 포트를 가진 구조에서 S21의 부호(위상 180°)가 1.7.x와 달라질 수 있음. 방향을 직접 지정한 기존 프로젝트의 계산값은 그대로이고 대화상자의 끝점 이름만 새 규약을 따름. 두 포트의 방향이 서로 반대이면 S21 위상이 180° 틀어지므로 확인해야 함.
+
+**안테나 성능 vs 주파수** — `Results ▸ Antenna Parameters vs Frequency…`: Directivity, Gain(Total), **Realized gain**(= Gain × (1−|S11|²)), Radiation/Total efficiency, |S11|을 주파수에 대해 플롯함. 각 주파수의 최댓값 방향 또는 고정 (θ, φ), 전체/θ/φ 편파를 고를 수 있고 마커와 표가 있음. 주파수마다 저장된 필드가 필요하므로 이산(Discrete) 스윕에서 *Save fields*를 켜야 함.
+
+**기타 사용성** — 프로젝트를 닫거나 새로 만들면 이전 해석의 결과 탭·필드 표시·범례·Results 목록이 모두 사라짐. 파일 열기/저장 창은 이름·최신순·크기·종류로 정렬(드롭다운 또는 열 머리 클릭, 선택 기억). 대화상자와 필드/그리기/New Line 패널은 제목줄을 끌어 이동(더블클릭으로 원위치, 위치 기억), 대화상자는 크기 조절도 됨. 필드 패널의 `Show plane`(컷 플레인 표시/숨김)과 뷰포트의 `Grid plane` 버튼으로 평면을 켜고 끔.
 
 **시간 애니메이션** — 필드 패널(`Results ▸ E Field` 등)에서 주파수를 고르고 `▶ Animate`.
 

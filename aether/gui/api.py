@@ -1719,15 +1719,15 @@ def _assign_port(s: Session, kind: str = "wave", name: str = "",
         line = (tuple(to_si(x) for x in a), tuple(to_si(x) for x in b))
     direction = p.get("direction", (0, 0, 1))
     if kind == "lumped" and p.get("ground") and p.get("signal"):
-        # polarity as HFSS states it: an integration line from the ground
-        # (reference) end to the signal end; the port field points along it
+        # polarity as HFSS states it: an integration line from the signal
+        # conductor to the ground; the port field points along it
         g = np.array([to_si(x) for x in p["ground"]], float)
         sg = np.array([to_si(x) for x in p["signal"]], float)
-        v = sg - g
+        v = g - sg
         if float(np.linalg.norm(v)) <= 1e-12:
-            raise ValueError("the ground and signal points are the same")
+            raise ValueError("the signal and ground points are the same")
         direction = [float(x) for x in v / np.linalg.norm(v)]
-        line = (tuple(float(x) for x in g), tuple(float(x) for x in sg))
+        line = (tuple(float(x) for x in sg), tuple(float(x) for x in g))
     if kind == "wave":
         d.add_wave_port(nm, selector=sel, num_modes=int(p.get("modes", 1)),
                         deembed=p.get("deembed", 0.0),
@@ -1774,7 +1774,7 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
     ground" -- and it is what HFSS's pick-two-objects flow means. A lumped
     port needs a sheet bridging the gap, so one is built: a rectangle
     spanning from the signal face to the ground face, no wider than the
-    narrower of the two, with the integration line running ground -> signal
+    narrower of the two, with the integration line running signal -> ground
     so the sign of V (and therefore of the port impedance) is the one the
     engineer intended. A wave port is assigned to the picked signal face
     itself, and the ground pick only orients its integration line.
@@ -1794,7 +1794,7 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
         line = None
         if gnd:
             gc = _pick_geometry(gnd)[0]
-            line = (tuple(gc), tuple(sc))
+            line = (tuple(sc), tuple(gc))         # signal -> ground
         d.add_wave_port(nm, selector=sel, num_modes=int(p.get("modes", 1)),
                         deembed=p.get("deembed", 0.0),
                         renormalize_z=p.get("renorm"), integration_line=line)
@@ -1802,7 +1802,7 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
         n = _warn_if_empty(s, d, sel, nm, "Port")
         s.messages.add(
             f"Wave port {nm!r} on {len(sig)} picked face(s)"
-            + (" with an integration line from the ground pick." if line
+            + (" with an integration line from the signal to the ground pick." if line
                else " — pick a ground face too if this is a TEM line."),
             "info", "excitation")
         return {"ok": True, "name": nm, "faces": n}
@@ -1815,7 +1815,7 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
     length = float(np.linalg.norm(gap))
     if length <= 1e-12:
         raise ValueError("the signal and ground picks are at the same point")
-    u = gap / length                      # ground <- signal direction
+    u = gap / length                      # signal -> ground direction
 
     # The sheet spans the gap along u and the narrower face's width across it.
     # "Across" is whichever axis of the two faces is most perpendicular to u.
@@ -1845,25 +1845,27 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
     sel = ShapeSelector(sheet, tol=1e-7)
     d.add_lumped_port(nm, selector=sel,
                       impedance=complex(p.get("impedance", 50.0)),
-                      direction=[float(v) for v in -u],
-                      integration_line=(tuple(gc), tuple(sc)))
+                      direction=[float(v) for v in u],      # signal -> ground
+                      integration_line=(tuple(sc), tuple(gc)))
     d.mesh = None
     s.dirty = True
     n = _warn_if_empty(s, d, sel, nm, "Port")
     s.messages.add(
         f"Lumped port {nm!r}: {p.get('impedance', 50.0)} Ω across a "
         f"{wide * 1e3:.3f} x {length * 1e3:.3f} mm sheet {sheet_name!r}, "
-        "integration line from ground to signal.", "info", "excitation")
+        "integration line from signal to ground.", "info", "excitation")
     return {"ok": True, "name": nm, "sheet": sheet_name, "faces": n,
             "gap": length, "width": wide}
 
 
 def _lumped_ends(d, port):
-    """``(ground, signal)`` points of a lumped port, in metres.
+    """``(signal, ground)`` points of a lumped port, in metres.
 
-    A port with an integration line has them explicitly. One defined only by
-    a field direction has them implied: the port face's extent along that
-    direction, ground at the low end, signal at the high end."""
+    The integration line runs from the signal conductor to the ground, and the
+    port's electric field points along it (field from + to -, as in HFSS). A
+    port with an explicit line has both ends; one defined only by a field
+    direction has them implied: the port face's extent along that direction,
+    signal at the low end, ground at the high end."""
     if getattr(port, "integration_line", None):
         a, b = port.integration_line
         return np.asarray(a, float), np.asarray(b, float)
@@ -1912,8 +1914,8 @@ def _port_geometry(s: Session, selector: Optional[dict] = None, name: str = "",
     if port is not None and port.kind == "lumped":
         ends = _lumped_ends(d, port)
         if ends is not None:
-            out["ground"] = [float(x) for x in ends[0]]
-            out["signal"] = [float(x) for x in ends[1]]
+            out["signal"] = [float(x) for x in ends[0]]
+            out["ground"] = [float(x) for x in ends[1]]
             out["derived"] = getattr(port, "integration_line", None) is None
     return out
 
@@ -1921,11 +1923,12 @@ def _port_geometry(s: Session, selector: Optional[dict] = None, name: str = "",
 @command("excitation.setPolarity")
 def _set_polarity(s: Session, name: str = "", ground: Optional[list] = None,
                   signal: Optional[list] = None, flip: bool = False, **_):
-    """Set which end of a lumped port is ground and which is signal.
+    """Set which end of a lumped port is signal and which is ground.
 
-    ``flip`` swaps the present ends (reverses the sign of the port voltage, so
-    S21 between two such ports changes by 180 degrees); otherwise give both
-    points."""
+    The integration line runs signal -> ground and the port field points along
+    it. ``flip`` swaps the present ends (reverses the sign of the port
+    voltage, so S21 between two such ports changes by 180 degrees); otherwise
+    give both points."""
     d = s.require_design()
     port = d.get_port(name)
     if port.kind != "lumped":
@@ -1936,22 +1939,22 @@ def _set_polarity(s: Session, name: str = "", ground: Optional[list] = None,
         if ends is None:
             raise ValueError("the port does not touch the model, so its ends "
                              "cannot be found")
-        g, sg = ends[1], ends[0]
+        sg, g = ends[1], ends[0]                 # swap: old ground is the signal
     else:
         if not ground or not signal:
-            raise ValueError("give the ground and the signal point")
+            raise ValueError("give the signal and the ground point")
         g = np.array([to_si(x) for x in ground], float)
         sg = np.array([to_si(x) for x in signal], float)
-    v = sg - g
+    v = g - sg
     L = float(np.linalg.norm(v))
     if L <= 1e-12:
-        raise ValueError("the ground and signal points are the same")
-    port.integration_line = (tuple(float(x) for x in g),
-                             tuple(float(x) for x in sg))
+        raise ValueError("the signal and ground points are the same")
+    port.integration_line = (tuple(float(x) for x in sg),
+                             tuple(float(x) for x in g))
     port.direction = tuple(float(x) for x in v / L)
     d.mesh = None
     s.dirty = True
-    s.messages.add(f"Port {name!r}: field from ground to signal along "
+    s.messages.add(f"Port {name!r}: field from signal to ground along "
                    f"({port.direction[0]:+.2f}, {port.direction[1]:+.2f}, "
                    f"{port.direction[2]:+.2f}).", "info", "excitation")
     return {"ok": True, "direction": list(port.direction)}
@@ -2923,6 +2926,88 @@ def _far_field(s: Session, freq: Optional[float] = None, excitation: int = 0,
             "freqs": [float(f) for f in sorted({k[0] for k in sol.fields})],
             "excitations": sol.design.excitation_names(),
             "excitation": int(excitation), "warnings": warns}
+
+
+@command("results.antennaSweep")
+def _antenna_sweep(s: Session, excitation: int = 0, theta: Any = None,
+                   phi: Any = None, component: str = "total",
+                   thetaStep: float = 3.0, phiStep: float = 6.0, **_):
+    """
+    Antenna figures of merit against frequency, one point per saved field.
+
+    ``theta`` / ``phi`` (degrees) pick a fixed direction; without them each
+    frequency is evaluated at its own peak. Returned per frequency:
+
+    * ``directivity``   D, dBi (from the pattern alone)
+    * ``gain``          total gain, dBi: radiated power over **accepted**
+                        power, so it includes ohmic and dielectric loss
+    * ``realized``      realized gain, dBi: gain x (1 - |S11|^2), i.e. over
+                        the power **available** from the source
+    * ``efficiency``    radiation efficiency, %; ``totalEfficiency`` includes
+                        the mismatch
+    """
+    from ..post.farfield import antenna_parameters
+    sol = s.solution
+    if sol is None:
+        raise RuntimeError("no solution yet")
+    if sol.modes:
+        raise RuntimeError("antenna parameters belong to driven solutions")
+    if not sol.fields:
+        raise RuntimeError("no field data — analyse with 'save fields' enabled")
+    if component not in ("total", "theta", "phi"):
+        raise ValueError("component must be total, theta or phi")
+    j = int(excitation)
+    freqs = sorted({k[0] for k in sol.fields if k[1] == j})
+    if not freqs:
+        raise ValueError("no saved fields for that excitation")
+    nt = max(int(round(180.0 / max(float(thetaStep), 0.5))) + 1, 19)
+    npp = max(int(round(360.0 / max(float(phiStep), 1.0))), 12)
+    fixed = theta not in (None, "") and phi not in (None, "")
+    out = {k: [] for k in ("directivity", "gain", "realized", "efficiency",
+                           "totalEfficiency", "mismatch", "s11", "theta", "phi")}
+
+    def db(v):
+        return float(10 * math.log10(max(float(v), 1e-30)))
+
+    for f in freqs:
+        ff = antenna_parameters(sol, f, j, nt, npp)
+        mism = None
+        if sol.sparams is not None:
+            try:
+                smat = sol.sparams.at(float(ff.freq))
+                mism = float(1.0 - abs(smat[j, j]) ** 2)
+                out["s11"].append(float(20 * math.log10(max(abs(smat[j, j]), 1e-12))))
+            except Exception:                                   # noqa: BLE001
+                mism = None
+        if mism is None:
+            out["s11"].append(None)
+        D = ff.directivity()
+        G = ff.gain() if component == "total" else ff.component_gain(component)
+        if fixed:
+            it = int(np.argmin(np.abs(ff.theta - math.radians(float(theta)))))
+            ip = int(np.argmin(np.abs((ff.phi - math.radians(float(phi)) + math.pi)
+                                      % (2 * math.pi) - math.pi)))
+            d, g = D[it, ip], G[it, ip]
+            th, ph = float(np.degrees(ff.theta[it])), float(np.degrees(ff.phi[ip]))
+        else:
+            d = D.max()
+            k = np.unravel_index(int(np.argmax(G)), G.shape)
+            g = G[k]
+            th, ph = float(np.degrees(ff.theta[k[0]])), float(np.degrees(ff.phi[k[1]]))
+        out["directivity"].append(db(d))
+        out["gain"].append(db(g))
+        out["realized"].append(db(g * mism) if mism is not None else None)
+        out["efficiency"].append(float(100.0 * ff.efficiency))
+        out["totalEfficiency"].append(
+            float(100.0 * ff.efficiency * mism) if mism is not None else None)
+        out["mismatch"].append(None if mism is None else mism)
+        out["theta"].append(th)
+        out["phi"].append(ph)
+    return {"freq": [float(f) for f in freqs], "series": out,
+            "excitation": j, "excitations": sol.design.excitation_names(),
+            "fixed": bool(fixed), "component": component,
+            "theta": None if not fixed else float(theta),
+            "phi": None if not fixed else float(phi)}
 
 
 @command("view.pattern")

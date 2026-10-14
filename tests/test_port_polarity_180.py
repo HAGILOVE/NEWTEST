@@ -27,16 +27,16 @@ def call(s, method, **params):
 def test_every_lumped_port_shows_its_ground_to_signal_arrow(session):
     items = call(session, "view.assignments")["items"]
     port = next(i for i in items if i["name"] == "P1")
-    (g, sg), derived = port["line"], port.get("derived")
+    (sg, g), derived = port["line"], port.get("derived")
     assert derived                                       # implied by direction
-    assert g[2] < 0 < sg[2]                              # ground low, signal high
+    assert sg[2] < 0 < g[2]               # arrow: signal (low) -> ground (high)
     assert g[0] == pytest.approx(sg[0], abs=1e-9)
 
 
 def test_geometry_command_reports_ends_and_extent(session):
     geo = call(session, "excitation.portGeometry", name="P1")
-    assert geo["ground"][2] == pytest.approx(-1e-3, abs=1e-9)
-    assert geo["signal"][2] == pytest.approx(1e-3, abs=1e-9)
+    assert geo["signal"][2] == pytest.approx(-1e-3, abs=1e-9)
+    assert geo["ground"][2] == pytest.approx(1e-3, abs=1e-9)
     assert geo["derived"] is True
 
 
@@ -44,7 +44,7 @@ def test_reverse_swaps_the_ends_and_flips_the_field_direction(session):
     r = call(session, "excitation.setPolarity", name="P1", flip=True)
     assert r["direction"][2] == pytest.approx(-1.0)
     geo = call(session, "excitation.portGeometry", name="P1")
-    assert geo["ground"][2] > geo["signal"][2] and geo["derived"] is False
+    assert geo["signal"][2] > geo["ground"][2] and geo["derived"] is False
     call(session, "excitation.setPolarity", name="P1", flip=True)    # and back
     assert session.design.get_port("P1").direction[2] == pytest.approx(1.0)
 
@@ -62,11 +62,11 @@ def test_assign_with_ground_and_signal_points(session):
     call(session, "excitation.assign", kind="lumped", name="Q",
          selector={"kind": "box", "lo": ["-1.1mm", "-1e-3mm", "-1.1mm"],
                    "hi": ["1.1mm", "1e-3mm", "1.1mm"]},
-         params={"impedance": 50, "ground": ["0mm", "0mm", "1mm"],
-                 "signal": ["0mm", "0mm", "-1mm"]})
+         params={"impedance": 50, "signal": ["0mm", "0mm", "1mm"],
+                 "ground": ["0mm", "0mm", "-1mm"]})
     p = d.get_port("Q")
-    np.testing.assert_allclose(p.direction, [0, 0, -1], atol=1e-12)
-    np.testing.assert_allclose(p.integration_line[0], [0, 0, 1e-3], atol=1e-12)
+    np.testing.assert_allclose(p.direction, [0, 0, -1], atol=1e-12)     # signal -> ground
+    np.testing.assert_allclose(p.integration_line[0], [0, 0, 1e-3], atol=1e-12)   # start = signal
     with pytest.raises(ValueError, match="same"):
         call(session, "excitation.assign", kind="lumped", name="R",
              selector={"kind": "plane"},
@@ -82,7 +82,7 @@ def test_a_reversed_port_is_saved_and_reloaded(session, tmp_path):
     call(s2, "project.open", path=path)
     p = s2.design.get_port("P1")
     assert p.direction[2] == pytest.approx(-1.0)
-    assert p.integration_line[0][2] > p.integration_line[1][2]
+    assert p.integration_line[0][2] > p.integration_line[1][2]      # signal above ground
 
 
 def test_s11_of_a_one_port_does_not_depend_on_polarity(session):

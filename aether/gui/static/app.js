@@ -85,12 +85,74 @@ function toastError(m) {
 const DIALOG_STACK = [];
 let DIALOG_SEQ = 0;
 
+/* ------------------------------------------------------ movable windows
+   Dialogs and the floating panels in the viewport (field plot, point drawing)
+   can be dragged by their title bar, so the model or a plot behind them can be
+   looked at while they stay open. Double-click a title bar to put the window
+   back. Each window remembers where it was left, per kind of window, across
+   openings and sessions. The title bar can never leave the screen. */
+const MOVED = (() => { try { return JSON.parse(localStorage.getItem('aether.moved') || '{}'); }
+  catch (e) { return {}; } })();
+const movedKey = n => n.classList.contains('dialog')
+  ? 'dlg:' + ((n.querySelector('h3') || {}).textContent || '') : n.id;
+function applyMoved(n) {
+  const m = MOVED[movedKey(n)];
+  n.style.transform = m ? `translate(${m.x}px, ${m.y}px)` : '';
+}
+(function installMovableWindows() {
+  const HANDLE = '.dialog > h3, #vp-draw h4, #vp-field h4, #vp-pline h4';
+  let drag = null;
+  document.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const h = e.target.closest && e.target.closest(HANDLE);
+    if (!h || e.target.closest('button, input, select, textarea, a')) return;
+    const node = h.closest('.dialog, #vp-draw, #vp-field, #vp-pline');
+    if (!node) return;
+    const key = movedKey(node), m = MOVED[key] || { x: 0, y: 0 };
+    const r = node.getBoundingClientRect();
+    const box = node.classList.contains('dialog') ? { l: 0, t: 0, r: innerWidth, b: innerHeight }
+      : (() => { const v = $('#viewport').getBoundingClientRect();
+          return { l: v.left, t: v.top, r: v.right, b: v.bottom }; })();
+    drag = { node, key, id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: m.x, oy: m.y,
+      baseL: r.left - m.x, baseT: r.top - m.y, w: r.width, box, h };
+    h.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  document.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag, keep = 70;
+    let x = d.ox + e.clientX - d.sx, y = d.oy + e.clientY - d.sy;
+    // at least `keep` px of the title bar stays inside the allowed area
+    x = Math.min(Math.max(x, d.box.l + keep - d.w - d.baseL), d.box.r - keep - d.baseL);
+    y = Math.min(Math.max(y, d.box.t - d.baseT), d.box.b - 36 - d.baseT);
+    MOVED[d.key] = { x, y };
+    d.node.style.transform = `translate(${x}px, ${y}px)`;
+  });
+  const end = e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    try { localStorage.setItem('aether.moved', JSON.stringify(MOVED)); } catch (err) { /* private window */ }
+    drag = null;
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+  document.addEventListener('dblclick', e => {
+    const h = e.target.closest && e.target.closest(HANDLE);
+    if (!h || e.target.closest('button, input, select, textarea, a')) return;
+    const node = h.closest('.dialog, #vp-draw, #vp-field, #vp-pline');
+    if (!node) return;
+    delete MOVED[movedKey(node)];
+    node.style.transform = '';
+    try { localStorage.setItem('aether.moved', JSON.stringify(MOVED)); } catch (err) { /* ignore */ }
+  });
+})();
+
 function dialog({ title, body, width, ok = 'OK', cancel = 'Cancel', onOk,
                  buttons, onClose }) {
   const back = $('#modal-back');
   const id = ++DIALOG_SEQ;
   const d = el('div', { class: 'dialog' + (width === 'wide' ? ' wide' : '') });
   d.appendChild(el('h3', {}, title));
+  applyMoved(d);
   const b = el('div', { class: 'body' });
   b.appendChild(body);
   d.appendChild(b);
@@ -170,7 +232,7 @@ function closeAllDialogs() {
 
 // One handler for the whole stack, installed once.
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && DIALOG_STACK.length) {
+  if (e.key === 'Escape' && DIALOG_STACK.length && !MEASURE_PICK) {
     e.stopPropagation();
     closeTopDialog();
   }
@@ -202,6 +264,13 @@ function xyz(prefix, vals, unit) {
     inp(prefix + 'y', vals[1], 'text', { placeholder: 'Y' }),
     inp(prefix + 'z', vals[2], 'text', { placeholder: 'Z' }));
 }
+/* "1.5mm" / "2" (in model units) -> metres, the way the server reads it. */
+const toMeters = txt => {
+  const m = String(txt).trim().match(/^([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*([a-zA-Zµ]*)$/);
+  if (!m) throw new Error('not a length');
+  const k = { m: 1, cm: 1e-2, mm: 1e-3, um: 1e-6, 'µm': 1e-6, mil: 2.54e-5, in: 2.54e-2 }[m[2] || U()] ;
+  return parseFloat(m[1]) * (k == null ? 1e-3 : k);
+};
 const g3 = p => [$('#' + p + 'x').value, $('#' + p + 'y').value, $('#' + p + 'z').value];
 const gv = id => $('#' + id).value;
 const gn = id => parseFloat($('#' + id).value);
@@ -212,7 +281,23 @@ const gn = id => parseFloat($('#' + id).value);
    which is the machine that will actually read or write the file — typing a
    path by hand is never required. The OS's own dialog is one click away for
    anyone who prefers it. */
-const FP_STATE = { path: '', showHidden: false, history: [], last: {} };
+const FP_SORTS = [['name', 'Name (A → Z)'], ['name-', 'Name (Z → A)'],
+  ['mtime-', 'Newest first'], ['mtime', 'Oldest first'],
+  ['size-', 'Largest first'], ['size', 'Smallest first'], ['type', 'Type']];
+const FP_STATE = { path: '', showHidden: false, history: [], last: {},
+  sort: (() => { try { return localStorage.getItem('aether.fp.sort') || 'name'; }
+    catch (e) { return 'name'; } })() };
+/* Folders always stay above files; the sort applies within each group. */
+function fpSorted(rows, key) {
+  const desc = key.endsWith('-'), k = key.replace(/-$/, '');
+  const nm = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  const ext = r => (r.name.includes('.') ? r.name.split('.').pop().toLowerCase() : '');
+  const cmp = k === 'mtime' ? (a, b) => (a.mtime || 0) - (b.mtime || 0)
+    : k === 'size' ? (a, b) => (a.size || 0) - (b.size || 0)
+    : k === 'type' ? (a, b) => ext(a).localeCompare(ext(b))
+    : nm;
+  return rows.slice().sort((a, b) => (desc ? -1 : 1) * cmp(a, b) || nm(a, b));
+}
 
 function fmtSize(n) {
   if (n < 1024) return n + ' B';
@@ -243,6 +328,15 @@ async function filePicker(opt) {
     icon('i-back'));
   const up = el('button', { class: 'nav', title: 'Parent folder',
     onclick: () => listing && listing.parent && go(listing.parent) }, icon('i-up'));
+  const sortSel = el('select', { id: 'fp-sort', title: 'Sort order', style: 'width:auto;margin-left:auto' },
+    ...FP_SORTS.map(([v, t]) => el('option', { value: v }, t)));
+  sortSel.value = FP_SORTS.some(x => x[0] === FP_STATE.sort) ? FP_STATE.sort : 'name';
+  const setSort = key => {
+    FP_STATE.sort = key; sortSel.value = key;
+    try { localStorage.setItem('aether.fp.sort', key); } catch (e) { /* private window */ }
+    if (listing) render();
+  };
+  sortSel.onchange = () => setSort(sortSel.value);
   // Editable in both modes: a full path can be typed or pasted, which is how
   // anyone who already knows where the file is gets there in one step.
   const nameIn = el('input', { id: 'fp-name', value: opt.filename || '',
@@ -260,7 +354,7 @@ async function filePicker(opt) {
   const body = el('div', {},
     el('div', { class: 'fp' }, places,
       el('div', { class: 'fp-main' },
-        el('div', { class: 'fp-bar' }, back, up, crumbs), list)),
+        el('div', { class: 'fp-bar' }, back, up, crumbs, sortSel), list)),
     el('div', { class: 'fp-foot' },
       el('label', {}, mode === 'save' ? 'Save as' : 'File'),
       nameIn, filterSel),
@@ -346,15 +440,23 @@ async function filePicker(opt) {
     });
 
     list.innerHTML = '';
+    // click a column to sort by it; click again to reverse (dates: newest first)
+    const cur = FP_STATE.sort.replace(/-$/, ''), desc = FP_STATE.sort.endsWith('-');
+    const head = (label, k, firstDesc, style) => el('span', {
+      class: 'sortable' + (cur === k ? ' on' : ''), style: 'cursor:pointer;' + (style || ''),
+      title: 'Sort by ' + label.toLowerCase(),
+      onclick: () => setSort(cur === k ? (desc ? k : k + '-') : (firstDesc ? k + '-' : k)) },
+      label + (cur === k ? (desc ? ' ▼' : ' ▲') : ''));
     list.appendChild(el('div', { class: 'fp-head' },
-      el('span', {}, 'Name'), el('span', { style: 'text-align:right' }, 'Size'),
-      el('span', { style: 'text-align:right' }, 'Modified')));
+      head('Name', 'name', false), head('Size', 'size', true, 'text-align:right'),
+      head('Modified', 'mtime', true, 'text-align:right')));
     if (listing.error) {
       list.appendChild(el('div', { class: 'fp-empty' },
         el('span', { style: 'color:var(--err)' }, listing.error)));
       return;
     }
-    const rows = listing.dirs.concat(listing.files);
+    const rows = fpSorted(listing.dirs, FP_STATE.sort.startsWith('name') ? FP_STATE.sort : 'name')
+      .concat(fpSorted(listing.files, FP_STATE.sort));
     if (!rows.length)
       list.appendChild(el('div', { class: 'fp-empty' },
         'No matching files in this folder.'));
@@ -890,56 +992,156 @@ function dlgBoundary() {
   }});
 }
 
-/* Ground and signal ends of a lumped port.
-   The port field points from the Ground end to the Signal end -- HFSS's
-   integration line. Swapping the two reverses the sign of the port voltage:
-   unnoticed on a one-port, a 180-degree phase error in S21 between two ports.
-   The ends are found from the selected face and an axis, and stay editable. */
-function polarityFields(getSelector, current) {
+/* Port line — HFSS's integration line, "New Line".
+   It runs from the SIGNAL conductor to the GROUND and the port's electric
+   field points along it (field from + to −). Click the signal end, then the
+   ground end, straight in the 3-D view: points snap to vertices and edge
+   mid-points, an arrow follows the cursor, Tab types the coordinates instead,
+   and Swap reverses the direction. Reversing changes the sign of the port
+   voltage — unnoticed on a one-port, a 180° phase error in S21 between two. */
+function portLineFields(getSelector, kind) {
   const u = U();
-  const box = el('fieldset', {}, el('legend', {}, 'Polarity — ground → signal'));
-  const axisSel = sel('pl-axis', [['+z', 'Along +Z (ground low, signal high)'],
-    ['-z', 'Along −Z (ground high, signal low)'], ['+x', 'Along +X'], ['-x', 'Along −X'],
+  const lumped = kind !== 'wave';
+  const box = el('fieldset', {}, el('legend', {}, lumped ? 'Polarity — signal → ground (integration line)'
+    : 'Integration line — signal → ground'));
+  const axisSel = sel('pl-axis', [['+z', 'Along +Z (signal low → ground high)'],
+    ['-z', 'Along −Z (signal high → ground low)'], ['+x', 'Along +X'], ['-x', 'Along −X'],
     ['+y', 'Along +Y'], ['-y', 'Along −Y'], ['custom', 'Custom points']], '+z');
   const zero = () => ['0' + u, '0' + u, '0' + u];
-  const gEl = xyz('plg', zero()), sEl = xyz('pls', zero());
+  const sEl = xyz('pls', zero()), gEl = xyz('plg', zero());
   const note = el('div', { class: 'hint', style: 'margin:4px 0 0' });
+  const num = c => ['x', 'y', 'z'].map(a => toMeters($('#' + c + a).value));
   const set = (pre, v) => ['x', 'y', 'z'].forEach((c, i) => { $('#' + pre + c).value = fmtLen(v[i], u); });
+  const preview = () => { try { VP && VP.setDraft(arrowStrip(num('pls'), num('plg'))); } catch (e) { /* not numbers yet */ } };
   const detect = async () => {
     const a = axisSel.value;
     if (a === 'custom') return;
     try {
       const geo = await rpc('excitation.portGeometry', { selector: getSelector() });
       const k = 'xyz'.indexOf(a[1]), up = a[0] === '+';
-      const g = geo.center.slice(), sg = geo.center.slice();
-      g[k] = up ? geo.lo[k] : geo.hi[k]; sg[k] = up ? geo.hi[k] : geo.lo[k];
-      set('plg', g); set('pls', sg);
+      const sg = geo.center.slice(), g = geo.center.slice();
+      sg[k] = up ? geo.lo[k] : geo.hi[k]; g[k] = up ? geo.hi[k] : geo.lo[k];
+      set('pls', sg); set('plg', g); preview();
       const len = Math.abs(geo.hi[k] - geo.lo[k]);
       note.textContent = len > 0 ? `Gap ${fmtLen(len, u)} ${u} along ${a[1].toUpperCase()} — ` +
-        'if that is not the gap between your two conductors, choose another axis.'
-        : 'The selected face has no extent along this axis: choose another axis.';
+        'if that is not the gap between your two conductors, choose another axis or use New Line.'
+        : 'The selected face has no extent along this axis: choose another axis or use New Line.';
       note.style.color = len > 0 ? '' : 'var(--err)';
     } catch (e) { note.textContent = String(e.message || e); note.style.color = 'var(--err)'; }
   };
   const swap = () => {
-    for (const c of ['x', 'y', 'z']) {
-      const a = $('#plg' + c), b = $('#pls' + c); [a.value, b.value] = [b.value, a.value];
-    }
-    axisSel.value = 'custom';
+    for (const c of ['x', 'y', 'z']) { const a = $('#pls' + c), b = $('#plg' + c); [a.value, b.value] = [b.value, a.value]; }
+    axisSel.value = 'custom'; preview();
   };
+  const newLine = () => pickPortLine(pts => {
+    set('pls', pts[0]); set('plg', pts[1]); axisSel.value = 'custom';
+    note.textContent = 'Line picked: signal → ground. Use ⇄ Swap to reverse.'; note.style.color = '';
+    preview();
+  }, { current: () => { try { return [num('pls'), num('plg')]; } catch (e) { return null; } } });
   axisSel.onchange = detect;
-  box.append(field('Direction', axisSel), field('Ground (−) point', gEl),
-    field('Signal (+) point', sEl),
-    el('div', { style: 'display:flex;gap:8px;margin-top:6px' },
+  box.append(field('Direction', axisSel), field('Signal (+) start', sEl), field('Ground (−) end', gEl),
+    el('div', { style: 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap' },
+      el('button', { class: 'pri', onclick: newLine,
+        title: 'Click the signal point, then the ground point, in the 3-D view (Tab types coordinates)' }, '🖱 New Line…'),
       el('button', { onclick: detect }, 'Detect from selection'),
-      el('button', { onclick: swap, title: 'Reverse the polarity of the port' }, '⇄ Swap ground / signal')),
+      el('button', { onclick: swap, title: 'Reverse the direction of the line' }, '⇄ Swap')),
     note);
-  // fill from a pre-selected face or object; with nothing chosen yet there is
-  // nothing to detect and an error would only be noise
   try { const k = getSelector().kind; if (k === 'faces' || k === 'object') setTimeout(detect, 60); }
   catch (e) { /* selector not readable yet */ }
-  return { node: box, read: () => ({ ground: g3('plg'), signal: g3('pls') }) };
+  return { node: box, read: () => ({ signal: g3('pls'), ground: g3('plg') }) };
 }
+
+/* The panel and the clicking behind "New Line". The dialog that asked steps out
+   of the way while the model is clicked and comes back with the two points. */
+let PLP = null;
+function pickPortLine(onDone, opts) {
+  if (!VP) return toastError('3-D viewport is unavailable.');
+  if (DRAW) cancelPointDraw();
+  clearPicks();
+  const back = $('#modal-back');
+  back.classList.remove('on');
+  startMeasurePick('portline');
+  MEASURE_PICK.onDone = pts => { closePortLinePanel(); onDone(pts); };
+  MEASURE_PICK.restore = () => { back.classList.add('on'); closePortLinePanel(); };
+  const u = U();
+  let box = $('#vp-pline'); if (box) box.remove();
+  box = el('div', { id: 'vp-pline', class: 'vp-panel' });
+  $('#viewport').appendChild(box);
+  applyMoved(box);
+  box.appendChild(el('h4', {}, 'New Line — port polarity'));
+  const rowFor = (label, pre) => {
+    const r = el('div', { class: 'row' }, el('label', {}, label),
+      ...['x', 'y', 'z'].map(c => inp(pre + c, '', 'text', { placeholder: c.toUpperCase(), spellcheck: 'false' })));
+    box.appendChild(r); return r;
+  };
+  rowFor('Signal +', 'plp-s'); rowFor('Ground −', 'plp-g');
+  const hint = el('div', { class: 'note', id: 'plp-note' });
+  box.appendChild(hint);
+  box.appendChild(el('div', { class: 'acts' },
+    el('button', { onclick: () => { swapPLP(); } }, '⇄ Swap'),
+    el('button', { class: 'pri', onclick: () => finishPLP() }, 'OK'),
+    el('button', { onclick: () => cancelMeasurePick() }, 'Cancel')));
+  PLP = { idx: 0, typing: false };
+  const rowIds = i => ['x', 'y', 'z'].map(c => '#' + (i ? 'plp-g' : 'plp-s') + c);
+  const writeRow = (i, p) => rowIds(i).forEach((id, k) => { $(id).value = fmtLen(p[k], u); });
+  const readRow = i => rowIds(i).map(id => toMeters($(id).value));
+  PLP.write = writeRow; PLP.read = readRow; PLP.hint = hint;
+  const cur = opts && opts.current && opts.current();
+  if (cur) { writeRow(0, cur[0]); writeRow(1, cur[1]); }
+  setPLPHint();
+  box.addEventListener('input', () => { PLP.typing = true; try { previewPLP(); } catch (e) { /* partial number */ } });
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); acceptTyped(); }
+    else if (e.key === 'Escape') { e.stopPropagation(); cancelMeasurePick(); }
+  });
+}
+function setPLPHint() {
+  if (!PLP) return;
+  PLP.hint.textContent = PLP.idx === 0
+    ? 'Click the SIGNAL end (vertex / edge mid-point snap) — or press Tab to type it · Esc cancels'
+    : 'Now click the GROUND end — the arrow points from signal to ground · Tab to type · Enter accepts';
+}
+function previewPLP() {
+  if (!PLP || !MEASURE_PICK) return;
+  const a = PLP.idx >= 1 ? MEASURE_PICK.points[0] : PLP.read(0), b = PLP.read(1);
+  VP.setDraft(arrowStrip(a, b));
+}
+function swapPLP() {
+  if (!PLP) return;
+  const a = PLP.read(0), b = PLP.read(1); PLP.write(0, b); PLP.write(1, a);
+  VP.setDraft(arrowStrip(b, a));
+  if (MEASURE_PICK) MEASURE_PICK.points = MEASURE_PICK.points.length === 2 ? [b, a] : MEASURE_PICK.points;
+}
+function portLineClicked(point) {          // called from the pick handler
+  PLP.write(MEASURE_PICK.points.length - 1, point);
+  PLP.idx = MEASURE_PICK.points.length; PLP.typing = false; setPLPHint();
+}
+function portLineHover(point) {            // live coordinates and arrow
+  if (!PLP || PLP.typing) return;
+  const i = MEASURE_PICK.points.length;
+  if (i > 1) return;
+  PLP.write(i, point);
+  if (i === 1) VP.setDraft(arrowStrip(MEASURE_PICK.points[0], point));
+}
+function acceptTyped() {
+  if (!PLP || !MEASURE_PICK) return;
+  try {
+    const pts = [PLP.read(0), PLP.read(1)];
+    if (Math.hypot(...pts[0].map((v, i) => v - pts[1][i])) < 1e-12) return toastError('The two points are the same.');
+    MEASURE_PICK.points = pts; finishPLP();
+  } catch (e) { toastError('Enter all six coordinates (e.g. 1.5mm).'); }
+}
+function finishPLP() {
+  if (!MEASURE_PICK || MEASURE_PICK.mode !== 'portline') return;
+  try {
+    const pts = MEASURE_PICK.points.length === 2 ? MEASURE_PICK.points : [PLP.read(0), PLP.read(1)];
+    const { onDone, restore } = MEASURE_PICK;
+    MEASURE_PICK = null; VP.setHover(null);
+    $('#vp-hint').textContent = 'click select · drag rotate · wheel zoom';
+    restore && restore(); onDone && onDone(pts);
+  } catch (e) { toastError('Click two points, or enter all six coordinates.'); }
+}
+function closePortLinePanel() { const b = $('#vp-pline'); if (b) b.remove(); PLP = null; }
 
 /* Edit the polarity of a lumped port that already exists. */
 async function dlgPolarity(name) {
@@ -948,19 +1150,26 @@ async function dlgPolarity(name) {
   catch (e) { return toastError(e.message || String(e)); }
   const u = U();
   const body = el('div');
-  const g = geo.ground || geo.center, sg = geo.signal || geo.center;
-  const gEl = xyz('pg', g.map(v => fmtLen(v, u))), sEl = xyz('ps', sg.map(v => fmtLen(v, u)));
-  body.append(field('Ground (−) point', gEl), field('Signal (+) point', sEl),
-    el('div', { style: 'margin-top:6px' }, el('button', { onclick: () => {
-      for (const c of ['x', 'y', 'z']) { const a = $('#pg' + c), b = $('#ps' + c); [a.value, b.value] = [b.value, a.value]; } } },
-      '⇄ Swap ground / signal')),
+  const sg = geo.signal || geo.center, g = geo.ground || geo.center;
+  const sEl = xyz('pg-s', sg.map(v => fmtLen(v, u))), gEl = xyz('pg-g', g.map(v => fmtLen(v, u)));
+  const num = pre => ['x', 'y', 'z'].map(c => toMeters($('#' + pre + c).value));
+  const prev = () => { try { VP && VP.setDraft(arrowStrip(num('pg-s'), num('pg-g'))); } catch (e) { /* ignore */ } };
+  body.append(field('Signal (+) start', sEl), field('Ground (−) end', gEl),
+    el('div', { style: 'margin-top:6px;display:flex;gap:8px;flex-wrap:wrap' },
+      el('button', { class: 'pri', onclick: () => pickPortLine(pts => {
+        ['x', 'y', 'z'].forEach((c, i) => { $('#pg-s' + c).value = fmtLen(pts[0][i], u); $('#pg-g' + c).value = fmtLen(pts[1][i], u); });
+        prev(); }, { current: () => { try { return [num('pg-s'), num('pg-g')]; } catch (e) { return null; } } }) }, '🖱 New Line…'),
+      el('button', { onclick: () => {
+        for (const c of ['x', 'y', 'z']) { const a = $('#pg-s' + c), b = $('#pg-g' + c); [a.value, b.value] = [b.value, a.value]; }
+        prev(); } }, '⇄ Swap')),
     el('div', { class: 'hint' }, (geo.derived ? 'Taken from the port face and its field direction. ' : '') +
-      'The port field points from ground to signal. Reversing it changes the sign of the port voltage ' +
-      '(S21 between two ports shifts by 180°).'));
+      'The line runs from the signal conductor to the ground and the port field points along it. ' +
+      'Reversing it changes the sign of the port voltage (S21 between two ports shifts by 180°).'));
   dialog({ title: `Port polarity — ${name}`, body, ok: 'Apply', onOk: async () => {
-    await guard(() => rpc('excitation.setPolarity', { name, ground: g3('pg'), signal: g3('ps') }));
+    await guard(() => rpc('excitation.setPolarity', { name, signal: g3('pg-s'), ground: g3('pg-g') }));
     await refreshAssignments();
-  } });
+  }, onClose: () => { VP && VP.setDraft(null); } });
+  setTimeout(prev, 50);
 }
 
 function dlgExcitation(kind) {
@@ -981,28 +1190,27 @@ function dlgExcitation(kind) {
     body.appendChild(field('Impedance [Ω]', inp('ex-z', '50')));
   }
   let polar = null;
-  if (kind === 'lumped') {
-    polar = polarityFields(() => s.read());
-    body.appendChild(polar.node);
-  }
   const useLine = el('input', { type: 'checkbox', id: 'ex-useline' });
-  if (kind === 'wave') body.appendChild(el('div', { class: 'check' }, useLine,
-    el('label', { for: 'ex-useline' }, 'Define an integration line')));
   const lineBox = el('div', { id: 'ex-linebox' });
-  body.appendChild(lineBox);
-  useLine.onchange = () => {
-    lineBox.innerHTML = '';
-    if (useLine.checked) {
-      lineBox.appendChild(field('Line start', xyz('exs', ['0' + u, '0' + u, '0' + u])));
-      lineBox.appendChild(field('Line end', xyz('exe', ['0' + u, '0' + u, '1' + u])));
-    }
-  };
+  if (kind === 'lumped') {
+    polar = portLineFields(() => s.read(), 'lumped');
+    body.appendChild(polar.node);
+  } else {
+    body.appendChild(el('div', { class: 'check' }, useLine,
+      el('label', { for: 'ex-useline' }, 'Define an integration line (TEM lines: coax, microstrip)')));
+    body.appendChild(lineBox);
+    useLine.onchange = () => {
+      lineBox.innerHTML = '';
+      if (useLine.checked) { polar = portLineFields(() => s.read(), 'wave'); lineBox.appendChild(polar.node); }
+      else polar = null;
+    };
+  }
   body.appendChild(el('div', { class: 'hint' },
     kind === 'wave'
       ? 'A wave port solves the 2-D modes of its cross-section. The integration line turns the modal wave impedance into the line impedance V²/2P — needed for TEM lines such as coax or microstrip.'
       : 'A lumped port drives a uniform field between its ground and signal ends and terminates in the stated impedance. The arrow in the 3-D view runs from ground to signal.'));
   dialog({ title: kind === 'wave' ? 'Assign Wave Port' : 'Assign Lumped Port',
-    body, ok: 'Assign', onOk: async () => {
+    body, ok: 'Assign', onClose: () => { VP && VP.setDraft(null); }, onOk: async () => {
       const p = {};
       if (kind === 'wave') {
         p.modes = parseInt(gv('ex-modes')) || 1;
@@ -1013,7 +1221,10 @@ function dlgExcitation(kind) {
         const pl = polar.read();
         p.ground = pl.ground; p.signal = pl.signal;
       }
-      if (kind === 'wave' && $('#ex-useline').checked) p.line = [g3('exs'), g3('exe')];
+      if (kind === 'wave' && $('#ex-useline').checked && polar) {
+        const pl = polar.read();
+        p.line = [pl.signal, pl.ground];          // start = signal, end = ground
+      }
       await guard(() => rpc('excitation.assign',
         { kind, name: gv('ex-name'), selector: s.read(), params: p }));
       await refreshAssignments();
@@ -1333,13 +1544,33 @@ async function closeProject() {
 
 /* Everything the browser holds that belongs to the document that just went
    away: picks, kept dimensions, cached display buffers, report tabs. */
+/* Everything that belongs to a solution: its report pages, the field overlay
+   and its panel and legend, the Results list. Closing or replacing a project
+   must leave none of it on screen. */
+function clearResultsUI() {
+  if (FIELD.timer) { clearInterval(FIELD.timer); FIELD.timer = null; }
+  fieldOn = false; FIELD.info = null; FIELD.pos = null; FIELD.freq = null;
+  FIELD.visible = true; FIELD.busy = false;
+  const box = $('#vp-field'); if (box) box.remove();
+  for (const id of ['#vt-field', '#vt-pattern']) $(id) && $(id).classList.remove('on');
+  $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
+  VP && VP.setArrows && VP.setArrows(null);
+  closeReportPages();
+  Object.assign(RESULTS, { items: [], active: null, seq: {}, loose: {}, key: '',
+    serial: -1, opening: false });
+  reportForm = 'db'; reportTraces = null;
+  ffState.excitation = 0; ffState.freq = null; ffState.top = null;
+  antState.excitation = 0;
+  if (activePage !== 'modeler') selectPage('modeler');
+}
+
 function resetDocumentViews() {
   // The vertex blobs belong to the document that is going away; keeping them
   // grows the tab's memory with every project opened in a session.
   BLOB_CACHE.clear();
   clearLocalPicks();
   clearKeptMeasurements();
-  closeReportPages();
+  clearResultsUI();
   if (VP) {
     VP.gridStep = null;
     VP.setObjects([], null);
@@ -1668,11 +1899,13 @@ const MENUS = [
     ['Port Modes Table', () => openReport('modes')],
     ['Eigenmode Data', () => openReport('eigen')],
     ['Far Field Radiation Pattern…', () => openReport('farfield')],
+    ['Antenna Parameters vs Frequency…', () => openReport('antenna')],
     ['3D Radiation Pattern', () => showPattern(true)],
     ['Convergence Table', () => openReport('convergence')],
     null,
     ['Show Boundaries and Ports', toggleAssignments],
     [() => (VP && VP.showRadiation ? 'Hide' : 'Show') + ' Radiation Boundary', toggleRadiation],
+    [() => (VP && VP.showGrid ? 'Hide' : 'Show') + ' Grid Plane', toggleGridPlane],
     ['S-Parameter Metrics…', dlgMetrics],
     ['Parameter Study Results…', dlgStudyResults],
     ['Plot Field Overlay…', () => showField(true)],
@@ -1766,6 +1999,7 @@ const RIBBON = {
       ['i-report', 'Port Modes', () => openReport('modes')],
       ['i-report', 'Eigenmodes', () => openReport('eigen')],
       ['i-report', 'Radiation', () => openReport('farfield')],
+      ['i-report', 'Antenna', () => openReport('antenna')],
       ['i-report', 'Convergence', () => openReport('convergence')]]],
     ['Fields', [['i-field', 'E / H Field', () => showField(true)],
       ['i-field', 'Surface Current', () => showField(true, { quantity: 'J' })],
@@ -2302,6 +2536,10 @@ function multiProps(row) {
   const objs = names.map(n => d.objects.find(o => o.name === n)
     || d.sheets.find(o => o.name === n)).filter(Boolean);
   const solids = objs.filter(o => d.objects.includes(o));
+  if (!objs.length) {                  // the selected names no longer exist
+    row('Selected', el('span', {}, 'nothing'));
+    return;
+  }
   const apply = (prop, value) => guard(async () => {
     await rpc('modeler.setProperty', { names: objs.map(o => o.name), prop, value });
     await refreshGeometry(false);
@@ -2611,6 +2849,7 @@ function initViewport() {
     'vt-solid');
   mk('Why is the viewport blank?', 'i-check', () => dlgDisplayReport(),
     'vt-diag');
+  mk('Grid plane on/off', 'i-mesh', toggleGridPlane, 'vt-grid').classList.add('on');
   mk('Radiation boundary on/off', 'i-bnd', toggleRadiation, 'vt-rad');
   mk('Boundaries and ports', 'i-bnd', toggleAssignments, 'vt-assign')
     .classList.add('on');
@@ -2744,6 +2983,12 @@ function renderAssignLegend() {
   }
 }
 
+function toggleGridPlane() {
+  VP.showGrid = !VP.showGrid;
+  $('#vt-grid') && $('#vt-grid').classList.toggle('on', VP.showGrid);
+  setStatus('Grid plane ' + (VP.showGrid ? 'shown' : 'hidden'), '');
+}
+
 function toggleRadiation() {
   VP.showRadiation = !VP.showRadiation;
   $('#vt-rad') && $('#vt-rad').classList.toggle('on', VP.showRadiation);
@@ -2777,7 +3022,7 @@ let fieldOn = false;
 let FIELD = { quantity: 'E', where: 'surface', axis: 'z', pos: null,
   excitation: 0, freq: null, instant: false, phase: 0, scale: 'linear',
   arrows: false, info: null, timer: null, busy: false, comp: 'mag', speed: 1,
-  modelAlpha: 1, plotAlpha: 1 };
+  modelAlpha: 1, plotAlpha: 1, visible: true };
 
 async function showField(on, opts) {
   if (!on) { closeFieldPanel(); return; }
@@ -2823,6 +3068,7 @@ function buildFieldPanel() {
   const info = FIELD.info, redraw = () => plotField();
   box.appendChild(el('h4', {}, 'Field plot',
     el('button', { class: 'lnk', style: 'float:right', onclick: () => closeFieldPanel() }, '✕')));
+  applyMoved(box);
   const row = (label, node) => box.appendChild(el('div', { class: 'row' }, el('label', {}, label), node));
 
   const q = sel('fp-q', [['E', 'E  electric field'], ['H', 'H  magnetic field'],
@@ -2916,6 +3162,10 @@ function buildFieldPanel() {
     r.onchange = () => { FIELD[key] = parseFloat(r.value); redraw(); };
     return r;
   };
+  const vis = el('input', { type: 'checkbox', id: 'fp-vis', style: 'width:auto' });
+  vis.checked = FIELD.visible !== false;
+  vis.onchange = () => { FIELD.visible = vis.checked; redraw(); };
+  row(FIELD.where === 'cut' && FIELD.quantity !== 'P' ? 'Show plane' : 'Show plot', vis);
   row('Plot opacity', slider('fp-pa', 'plotAlpha', 0.1));
   if (FIELD.where !== 'surface' || FIELD.quantity === 'J' || FIELD.quantity === 'P')
     row('Model opacity', slider('fp-ma', 'modelAlpha', 0.05));
@@ -2943,6 +3193,13 @@ async function plotField() {
   if (FIELD.busy || !fieldOn && !FIELD.info) return;
   FIELD.busy = true;
   try {
+    if (FIELD.visible === false) {            // plane / plot hidden: model only
+      VP.setObjects(currentBuffers.filter(o => !o.placeholder), VP.bbox);
+      VP.setArrows(null);
+      $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
+      const note0 = $('#fp-note'); if (note0) note0.textContent = 'plot hidden';
+      return;
+    }
     let f;
     if (FIELD.quantity === 'P') {
       f = await rpc('view.pattern', { excitation: FIELD.excitation, freq: FIELD.freq,
@@ -4681,14 +4938,16 @@ function ensurePage(id, title) {
 const RESULTS = { items: [], active: null, seq: {}, id: 0, key: '', loose: {},
                   serial: -1, busy: false };
 const RESULT_BASE = { sparam: 'S Parameter Plot', farfield: 'Radiation Pattern',
+  antenna: 'Antenna Parameters',
   modes: 'Port Modes', convergence: 'Convergence', eigen: 'Eigenmode Data',
   E: 'E Field', H: 'H Field', J: 'Surface Current', P: '3D Radiation Pattern' };
 const FIELD_KEYS = ['quantity', 'where', 'axis', 'pos', 'excitation', 'freq',
-  'instant', 'phase', 'scale', 'arrows', 'comp', 'speed', 'modelAlpha', 'plotAlpha'];
+  'instant', 'phase', 'scale', 'arrows', 'comp', 'speed', 'modelAlpha', 'plotAlpha', 'visible'];
 
 function resultState(kind) {
   if (kind === 'sparam') return { form: reportForm, traces: reportTraces };
   if (kind === 'farfield') return Object.assign({}, ffState);
+  if (kind === 'antenna') return JSON.parse(JSON.stringify(antState));
   if (kind === 'field') { const o = {}; for (const k of FIELD_KEYS) o[k] = FIELD[k]; return o; }
   return {};
 }
@@ -4696,6 +4955,7 @@ function applyResultState(item) {
   const st = item.state || {};
   if (item.kind === 'sparam') { reportForm = st.form || 'db'; reportTraces = st.traces || null; }
   else if (item.kind === 'farfield') Object.assign(ffState, st);
+  else if (item.kind === 'antenna') Object.assign(antState, JSON.parse(JSON.stringify(st)));
   else if (item.kind === 'field') for (const k of FIELD_KEYS) if (k in st) FIELD[k] = st[k];
 }
 function captureResult() {
@@ -4732,6 +4992,7 @@ async function openResult(item) {
     if (item.kind === 'field') { selectPage('modeler'); await showField(true); }
     else if (item.kind === 'sparam') await reportSParam();
     else if (item.kind === 'farfield') await reportFarField();
+    else if (item.kind === 'antenna') await reportAntenna();
     else if (item.kind === 'modes') await reportModes();
     else if (item.kind === 'convergence') await reportConvergence();
     else if (item.kind === 'eigen') await reportEigen();
@@ -4744,6 +5005,8 @@ async function openReport(kind, reuse) {
   if (!STATE.hasSolution) return toastError('No solution — run Analyze first');
   if (kind === 'sparam' && STATE.design?.solutionType === 'eigenmode') kind = 'eigen';
   if (kind === 'modes' && STATE.design?.solutionType === 'eigenmode') kind = 'eigen';
+  if (kind === 'antenna' && STATE.design?.solutionType === 'eigenmode')
+    return toastError('Antenna parameters belong to driven solutions');
   const single = ['modes', 'convergence', 'eigen'].includes(kind);
   let item = (single || reuse) && RESULTS.items.find(x => x.kind === kind);
   if (!item) item = addResult(kind);
@@ -4765,9 +5028,10 @@ async function seedResults() {
   const key = STATE.hasSolution && STATE.design
     ? STATE.project.name + ':' + STATE.design.name : '';
   if (key === RESULTS.key) return;
-  RESULTS.key = key; RESULTS.items = []; RESULTS.active = null; RESULTS.seq = {};
-  RESULTS.loose = {};
-  $$('.doc-page').forEach(n => { if ((n.dataset.page || '').startsWith('rep-')) closePage(n.dataset.page); });
+  const hadPlot = fieldOn;
+  clearResultsUI();                       // a new / different / missing solution
+  RESULTS.key = key;
+  if (hadPlot) refreshGeometry(false);    // take the old overlay out of the view
   if (!key) { renderTree(); return; }
   if (STATE.design.solutionType === 'eigenmode') addResult('eigen');
   else { addResult('sparam'); addResult('modes'); addResult('convergence'); }
@@ -4779,6 +5043,7 @@ async function seedResults() {
       addResult('field', 'J', Object.assign(resultState('field'), { quantity: 'J', where: 'surface' }));
       if (fi.radiation) {
         addResult('farfield');
+        addResult('antenna');
         addResult('field', 'P', Object.assign(resultState('field'), { quantity: 'P' }));
       }
     }
@@ -4924,6 +5189,102 @@ async function reportEigen() {
     body.appendChild(el('div', { class: 'chart-wrap', style: 'margin-top:12px' },
       chart(ds.map(c => c.pass), [{ label: 'max Δf', y: ds.map(c => c.delta_f) }],
         'Adaptive pass', 'max relative Δf')));
+}
+
+/* Antenna figures of merit against frequency: directivity, gain, realized
+   gain, efficiency. Each saved frequency is one point (the far field is
+   computed from the saved field there), at its own peak or at a fixed
+   direction (theta, phi). Gain is over the power the antenna ACCEPTS;
+   realized gain also includes the mismatch, 1 - |S11|^2, i.e. it is over the
+   power the source could deliver. */
+let antState = { excitation: 0, dir: 'peak', theta: 90, phi: 0, comp: 'total',
+  show: { directivity: true, gain: true, realized: true, efficiency: true,
+          totalEfficiency: false, s11: false } };
+
+async function reportAntenna() {
+  let d, failure = null;
+  try {
+    d = await rpc('results.antennaSweep', { excitation: antState.excitation,
+      theta: antState.dir === 'fixed' ? antState.theta : null,
+      phi: antState.dir === 'fixed' ? antState.phi : null, component: antState.comp });
+  } catch (e) { failure = e; }
+  const page = ensurePage(pageIdFor('rep-a'), pageTitleFor('Antenna Parameters'));
+  const wrap = el('div', { class: 'report' });
+  const bar = el('div', { class: 'report-toolbar' });
+  const body = el('div', { class: 'report-body' });
+  wrap.append(bar, body);
+  page.appendChild(wrap);
+  if (failure) {
+    body.appendChild(el('p', { class: 'hint', style: 'color:var(--err)' },
+      String(failure.message || failure)));
+    return;
+  }
+  const again = () => reportAntenna();
+  if (d.excitations.length > 1) {
+    bar.appendChild(el('label', {}, 'Excitation'));
+    const se = sel('an-ex', d.excitations.map((n, i) => [i, n]), antState.excitation);
+    se.onchange = () => { antState.excitation = parseInt(se.value); again(); };
+    bar.appendChild(se);
+  }
+  bar.appendChild(el('label', {}, 'Direction'));
+  const sd = sel('an-dir', [['peak', 'Peak of each frequency'], ['fixed', 'Fixed θ, φ']], antState.dir);
+  sd.onchange = () => { antState.dir = sd.value; again(); };
+  bar.appendChild(sd);
+  if (antState.dir === 'fixed') {
+    const num = (id, key) => { const i = el('input', { type: 'text', size: 5, id, value: String(antState[key]) });
+      i.onchange = () => { const v = parseFloat(i.value); if (Number.isFinite(v)) { antState[key] = v; again(); } };
+      return i; };
+    bar.append(el('label', {}, 'θ [°]'), num('an-th', 'theta'), el('label', {}, 'φ [°]'), num('an-ph', 'phi'));
+  }
+  bar.appendChild(el('label', {}, 'Polarisation'));
+  const sc = sel('an-comp', [['total', 'Total'], ['theta', 'θ component'], ['phi', 'φ component']], antState.comp);
+  sc.onchange = () => { antState.comp = sc.value; again(); };
+  bar.appendChild(sc);
+  bar.appendChild(el('span', { style: 'flex:1' }));
+  bar.appendChild(el('span', { class: 'hint', style: 'margin:0' },
+    `${d.freq.length} frequenc${d.freq.length === 1 ? 'y' : 'ies'} · ` +
+    (d.fixed ? `at θ=${d.theta}°, φ=${d.phi}°` : 'at the peak of each')));
+
+  const SER = [
+    ['directivity', 'Directivity', 'gain'], ['gain', 'Gain (total)', 'gain'],
+    ['realized', 'Realized gain', 'gain'], ['efficiency', 'Radiation efficiency', 'pct'],
+    ['totalEfficiency', 'Total efficiency (with mismatch)', 'pct'], ['s11', '|S11|', 'db']];
+  const chips = el('div', { class: 'trace-chips', style: 'max-width:none;margin-bottom:6px' });
+  for (const [k, lab] of SER) {
+    const cb = el('input', { type: 'checkbox' }); cb.checked = !!antState.show[k];
+    cb.onchange = () => { antState.show[k] = cb.checked; again(); };
+    chips.appendChild(el('label', { class: cb.checked ? 'on' : '' }, cb, lab));
+  }
+  body.appendChild(chips);
+  if (d.freq.length < 2)
+    body.appendChild(el('div', { class: 'hint', style: 'color:var(--warn,#b7791f)' },
+      'Only one frequency has a saved field. Add a discrete sweep with “Save fields in this ' +
+      'sweep” to plot against frequency.'));
+
+  const x = d.freq.map(f => f / 1e9), pick = group => SER.filter(r => r[2] === group && antState.show[r[0]])
+    .map(r => ({ label: r[1], y: d.series[r[0]].map(v => v == null ? NaN : v) }));
+  const gainS = pick('gain'), effS = pick('pct'), dbS = pick('db');
+  if (gainS.length) body.appendChild(el('div', { class: 'chart-wrap' },
+    chart(x, gainS, 'Frequency [GHz]', 'Gain / directivity [dBi]',
+      { xUnit: ' GHz', yUnit: ' dBi', state: plotState('ant:gain'), onChange: captureResult })));
+  if (effS.length) body.appendChild(el('div', { class: 'chart-wrap' },
+    chart(x, effS, 'Frequency [GHz]', 'Efficiency [%]',
+      { xUnit: ' GHz', yUnit: ' %', state: plotState('ant:eff'), onChange: captureResult })));
+  if (dbS.length) body.appendChild(el('div', { class: 'chart-wrap' },
+    chart(x, dbS.map(q => ({ label: '|S11|', y: q.y })), 'Frequency [GHz]', '|S11| [dB]',
+      { xUnit: ' GHz', yUnit: ' dB', state: plotState('ant:s11'), onChange: captureResult })));
+
+  const t = el('table', { class: 'grid' });
+  t.appendChild(el('tr', {}, ...['Freq [GHz]', 'D [dBi]', 'Gain [dBi]', 'Realized [dBi]', 'Eff [%]',
+    'Total eff [%]', '|S11| [dB]', 'θ [°]', 'φ [°]'].map(h => el('th', {}, h))));
+  const f2 = (v, n = 2) => v == null ? '—' : v.toFixed(n);
+  d.freq.forEach((f, i) => t.appendChild(el('tr', {}, el('td', { class: 'num' }, (f / 1e9).toFixed(5)),
+    ...['directivity', 'gain', 'realized'].map(k => el('td', { class: 'num' }, f2(d.series[k][i]))),
+    el('td', { class: 'num' }, f2(d.series.efficiency[i], 1)), el('td', { class: 'num' }, f2(d.series.totalEfficiency[i], 1)),
+    el('td', { class: 'num' }, f2(d.series.s11[i])), el('td', { class: 'num' }, f2(d.series.theta[i], 0)),
+    el('td', { class: 'num' }, f2(d.series.phi[i], 0)))));
+  body.appendChild(el('details', { class: 'data-table', open: true }, el('summary', {}, 'Data table'), t));
+  captureResult();
 }
 
 let ffState = { excitation: 0, freq: null, mode: 'polar', comp: 'total',
@@ -5860,8 +6221,16 @@ async function boot() {
     }
   }, true);
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable || DIALOG_STACK.length) return;
+    // New Line (port polarity) hides its dialog but the dialog is still on the
+    // stack: the keys must reach the picker, not be swallowed because of it
+    const picking = MEASURE_PICK && MEASURE_PICK.mode === 'portline';
+    if (picking && e.target.tagName === 'INPUT') return;      // typing in the panel
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable || (DIALOG_STACK.length && !picking)) return;
     if (MEASURE_PICK && e.key === 'Escape') { cancelMeasurePick(); return; }
+    if (MEASURE_PICK && MEASURE_PICK.mode === 'portline' && e.key === 'Tab' && PLP) {
+      e.preventDefault();
+      const f = $('#plp-' + (PLP.idx ? 'g' : 's') + 'x'); f && (f.focus(), f.select()); PLP.typing = true; return;
+    }
     if (PORTPICK) {
       if (e.key === 'Escape') { cancelPortPick(); return; }
       if (e.key === 'Enter') { e.preventDefault(); commitPortPick(); return; }
@@ -6049,6 +6418,16 @@ async function dlgResize() {
 
 
 let MEASURE_PICK = null;
+/* An arrow a -> b as one polyline (shaft, then two barbs at b). */
+function arrowStrip(a, b) {
+  const d = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], L = Math.hypot(...d) || 1, u = d.map(v => v / L);
+  const ax = u.map(Math.abs), r = ax[0] <= ax[1] && ax[0] <= ax[2] ? [1,0,0] : ax[1] <= ax[2] ? [0,1,0] : [0,0,1];
+  let sd = [u[1]*r[2]-u[2]*r[1], u[2]*r[0]-u[0]*r[2], u[0]*r[1]-u[1]*r[0]];
+  const sl = Math.hypot(...sd) || 1; sd = sd.map(v => v / sl);
+  const h = 0.28 * L, w = 0.12 * L, back = [b[0]-u[0]*h, b[1]-u[1]*h, b[2]-u[2]*h];
+  return [a, b, back.map((v,i) => v + sd[i]*w), b, back.map((v,i) => v - sd[i]*w)];
+}
+
 function startMeasurePick(mode) {
   if (!VP) return toastError('3-D viewport is unavailable.');
   if (DRAW) cancelPointDraw();
@@ -6057,7 +6436,9 @@ function startMeasurePick(mode) {
   $('#vp-hint').textContent = 'Measure '+mode+': click '+(mode==='distance'?'2':'3')+' points · vertex snap within 12 px · Esc cancels';
 }
 function cancelMeasurePick() {
+  const r = MEASURE_PICK && MEASURE_PICK.restore;
   MEASURE_PICK=null; VP && VP.setDraft(null);VP && VP.setHover(null);
+  r && r();                                 // bring a hidden dialog back
   $('#vp-hint').textContent='click select · drag rotate · wheel zoom';
 }
 function measurementHit(px,py) {
@@ -6070,19 +6451,31 @@ function measurementHit(px,py) {
 function measurePickHover(px,py) {
   if (!MEASURE_PICK) return;
   const point=measurementHit(px,py);
+  if (MEASURE_PICK.mode==='portline') { if (point) portLineHover(point); return; }
   if (point && MEASURE_PICK.points.length) VP.setDraft([...MEASURE_PICK.points,point]);
 }
 function measurePickClick(px,py) {
   const point=measurementHit(px,py); if (!point) return true;
   if(MEASURE_PICK.points.some(p=>Math.hypot(...p.map((v,i)=>v-point[i]))<1e-12)){toastError('Choose a different point.');return true;}
   MEASURE_PICK.points.push(point);VP.setPointSelection(MEASURE_PICK.points);
-  const n=MEASURE_PICK.mode==='distance'?2:3;
+  if (MEASURE_PICK.mode==='portline') portLineClicked(point);
+  const n=(MEASURE_PICK.mode==='distance'||MEASURE_PICK.mode==='portline')?2:3;
   if (MEASURE_PICK.points.length<n) {
-    VP.setDraft(MEASURE_PICK.points);
-    $('#vp-hint').textContent='Measure: '+MEASURE_PICK.points.length+'/'+n+' points selected · Esc cancels';
+    VP.setDraft(MEASURE_PICK.mode==='portline' ? null : MEASURE_PICK.points);
+    $('#vp-hint').textContent=MEASURE_PICK.mode==='portline'
+      ? 'Port line: now click the GROUND end · Tab types coordinates · Esc cancels'
+      : 'Measure: '+MEASURE_PICK.points.length+'/'+n+' points selected · Esc cancels';
     return true;
   }
-  const {mode,points}=MEASURE_PICK;cancelMeasurePick();
+  const {mode,points,onDone,restore}=MEASURE_PICK;
+  if (mode==='portline') {                 // hand the two points back to the dialog
+    MEASURE_PICK=null; VP.setHover(null);
+    $('#vp-hint').textContent='click select · drag rotate · wheel zoom';
+    restore && restore();
+    onDone && onDone(points);
+    return true;
+  }
+  cancelMeasurePick();
   showPointMeasurement(mode,points);
 
   return true;
