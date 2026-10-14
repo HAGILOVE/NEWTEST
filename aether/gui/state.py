@@ -402,9 +402,17 @@ class Session:
                 self.job.done = True
                 self.job.finished = time.time()
                 self.job.stage = "complete"
-            self.messages.add(
-                f"Analysis complete in {self.job.elapsed:.1f} s "
-                f"({sol.sparams.n_freq} frequency points).", "info", "analysis")
+            if sol.modes:
+                self.messages.add(
+                    f"Analysis complete in {self.job.elapsed:.1f} s "
+                    f"({len(sol.modes)} eigenmode(s): "
+                    + ", ".join(f"{m.f / 1e9:.4f} GHz" for m in sol.modes[:6])
+                    + ").", "info", "analysis")
+            else:
+                self.messages.add(
+                    f"Analysis complete in {self.job.elapsed:.1f} s "
+                    f"({sol.sparams.n_freq} frequency points).", "info",
+                    "analysis")
             for si in sol.sweep_info:
                 if si.get("requested", "discrete") == "discrete":
                     continue

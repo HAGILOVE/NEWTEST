@@ -924,10 +924,32 @@ function dlgExcitation(kind) {
 }
 
 function dlgSetup() {
+  const eigen = STATE.design?.solutionType === 'eigenmode';
   const body = el('div');
   body.appendChild(field('Name', inp('su-name', '', 'text',
     { placeholder: 'auto' })));
   autoName('su-name', 'setup');
+  if (eigen) {
+    body.appendChild(el('fieldset', {}, el('legend', {}, 'Eigenmode search'),
+      field('Number of modes', inp('su-nm', '3', 'number', { min: 1, max: 50 })),
+      field('Minimum frequency', inp('su-fmin', '0Hz')),
+      field('Maximum Δf per pass', inp('su-df', '0.02', 'number',
+        { step: '0.001' }))));
+    body.appendChild(field('Mesh seed frequency', inp('su-f', '10GHz')));
+    body.appendChild(el('fieldset', {}, el('legend', {}, 'Adaptive solutions'),
+      field('Maximum passes', inp('su-mp', '6', 'number', { min: 1, max: 30 })),
+      field('Basis order', sel('su-bo', [[1, '1st order (Whitney, 6 DOF/tet)'],
+        [2, '2nd order (20 DOF/tet)']], 2))));
+    body.appendChild(el('div', { class: 'hint' },
+      'Finds the lowest resonances above the minimum frequency (0 = from the ' +
+      'bottom) and their Q. Passes refine the mesh until no mode moves by more ' +
+      'than Δf. Open (radiation) boundaries are not supported here.'));
+    return dialog({ title: 'Add Eigenmode Setup', body, ok: 'OK', onOk: () =>
+      guard(() => rpc('analysis.addSetup', { name: gv('su-name'),
+        frequency: gv('su-f'), maxPasses: gn('su-mp'), deltaS: 0.02,
+        basisOrder: parseInt(gv('su-bo')), nModes: gn('su-nm'),
+        minFrequency: gv('su-fmin'), deltaF: gn('su-df') })) });
+  }
   body.appendChild(field('Solution frequency', inp('su-f', '10GHz')));
   body.appendChild(el('fieldset', {}, el('legend', {}, 'Adaptive solutions'),
     field('Maximum passes', inp('su-mp', '6', 'number', { min: 1, max: 30 })),
@@ -943,6 +965,8 @@ function dlgSetup() {
 }
 
 function dlgSweep(setupName) {
+  if (STATE.design?.solutionType === 'eigenmode')
+    return toastError('An eigenmode setup has no frequency sweep — it solves for the resonances');
   const setups = (STATE.design?.setups || []).map(s => s.name);
   if (!setups.length) return toastError('Add a solution setup first');
   const body = el('div');
@@ -1405,6 +1429,8 @@ const MENUS = [
   ['Project', [
     ['Insert HFSS Design', () => guard(() => rpc('project.insertDesign')
       .then(() => refreshGeometry(true)))],
+    ['Insert HFSS Eigenmode Design', () => guard(() => rpc('project.insertDesign',
+      { solutionType: 'eigenmode' }).then(() => refreshGeometry(true)))],
     ['Rename Design…', () => STATE?.design && dlgRenameDesign(STATE.design.name),
       '', () => !!STATE?.design],
     ['Delete Design', () => guard(async () => {
@@ -1447,6 +1473,7 @@ const MENUS = [
   ['Results', [
     ['Create Modal S-Parameter Report', () => openReport('sparam')],
     ['Port Modes Table', () => openReport('modes')],
+    ['Eigenmode Data', () => openReport('eigen')],
     ['Convergence Table', () => openReport('convergence')],
     null,
     ['Show Boundaries and Ports', toggleAssignments],
@@ -1532,6 +1559,7 @@ const RIBBON = {
   Results: [
     ['Reports', [['i-report', 'S-Parameters', () => openReport('sparam')],
       ['i-report', 'Port Modes', () => openReport('modes')],
+      ['i-report', 'Eigenmodes', () => openReport('eigen')],
       ['i-report', 'Convergence', () => openReport('convergence')]]],
     ['Fields', [['i-field', 'Field Overlay', () => showField(true)],
       ['i-mesh', 'Mesh View', () => showMesh(true)]]],
@@ -2117,7 +2145,22 @@ function renderProps() {
       const f = inp('', fmtHz(st.frequency));
       f.onchange = () => guard(() => rpc('analysis.editSetup',
         { name: st.name, frequency: f.value }));
-      row('Solution frequency', f);
+      row(d.solutionType === 'eigenmode' ? 'Mesh seed frequency'
+        : 'Solution frequency', f);
+      if (d.solutionType === 'eigenmode') {
+        const nm = inp('', st.nModes, 'number', { min: 1, max: 50 });
+        nm.onchange = () => guard(() => rpc('analysis.editSetup',
+          { name: st.name, nModes: nm.value }));
+        row('Number of modes', nm);
+        const fm = inp('', fmtHz(st.minFrequency));
+        fm.onchange = () => guard(() => rpc('analysis.editSetup',
+          { name: st.name, minFrequency: fm.value }));
+        row('Minimum frequency', fm);
+        const df = inp('', st.deltaF, 'number', { step: '0.001' });
+        df.onchange = () => guard(() => rpc('analysis.editSetup',
+          { name: st.name, deltaF: df.value }));
+        row('Maximum Δf', df);
+      }
       const mp = inp('', st.maxPasses, 'number');
       mp.onchange = () => guard(() => rpc('analysis.editSetup',
         { name: st.name, maxPasses: mp.value }));
@@ -2403,7 +2446,7 @@ async function showMesh(on) {
 }
 
 let fieldOn = false;
-async function showField(on) {
+async function showField(on, opts) {
   if (!on) {
     fieldOn = false; $('#vt-field').classList.remove('on');
     $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
@@ -2411,7 +2454,7 @@ async function showField(on) {
     return;
   }
   await guard(async () => {
-    const f = await rpc('view.field');
+    const f = await rpc('view.field', opts || {});
     f.name = '__field__'; f.color = '#888888'; f.transparency = 0;
     VP.setObjects([f], VP.bbox);
     fieldOn = true;
@@ -3903,6 +3946,8 @@ function ensurePage(id, title) {
 /* ------------------------------------------------------------- reports */
 async function openReport(kind) {
   if (!STATE.hasSolution) return toastError('No solution — run Analyze first');
+  if (kind === 'eigen' || (STATE.design?.solutionType === 'eigenmode' &&
+      (kind === 'sparam' || kind === 'modes'))) return reportEigen();
   if (kind === 'sparam') return reportSParam();
   if (kind === 'modes') return reportModes();
   if (kind === 'convergence') return reportConvergence();
@@ -3973,6 +4018,50 @@ async function reportSParam() {
       ...data.traces.map(t => el('td', { class: 'num' }, t.y[k].toFixed(4)))));
   }
   body.appendChild(el('div', { style: 'margin-top:12px' }, tbl));
+}
+
+async function reportEigen() {
+  const page = ensurePage('rep-e', 'Eigenmode Data');
+  const d = await rpc('results.eigenModes');
+  const wrap = el('div', { class: 'report' });
+  const body = el('div', { class: 'report-body' });
+  wrap.append(el('div', { class: 'report-toolbar' },
+    el('span', {}, `${d.rows.length} resonance(s) · ` +
+      `${d.passes.length} adaptive pass(es)`)), body);
+  page.appendChild(wrap);
+  const t = el('table', { class: 'grid' });
+  t.appendChild(el('tr', {}, ...['Mode', 'Frequency [GHz]', 'Q',
+    'Im f [MHz]', 'Converged', 'Field'].map(h => el('th', {}, h))));
+  for (const r of d.rows)
+    t.appendChild(el('tr', {}, el('td', { class: 'num' }, r.mode),
+      el('td', { class: 'num' }, (r.freq / 1e9).toFixed(6)),
+      el('td', { class: 'num' }, r.q == null ? '∞ (lossless)' : r.q.toPrecision(5)),
+      el('td', { class: 'num' }, (r.fimag / 1e6).toExponential(3)),
+      el('td', { style: r.converged ? '' : 'color:var(--err)' },
+        r.converged ? 'yes' : 'no (residual ' + r.residual.toExponential(1) + ')'),
+      el('td', {}, el('button', { class: 'rbtn',
+        style: 'flex-direction:row;gap:6px',
+        onclick: () => { selectPage('modeler');
+          showField(true, { excitation: r.mode - 1, freq: r.freq }); } },
+        '|E| overlay'))));
+  body.appendChild(t);
+  const ds = d.passes.filter(c => c.delta_f != null);
+  if (d.passes.length) {
+    const c = el('table', { class: 'grid', style: 'margin-top:14px' });
+    c.appendChild(el('tr', {}, ...['Pass', 'Tetrahedra', 'DOF',
+      'f₁ [GHz]', 'max Δf'].map(h => el('th', {}, h))));
+    for (const p of d.passes)
+      c.appendChild(el('tr', {}, el('td', { class: 'num' }, p.pass),
+        el('td', { class: 'num' }, p.tets.toLocaleString()),
+        el('td', { class: 'num' }, p.dof.toLocaleString()),
+        el('td', { class: 'num' }, (p.f0 / 1e9).toFixed(6)),
+        el('td', { class: 'num' }, p.delta_f == null ? '—' : p.delta_f.toExponential(2))));
+    body.appendChild(c);
+  }
+  if (ds.length > 1)
+    body.appendChild(el('div', { class: 'chart-wrap', style: 'margin-top:12px' },
+      chart(ds.map(c => c.pass), [{ label: 'max Δf', y: ds.map(c => c.delta_f) }],
+        'Adaptive pass', 'max relative Δf')));
 }
 
 async function reportModes() {

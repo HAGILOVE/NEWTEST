@@ -163,6 +163,8 @@ def _design_json(s: Session) -> Optional[dict]:
             "name": st.name, "frequency": st.frequency,
             "maxPasses": st.max_passes, "deltaS": st.delta_s,
             "basisOrder": st.basis_order,
+            "nModes": st.n_modes, "minFrequency": st.min_frequency,
+            "deltaF": st.delta_f,
             "sweeps": [{"name": sw.name, "kind": sw.kind,
                         "start": sw.start, "stop": sw.stop,
                         "count": sw.count, "spacing": sw.spacing,
@@ -1742,13 +1744,20 @@ def _del_port(s: Session, name: str = "", **_):
 @command("analysis.addSetup")
 def _add_setup(s: Session, name: str = "", frequency: Any = "10GHz",
                maxPasses: int = 6, deltaS: float = 0.02,
-               basisOrder: int = 1, **_):
+               basisOrder: int = 1, nModes: Any = None,
+               minFrequency: Any = None, deltaF: Any = None, **_):
     d = s.require_design()
     nm = (naming.unique_name([x.name for x in d.setups], name) if name
           else naming.suggest_setup(d))
     st = d.add_setup(nm, frequency,
                      max_passes=int(maxPasses), delta_s=float(deltaS),
                      basis_order=int(basisOrder))
+    if nModes not in (None, ""):
+        st.n_modes = int(nModes)
+    if minFrequency not in (None, ""):
+        st.min_frequency = to_si(minFrequency, "frequency")
+    if deltaF not in (None, ""):
+        st.delta_f = float(deltaF)
     s.dirty = True
     s.messages.add(f"Added solution setup {st.name!r} at "
                    f"{st.frequency/1e9:g} GHz.", "info", "analysis")
@@ -1767,6 +1776,12 @@ def _edit_setup(s: Session, name: str = "", **kw):
         st.delta_s = float(kw["deltaS"])
     if "basisOrder" in kw:
         st.basis_order = int(kw["basisOrder"])
+    if "nModes" in kw:
+        st.n_modes = int(kw["nModes"])
+    if "minFrequency" in kw:
+        st.min_frequency = to_si(kw["minFrequency"], "frequency")
+    if "deltaF" in kw:
+        st.delta_f = float(kw["deltaF"])
     s.dirty = True
     return {"ok": True}
 
@@ -2342,6 +2357,9 @@ def _report(s: Session, traces: Optional[List[dict]] = None,
             form: str = "db", **_):
     if s.solution is None:
         raise RuntimeError("no solution yet")
+    if s.solution.sparams is None:
+        raise RuntimeError("an eigenmode solution has no S-parameters; "
+                           "open Results > Eigenmode Data")
     sp = s.solution.sparams
     names = sp.port_names
     traces = traces or ([{"i": 1, "j": 1}, {"i": 2, "j": 1}]
@@ -2411,6 +2429,22 @@ def _port_modes(s: Session, freq: Optional[float] = None, **_):
                      "propagating": True})
     return {"freq": float(f0), "rows": rows,
             "frequencies": [float(f) for f in sorted(sol.ports)]}
+
+
+@command("results.eigenModes")
+def _eigen_modes(s: Session, **_):
+    """Resonances of an eigenmode solution (frequency, Q, convergence)."""
+    if s.solution is None or not s.solution.modes:
+        raise RuntimeError("no eigenmode solution — analyse an eigenmode "
+                           "design first")
+    rows = []
+    for m in s.solution.modes:
+        rows.append({"mode": m.index + 1, "freq": m.f,
+                     "fimag": float(m.frequency.imag),
+                     "q": None if math.isinf(m.q) else float(m.q),
+                     "converged": bool(m.converged),
+                     "residual": float(m.residual)})
+    return {"rows": rows, "passes": s.solution.convergence}
 
 
 @command("results.convergence")

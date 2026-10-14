@@ -179,7 +179,7 @@ def _write_design(root: AedtBlock, d) -> AedtBlock:
     an = blk.add_block("AnalysisSetup")
     ss = an.add_block("SolveSetups")
     for st in d.setups:
-        _write_setup(ss, st)
+        _write_setup(ss, st, eigen=(d.solution_type == "eigenmode"))
     return blk
 
 
@@ -462,9 +462,9 @@ def write_selector(parent: AedtBlock, sel, d) -> AedtBlock:
     return b
 
 
-def _write_setup(parent: AedtBlock, st) -> AedtBlock:
+def _write_setup(parent: AedtBlock, st, eigen: bool = False) -> AedtBlock:
     blk = parent.add_block(st.name)
-    blk.add_prop("SetupType", "HfssDriven")
+    blk.add_prop("SetupType", "HfssEigen" if eigen else "HfssDriven")
     blk.add_prop("Name", st.name)
     blk.add_prop("IsEnabled", True)
     props = blk.add_block("SolveSetupProps")
@@ -475,7 +475,12 @@ def _write_setup(parent: AedtBlock, st) -> AedtBlock:
     props.add_prop("MinimumConvergedPasses", 1)
     props.add_prop("PercentRefinement", 30)
     props.add_prop("BasisOrder", int(st.basis_order))
-    for sw in st.sweeps:
+    if eigen:
+        props.add_prop("NumModes", int(st.n_modes))
+        props.add_prop("MinimumFrequency", _freq(st.min_frequency))
+        props.add_prop("MaxDeltaFreq", float(st.delta_f) * 100.0)
+        props.add_prop("ConvergeOnRealFreq", True)
+    for sw in ([] if eigen else st.sweeps):
         s = blk.add_block("Sweep")
         s.add_prop("Name", sw.name)
         s.add_prop("IsEnabled", True)

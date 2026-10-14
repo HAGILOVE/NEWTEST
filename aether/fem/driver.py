@@ -45,6 +45,8 @@ class Solution:
     solved: Optional[np.ndarray] = None
     #: one entry per sweep: strategy used, solves spent, tolerance, time
     sweep_info: List[dict] = field(default_factory=list)
+    #: eigenmode designs: the resonances found (``aether.fem.eigen.EigenMode``)
+    modes: List[object] = field(default_factory=list)
 
     # -- convenience --------------------------------------------------
     @property
@@ -78,6 +80,9 @@ class Solution:
                            f"{si['solved']} full solve(s) for "
                            f"{si['points']} point(s), "
                            f"{si['seconds']:.2f} s")
+        for m in self.modes:
+            out.append(f"  mode {m.index + 1}: f = {m.f / 1e9:.6f} GHz   "
+                       f"Q = {'inf' if math.isinf(m.q) else f'{m.q:.5g}'}")
         if self.sparams is not None:
             out.append("  " + self.sparams.summary().replace("\n", "\n  "))
         return "\n".join(out)
@@ -297,6 +302,11 @@ def solve_design(design, setup: Optional[str] = None,
     from .control import checkpoint
     checkpoint(cancel)
     t0 = time.perf_counter()
+    if design.solution_type == "eigenmode":
+        from .eigen import solve_eigenmode
+        return solve_eigenmode(design, setup=setup, backend=backend,
+                               adaptive=adaptive, progress=progress,
+                               cancel=cancel)
     errs = design.validate()
     if errs:
         raise ValueError("model validation failed:\n  - " + "\n  - ".join(errs))

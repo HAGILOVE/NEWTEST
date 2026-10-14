@@ -93,6 +93,38 @@ def write_pos_field(path: str, mesh, node_h: np.ndarray) -> str:
 # --------------------------------------------------------------------------
 
 
+def remesh_from_error(design, mesh, err: np.ndarray, freq: float,
+                      backend: str = "auto", pass_no: int = 1):
+    """
+    A fresh mesh whose element size follows the per-element error *err*.
+
+    The mesher is handed a background size field; if that route is
+    unavailable the whole model is remeshed uniformly finer instead.  The new
+    mesh is also stored on ``design.mesh``.
+    """
+    from ..mesh.generator import generate
+    cfg = design.config.adaptive
+    size_file = None
+    try:
+        node_h = size_field_from_error(mesh, err, cfg.refinement_fraction)
+        fd, size_file = tempfile.mkstemp(suffix=".pos")
+        os.close(fd)
+        write_pos_field(size_file, mesh, node_h)
+        new_mesh = generate(design, freq, backend=backend, size_field=size_file)
+    except Exception as exc:                           # pragma: no cover
+        log.warning("size-field remesh unavailable (%s); "
+                    "falling back to uniform refinement", exc)
+        from ..mesh.generator import target_size
+        h, _ = target_size(design, freq)
+        new_mesh = generate(design, freq, backend=backend,
+                            size=h * (0.7 ** pass_no))
+    finally:
+        if size_file and os.path.exists(size_file):
+            os.unlink(size_file)
+    design.mesh = new_mesh
+    return new_mesh
+
+
 def adaptive_solve(design, setup, backend: str = "auto",
                    enabled: bool = True, cancel=None) -> Tuple:
     """
@@ -157,25 +189,7 @@ def adaptive_solve(design, setup, backend: str = "auto",
         eps, mu = _material_maps(design, mesh, f0)
         x = flds[0].x
         err = element_error(mesh, dm, x, f0, lambda r: mu.get(r, 1.0 + 0j))
-        node_h = size_field_from_error(mesh, err, cfg.refinement_fraction)
-        new_mesh = None
-        try:
-            fd, size_file = tempfile.mkstemp(suffix=".pos")
-            os.close(fd)
-            write_pos_field(size_file, mesh, node_h)
-            new_mesh = generate(design, f0, backend=backend, size_field=size_file)
-        except Exception as exc:                       # pragma: no cover
-            log.warning("size-field remesh unavailable (%s); "
-                        "falling back to uniform refinement", exc)
-            from ..mesh.generator import target_size
-            h, _ = target_size(design, f0)
-            new_mesh = generate(design, f0, backend=backend,
-                                size=h * (0.7 ** p))
-        finally:
-            if size_file and os.path.exists(size_file):
-                os.unlink(size_file)
-        mesh = new_mesh
-        design.mesh = mesh
+        mesh = remesh_from_error(design, mesh, err, f0, backend, p)
         dm = DofMap(mesh, order)
         with timed(log, f"re-assembling pass {p + 1}"):
             ops = assemble_regions(mesh, order, dm)
@@ -184,4 +198,5 @@ def adaptive_solve(design, setup, backend: str = "auto",
     return mesh, dm, ops, bts, history
 
 
-__all__ = ["adaptive_solve", "element_error", "size_field_from_error"]
+__all__ = ["adaptive_solve", "element_error", "size_field_from_error",
+           "remesh_from_error"]

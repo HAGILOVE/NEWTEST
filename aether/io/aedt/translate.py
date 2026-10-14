@@ -1188,10 +1188,21 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
                     report: ImportReport) -> None:
     props = s.block("SolveSetupProps") or s
     freq = props.get("Frequency", props.get("SolutionFrequency", "1GHz"))
+    eigen = (props.get("NumModes") is not None
+             or "eigen" in str(s.get("SetupType", "")).lower())
     try:
         f = float(evaluate(freq, sc, "frequency"))
     except Exception:
         f = 1e9
+    if eigen and props.get("Frequency") is None:
+        # an HFSS eigenmode setup has no solution frequency; the minimum
+        # frequency is the only frequency scale it carries
+        try:
+            fmin = float(evaluate(props.get("MinimumFrequency", "0Hz"), sc,
+                                  "frequency"))
+        except Exception:
+            fmin = 0.0
+        f = 2.0 * fmin if fmin > 0 else f
     name = str(s.get("Name", s.name)).strip("'")
     st = design.add_setup(name, f,
                           max_passes=int(props.get("MaximumPasses", 6) or 6),
@@ -1211,6 +1222,17 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
             "has no equivalent here; first-order elements are used")
         order = 1
     st.basis_order = order
+    if eigen:
+        try:
+            st.n_modes = max(1, int(props.get("NumModes", 3) or 3))
+            st.min_frequency = float(evaluate(props.get("MinimumFrequency",
+                                                        "0Hz"), sc, "frequency"))
+            st.delta_f = min(max(float(props.get("MaxDeltaFreq", 2.0)) / 100.0,
+                                 1e-4), 0.5)
+        except Exception:
+            report.warnings.append(
+                f"setup {name!r}: eigenmode settings could not be read; "
+                "defaults are used")
     report.setups.append(name)
     for sw in s.find("Sweep") + s.find("SweepSetupProps"):
         rtype = str(sw.get("RangeType", "LinearCount") or "").strip("'")

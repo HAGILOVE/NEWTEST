@@ -305,7 +305,7 @@ def test_metrics_band_crossings_and_group_delay():
 
 def test_unsupported_physics_blocked_before_solve():
     s = session()
-    s.design.solution_type = "eigenmode"
+    s.design.solution_type = "driven_terminal"
     r = dispatch(s, "analysis.diagnostics")
     assert not r["ok"] and any("driven_modal" in e for e in r["errors"])
     with pytest.raises(ValueError):

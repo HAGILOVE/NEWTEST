@@ -240,6 +240,12 @@ class Setup:
     min_passes: int = 1
     basis_order: int = 1
     sweeps: List[FrequencySweep] = field(default_factory=list)
+    #: eigenmode designs: how many modes to find above ``min_frequency`` [Hz]
+    #: and the largest relative frequency change between passes that counts
+    #: as converged (HFSS: "Maximum Delta Frequency Per Pass")
+    n_modes: int = 3
+    min_frequency: float = 0.0
+    delta_f: float = 0.02
 
     def add_sweep(self, name="Sweep1", start="1GHz", stop="10GHz", count=101,
                   kind="discrete", spacing="linear", points=None,

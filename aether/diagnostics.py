@@ -7,9 +7,10 @@ import numpy as np
 
 def additional_errors(d):
     errs = import_errors(d)
-    if d.solution_type != "driven_modal":
+    if d.solution_type not in ("driven_modal", "eigenmode"):
         errs.append(
-            f"{d.solution_type}: only driven_modal is implemented by the current solver"
+            f"{d.solution_type}: only driven_modal and eigenmode are implemented "
+            "by the current solver"
         )
     if d.config.time_convention != "ejwt":
         errs.append("Only exp(+jωt) time convention is implemented")
@@ -26,6 +27,15 @@ def additional_errors(d):
     for b in d.boundaries:
         if b.btype not in supported:
             errs.append(f"{b.name}: boundary {b.btype} is not implemented")
+        elif d.solution_type == "eigenmode" and b.btype in ("radiation",
+                                                           "lumped_rlc"):
+            errs.append(
+                f"{b.name}: {b.btype} boundaries are not supported by the "
+                "eigenmode solver (the first-order absorbing term makes the "
+                "problem nonlinear in frequency and the modes are not "
+                "reliable). Use PEC, finite-conductivity or surface-impedance "
+                "walls, or find the open structure's response with a driven "
+                "solution.")
     allnames = [o.name for o in d.solids + d.sheets]
     if len(set(allnames)) != len(allnames):
         errs.append("Object and sheet names must be unique")
@@ -58,6 +68,13 @@ def additional_errors(d):
             errs.append(f"{st.name}: require 1 ≤ minimum passes ≤ maximum passes ≤ 100")
         if not math.isfinite(st.delta_s) or not 0 < st.delta_s < 1:
             errs.append(f"{st.name}: require 0 < ΔS < 1")
+        if d.solution_type == "eigenmode":
+            if not 1 <= int(st.n_modes) <= 50:
+                errs.append(f"{st.name}: number of modes must be 1..50")
+            if not math.isfinite(st.min_frequency) or st.min_frequency < 0:
+                errs.append(f"{st.name}: minimum frequency must be >= 0")
+            if not math.isfinite(st.delta_f) or not 0 < st.delta_f < 1:
+                errs.append(f"{st.name}: require 0 < max delta frequency < 1")
         if len(set(s.name for s in st.sweeps)) != len(st.sweeps):
             errs.append(f"{st.name}: duplicate sweep names")
         for sw in st.sweeps:
@@ -136,7 +153,7 @@ def report(d):
             "basisOrders": [1, 2],
             "adaptive": True,
             "parameterSweep": True,
-            "eigenmode": False,
+            "eigenmode": True,
             "periodicFloquet": False,
             "pml": False,
             "hfssNativeFullCompatibility": False,
