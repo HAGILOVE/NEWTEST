@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aether-em"
-version = "1.7.9"
+version = "1.8.0"
 description = "3-D full-wave electromagnetic field solver (FEM, Nedelec edge elements) with HFSS .aedt interoperability"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,7 +35,6 @@ dependencies = [
 [project.optional-dependencies]
 mesh = ["gmsh>=4.11"]            # OpenCASCADE geometry + tetrahedral meshing
 plot = ["matplotlib>=3.7"]
-aedt = ["pyaedt>=0.9"]           # optional bridge to a licensed Ansys install
 dev  = ["pytest>=7.4", "pytest-cov"]
 all  = ["gmsh>=4.11", "matplotlib>=3.7", "pytest>=7.4"]
 
@@ -49,7 +48,7 @@ aether-doctor = "aether._preflight:main"
 include = ["aether*"]
 
 [tool.setuptools.package-data]
-"aether.gui" = ["static/*"]
+"aether.gui" = ["static/*", "vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -383,7 +383,16 @@ async function filePicker(opt) {
   first.filters.forEach((f, i) => filterSel.appendChild(
     el('option', { value: String(i) }, f.label)));
   filterSel.value = '0';
-  filterSel.onchange = () => go(dir, true);
+  filterSel.onchange = () => {
+    if (mode === 'save') {
+      const ext = ((first.filters[parseInt(filterSel.value, 10)] || {}).ext || [])[0];
+      const cur = nameIn.value.trim();
+      // switching "AEDT project" <-> "three.js viewer" retargets the extension
+      if (ext && /\.(aedt|aedtz|html?)$/i.test(cur))
+        nameIn.value = cur.replace(/\.[^.\\/]+$/, ext);
+    }
+    go(dir, true);
+  };
   if (!first.native) sysBtn.style.display = 'none';
   nameIn.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); accept(); }
@@ -1106,23 +1115,71 @@ function saveProject(force) {
   return saveProjectAs();
 }
 
+function exportThreeJsAs() {
+  const cur = STATE.project.path || '';
+  filePicker({
+    mode: 'save', kind: 'html', title: 'Export 3D viewer (three.js)',
+    hint: cur, path: cur ? cur.replace(/[\\/][^\\/]*$/, '') : '',
+    filename: ((STATE.project.name || 'Project1') + '.html'),
+    onPick: path => exportThreeJs(path)
+  });
+}
+
 function saveProjectAs() {
   return new Promise(resolve => {
     let done = false;
     const cur = STATE.project.path || '';
     filePicker({
-      mode: 'save', kind: 'project', title: 'Save Project As',
+      mode: 'save', kind: 'projectsave', title: 'Save As',
       hint: cur,
       path: cur ? cur.replace(/[\\/][^\\/]*$/, '') : '',
       filename: cur.split(/[\\/]/).pop()
         || ((STATE.project.name || 'Project1') + '.aedt'),
       onPick: async (path) => {
         done = true;
+        // the viewer export is a copy for looking at, not the project file:
+        // the project stays unsaved/dirty and keeps its own path
+        if (/\.html?$/i.test(path)) { await exportThreeJs(path); resolve(false); return; }
         const ok = await guard(() => rpc('project.save', { path }));
         resolve(ok !== false);
       },
       onCancel: () => { if (!done) resolve(false); }
     });
+  });
+}
+
+/* Save As ▸ three.js 3D viewer (*.html): one self-contained page with the
+   model and, when a solution is open, its E / H / current / radiation results
+   (complex data, so phase, component and frequency stay live in the page). */
+async function exportThreeJs(path) {
+  const solved = !!STATE.hasSolution;
+  const go = async (opts) => {
+    const r = await guard(() => rpc('export.threejs', Object.assign({ path }, opts)));
+    if (r && r.ok) setStatus(`Saved 3D viewer ${r.path}  (${(r.bytes / 1e6).toFixed(1)} MB)`, 'ok');
+    return r;
+  };
+  if (!solved) return go({ results: false });
+  return new Promise(resolve => {
+    const incl = el('input', { type: 'checkbox', id: 'x3-res', checked: true, style: 'width:auto' });
+    const nf = inp('x3-nf', '6', 'number', { min: 1, max: 40, step: 1 });
+    const ne = inp('x3-ne', '4', 'number', { min: 1, max: 16, step: 1 });
+    const body = el('div', {},
+      el('p', { style: 'margin-top:0' }, 'Writes ', el('b', {}, path.split(/[\\/]/).pop()),
+        ' — one HTML file that opens in any browser, offline.'),
+      field('Include results', incl),
+      field('Max. frequencies', nf), field('Max. excitations', ne),
+      el('div', { class: 'hint' },
+        'E, H, surface current and far field are stored as complex values, so the ' +
+        'viewer can animate any phase and pick |V| / X / Y / Z. More frequencies and ' +
+        'a bigger mesh make a bigger file.'));
+    dialog({ title: 'Export 3D viewer (three.js)', body, ok: 'Export',
+      onOk: async () => {
+        const r = await go({ results: $('#x3-res').checked,
+          maxFreqs: parseInt($('#x3-nf').value || '6', 10),
+          maxExcitations: parseInt($('#x3-ne').value || '4', 10) });
+        resolve(r);
+      },
+      onClose: v => { if (v === undefined || v === null) resolve(false); } });
   });
 }
 
@@ -1421,6 +1478,7 @@ const MENUS = [
     ['Close Project', closeProject, 'Ctrl+W', () => !!STATE?.project?.open],
     null,
     ['Export CAD Geometry…', dlgCadExport, '', () => !!STATE?.project?.open],
+    ['Export 3D Viewer (three.js)…', exportThreeJsAs, '', () => !!STATE?.project?.open],
     ['Export Solution Data…', dlgExport, '', () => !!STATE?.project?.open],
     null,
     ['Exit', exitApp]]],
@@ -1536,9 +1594,14 @@ const MENUS = [
     ['Convergence Table', () => openReport('convergence')],
     null,
     ['Show Boundaries and Ports', toggleAssignments],
+    [() => (VP && VP.showRadiation ? 'Hide' : 'Show') + ' Radiation Boundary', toggleRadiation],
     ['S-Parameter Metrics…', dlgMetrics],
     ['Parameter Study Results…', dlgStudyResults],
-    ['Plot Field Overlay', () => showField(true)],
+    ['Plot Field Overlay…', () => showField(true)],
+    ['E Field  |E|', () => showField(true, { quantity: 'E' })],
+    ['H Field  |H|', () => showField(true, { quantity: 'H' })],
+    ['Surface Current  |Js|', () => showField(true, { quantity: 'J', where: 'surface' })],
+    ['Field on Cut Plane', () => showField(true, { quantity: 'E', where: 'cut' })],
     ['Export…', dlgExport]]],
   ['Tools', [
     ['Design Variables…', dlgVariables],
@@ -1626,7 +1689,9 @@ const RIBBON = {
       ['i-report', 'Eigenmodes', () => openReport('eigen')],
       ['i-report', 'Radiation', () => openReport('farfield')],
       ['i-report', 'Convergence', () => openReport('convergence')]]],
-    ['Fields', [['i-field', 'Field Overlay', () => showField(true)],
+    ['Fields', [['i-field', 'E / H Field', () => showField(true)],
+      ['i-field', 'Surface Current', () => showField(true, { quantity: 'J' })],
+      ['i-field', 'Cut Plane', () => showField(true, { where: 'cut' })],
       ['i-field', '3D Pattern', () => showPattern(true)],
       ['i-mesh', 'Mesh View', () => showMesh(true)]]],
     ['Data', [['i-export', 'Export', dlgExport], ['i-report','Metrics',dlgMetrics]]]
@@ -2448,6 +2513,7 @@ function initViewport() {
     'vt-solid');
   mk('Why is the viewport blank?', 'i-check', () => dlgDisplayReport(),
     'vt-diag');
+  mk('Radiation boundary on/off', 'i-bnd', toggleRadiation, 'vt-rad');
   mk('Boundaries and ports', 'i-bnd', toggleAssignments, 'vt-assign')
     .classList.add('on');
   mk('Mesh overlay', 'i-mesh', () => showMesh(!VP.wire), 'vt-mesh');
@@ -2570,6 +2636,7 @@ function renderAssignLegend() {
   }
   box.style.display = 'block';
   for (const it of ASSIGN_ITEMS) {
+    if (it.type === 'radiation' && !VP.showRadiation) continue;
     box.appendChild(el('div', { class: 'row',
       title: `${it.name} — ${it.type}, ${it.count} triangles`,
       onclick: () => showProps(it.kind === 'boundary' ? 'boundary' : 'port',
@@ -2577,6 +2644,13 @@ function renderAssignLegend() {
       el('span', { class: 'sw', style: `background:${it.color}` }),
       `${it.name} · ${it.type}`));
   }
+}
+
+function toggleRadiation() {
+  VP.showRadiation = !VP.showRadiation;
+  $('#vt-rad') && $('#vt-rad').classList.toggle('on', VP.showRadiation);
+  setStatus('Radiation boundary ' + (VP.showRadiation ? 'shown' : 'hidden'), '');
+  renderAssignLegend();
 }
 
 function toggleAssignments() {
@@ -2598,19 +2672,176 @@ async function showMesh(on) {
 }
 
 let fieldOn = false;
+/* ------------------------------------------------------------- field plots */
+/* What you look at after a solve: E, H and the current flowing on the metal,
+   on the surfaces, on a cut plane, or on chosen objects -- at the peak, or at
+   any instant of the RF cycle (animated, so current can be seen to flow). */
+let FIELD = { quantity: 'E', where: 'surface', axis: 'z', pos: null,
+  excitation: 0, freq: null, instant: false, phase: 0, scale: 'linear',
+  arrows: false, info: null, timer: null, busy: false, comp: 'mag', speed: 1 };
+
 async function showField(on, opts) {
-  if (!on) {
-    fieldOn = false; $('#vt-field').classList.remove('on');
-    $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
-    await refreshGeometry(false);
-    return;
+  if (!on) { closeFieldPanel(); return; }
+  if (opts) {
+    if (opts.excitation != null) FIELD.excitation = opts.excitation;
+    if (opts.freq != null) FIELD.freq = opts.freq;
+    if (opts.quantity) FIELD.quantity = opts.quantity;
+    if (opts.where) FIELD.where = opts.where;
   }
   await guard(async () => {
-    const f = await rpc('view.field', opts || {});
-    f.name = '__field__'; f.color = '#888888'; f.transparency = 0;
-    VP.setObjects([f], VP.bbox);
+    FIELD.info = await rpc('view.fieldInfo');
+    if (!FIELD.info.freqs.includes(FIELD.freq)) FIELD.freq = FIELD.info.freqs[FIELD.info.freqs.length - 1];
+    if (FIELD.pos == null) {
+      const b = FIELD.info.bounds, k = 'xyz'.indexOf(FIELD.axis);
+      FIELD.pos = (b[0][k] + b[1][k]) / 2;
+    }
+    buildFieldPanel();
     fieldOn = true;
-    $('#vt-field').classList.add('on');
+    $('#vt-field') && $('#vt-field').classList.add('on');
+    await plotField();
+  });
+}
+
+function closeFieldPanel() {
+  if (FIELD.timer) { clearInterval(FIELD.timer); FIELD.timer = null; }
+  fieldOn = false;
+  const box = $('#vp-field'); if (box) box.remove();
+  $('#vt-field') && $('#vt-field').classList.remove('on');
+  $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
+  VP && VP.setArrows(null);
+  refreshGeometry(false);
+}
+
+function buildFieldPanel() {
+  let box = $('#vp-field');
+  if (box) box.remove();
+  box = el('div', { id: 'vp-field', class: 'vp-panel' });
+  $('#viewport').appendChild(box);
+  const info = FIELD.info, redraw = () => plotField();
+  box.appendChild(el('h4', {}, 'Field plot',
+    el('button', { class: 'lnk', style: 'float:right', onclick: () => closeFieldPanel() }, '✕')));
+  const row = (label, node) => box.appendChild(el('div', { class: 'row' }, el('label', {}, label), node));
+
+  const q = sel('fp-q', [['E', 'E  electric field'], ['H', 'H  magnetic field'],
+    ['J', 'Js  surface current']].concat(info.radiation ? [['P', 'Far field  (radiation)']] : []),
+    FIELD.quantity);
+  q.onchange = () => { FIELD.quantity = q.value; if (q.value === 'J' && FIELD.where === 'cut') FIELD.where = 'surface';
+    if (q.value === 'J' || q.value === 'P') FIELD.comp = 'mag'; buildFieldPanel(); redraw(); };
+  row('Quantity', q);
+  const isP = FIELD.quantity === 'P';
+  if (!isP) {
+    const w = sel('fp-w', [['surface', FIELD.quantity === 'J' ? 'All conductors' : 'All outer surfaces'],
+      ['objects', 'Selected objects']].concat(FIELD.quantity === 'J' ? [] : [['cut', 'Cut plane']]), FIELD.where);
+    w.onchange = () => { FIELD.where = w.value; buildFieldPanel(); redraw(); };
+    row('Plot on', w);
+  }
+  if (FIELD.quantity === 'E' || FIELD.quantity === 'H') {
+    const cs = sel('fp-comp', [['mag', 'Magnitude |V|'], ['x', 'Component X (signed)'],
+      ['y', 'Component Y (signed)'], ['z', 'Component Z (signed)']], FIELD.comp);
+    cs.onchange = () => { FIELD.comp = cs.value;
+      if (cs.value !== 'mag') { FIELD.instant = true; if (FIELD.scale === 'db') FIELD.scale = 'linear'; }
+      buildFieldPanel(); redraw(); };
+    row('Component', cs);
+  }
+  if (FIELD.where === 'cut' && FIELD.quantity !== 'P') {
+    const ax = sel('fp-ax', [['x', 'X'], ['y', 'Y'], ['z', 'Z']], FIELD.axis);
+    ax.onchange = () => { FIELD.axis = ax.value;
+      const b = FIELD.info.bounds, k = 'xyz'.indexOf(FIELD.axis);
+      FIELD.pos = (b[0][k] + b[1][k]) / 2; buildFieldPanel(); redraw(); };
+    row('Plane normal', ax);
+    const k = 'xyz'.indexOf(FIELD.axis), lo = info.bounds[0][k], hi = info.bounds[1][k];
+    const sl = el('input', { type: 'range', min: String(lo), max: String(hi),
+      step: String((hi - lo) / 200), value: String(FIELD.pos), style: 'width:140px' });
+    const sv = el('span', {}, fmtLen(FIELD.pos, U()));
+    sl.oninput = () => { FIELD.pos = parseFloat(sl.value); sv.textContent = fmtLen(FIELD.pos, U()); };
+    sl.onchange = redraw;
+    row('Position', el('div', { style: 'display:flex;gap:6px;align-items:center' }, sl, sv));
+  }
+  if (info.excitations.length > 1) {
+    const ex = sel('fp-ex', info.excitations.map((n, i) => [i, n]), FIELD.excitation);
+    ex.onchange = () => { FIELD.excitation = parseInt(ex.value); redraw(); };
+    row(info.eigen ? 'Mode' : 'Excitation', ex);
+  }
+  {
+    const fr = sel('fp-f', info.freqs.map(f => [f, fmtHz(f)]), FIELD.freq);
+    fr.onchange = () => { FIELD.freq = parseFloat(fr.value); redraw(); };
+    if (info.freqs.length < 2) fr.disabled = true;
+    row('Frequency', fr);
+    if (info.freqs.length < 2)
+      box.appendChild(el('div', { class: 'note' },
+        'Fields are saved at solved frequencies only. Enable "Save fields in this sweep" ' +
+        'on a discrete sweep to be able to pick several.'));
+  }
+  const inst = el('input', { type: 'checkbox', id: 'fp-inst', style: 'width:auto' });
+  inst.checked = FIELD.instant;
+  inst.onchange = () => { FIELD.instant = inst.checked; if (!inst.checked) stopFieldAnim(); redraw(); };
+  row('Instantaneous', inst);
+  const ph = el('input', { type: 'range', min: '0', max: '360', step: '10', id: 'fp-ph',
+    value: String(FIELD.phase), style: 'width:120px' });
+  const pv = el('span', { id: 'fp-phv' }, FIELD.phase + '°');
+  ph.oninput = () => { FIELD.phase = parseFloat(ph.value); pv.textContent = FIELD.phase + '°';
+    FIELD.instant = true; inst.checked = true; };
+  ph.onchange = redraw;
+  const anim = el('button', { id: 'fp-anim', onclick: () => FIELD.timer ? stopFieldAnim() : startFieldAnim() },
+    FIELD.timer ? '■ Stop' : '▶ Animate');
+  row('Phase', el('div', { style: 'display:flex;gap:6px;align-items:center' }, ph, pv, anim));
+  const spd = sel('fp-speed', [[0.5, 'Slow'], [1, 'Normal'], [2, 'Fast']], FIELD.speed);
+  spd.onchange = () => { FIELD.speed = parseFloat(spd.value);
+    if (FIELD.timer) { stopFieldAnim(); startFieldAnim(); } };
+  row('Speed', spd);
+  if (!isP && FIELD.comp === 'mag') {
+    const sc = sel('fp-sc', [['linear', 'Linear'], ['db', 'dB (40 dB range)']], FIELD.scale);
+    sc.onchange = () => { FIELD.scale = sc.value; redraw(); };
+    row('Scale', sc);
+  }
+  if (!isP) {
+    const ar = el('input', { type: 'checkbox', id: 'fp-ar', style: 'width:auto' });
+    ar.checked = FIELD.arrows;
+    ar.onchange = () => { FIELD.arrows = ar.checked; redraw(); };
+    row('Vector arrows', ar);
+  }
+  box.appendChild(el('div', { class: 'note', id: 'fp-note' }, ''));
+}
+
+function startFieldAnim() {
+  FIELD.instant = true;
+  const inst = $('#fp-inst'); if (inst) inst.checked = true;
+  FIELD.timer = setInterval(async () => {
+    if (FIELD.busy) return;
+    FIELD.phase = (FIELD.phase + 20 * FIELD.speed) % 360;
+    const ph = $('#fp-ph'); if (ph) ph.value = String(FIELD.phase);
+    const pv = $('#fp-phv'); if (pv) pv.textContent = FIELD.phase + '°';
+    await plotField();
+  }, 130);
+  const b = $('#fp-anim'); if (b) b.textContent = '■ Stop';
+}
+function stopFieldAnim() {
+  if (FIELD.timer) { clearInterval(FIELD.timer); FIELD.timer = null; }
+  const b = $('#fp-anim'); if (b) b.textContent = '▶ Animate';
+}
+
+async function plotField() {
+  if (FIELD.busy || !fieldOn && !FIELD.info) return;
+  FIELD.busy = true;
+  try {
+    let f;
+    if (FIELD.quantity === 'P') {
+      f = await rpc('view.pattern', { excitation: FIELD.excitation, freq: FIELD.freq,
+        phase: FIELD.instant ? FIELD.phase : null });
+    } else {
+      f = await rpc('view.field', { quantity: FIELD.quantity, where: FIELD.where,
+        excitation: FIELD.excitation, freq: FIELD.freq, axis: FIELD.axis, value: FIELD.pos,
+        phase: FIELD.instant ? FIELD.phase : null, scale: FIELD.scale,
+        arrows: FIELD.arrows ? 500 : 0, component: FIELD.comp });
+    }
+    f.name = '__field__'; f.color = '#888888'; f.transparency = 0;
+    // surface plots replace the model; cut planes, currents and the far field
+    // sit around or inside it
+    const keepModel = FIELD.where === 'cut' || FIELD.quantity === 'J' || FIELD.quantity === 'P';
+    const base = keepModel ? currentBuffers.filter(o => !o.placeholder) : [];
+    VP.setObjects(base.concat([f]), VP.bbox);
+    VP.setArrows(f.arrows && f.arrows.length ? f.arrows : null);
+    if (FIELD.quantity === 'P') $('#vp-assign') && ($('#vp-assign').style.display = 'none');
     const lg = $('#legend');
     lg.style.background =
       'linear-gradient(to top, #30123b, #4145ab, #1ba0d1, #46f884, #d5e11a, #f6883a, #900c00)';
@@ -2622,8 +2853,14 @@ async function showField(on, opts) {
       lab.appendChild(el('span', {}, v.toPrecision(3)));
     }
     lab.classList.add('on');
-    lab.insertBefore(el('span', { style: 'font-weight:600' }, '|E| V/m'), lab.firstChild);
-  });
+    lab.insertBefore(el('span', { style: 'font-weight:600' }, `${f.label} [${f.unit}]`), lab.firstChild);
+    const note = $('#fp-note');
+    if (note) note.textContent = `${fmtHz(f.freq)} · peak ${f.peak.toPrecision(4)} ${f.unit.replace(' re peak', '')}`;
+  } catch (e) {
+    stopFieldAnim();
+    const note = $('#fp-note'); if (note) { note.textContent = e.message || String(e); note.style.color = 'var(--err)'; }
+    else toastError(e.message || String(e));
+  } finally { FIELD.busy = false; }
 }
 
 /* Air, vacuum and PML regions carry a material transparency near 1. A project
@@ -4324,7 +4561,9 @@ async function reportSParam() {
   const n = data.nPort;
   bar.appendChild(el('label', {}, 'Y axis'));
   const fs = sel('rp-form', [['db', 'dB(S)'], ['mag', '|S|'],
-    ['deg', 'Phase [deg]'], ['vswr', 'VSWR'],
+    ['deg', 'Phase [deg]'], ['smith', 'Smith chart'], ['vswr', 'VSWR'],
+    ['zre', 'Re(Z) [Ω]'], ['zim', 'Im(Z) [Ω]'], ['zmag', '|Z| [Ω]'],
+    ['re', 'Re(S)'], ['im', 'Im(S)'],
     ['groupdelay', 'Group delay [ns]']], reportForm);
   fs.onchange = () => { reportForm = fs.value; reportSParam(); };
   bar.appendChild(fs);
@@ -4356,11 +4595,17 @@ async function reportSParam() {
     `${data.passive ? 'passive' : 'NOT passive'} · ` +
     `${data.reciprocal ? 'reciprocal' : 'non-reciprocal'}`));
 
-  body.appendChild(el('div', { class: 'chart-wrap' },
-    chart(data.freq.map(f => f / 1e9), data.traces.map(t => ({
-      label: t.label, y: t.y })), 'Frequency [GHz]',
-      { db: 'Magnitude [dB]', mag: '|S|', deg: 'Phase [deg]',
-        vswr: 'VSWR', groupdelay: 'Group delay [ns]' }[data.form])));
+  if (data.form === 'smith') {
+    body.appendChild(el('div', { class: 'chart-wrap' },
+      smithChart(data.freq, data.traces.map(t => ({ label: t.label, re: t.re, im: t.im })))));
+  } else {
+    body.appendChild(el('div', { class: 'chart-wrap' },
+      chart(data.freq.map(f => f / 1e9), data.traces.map(t => ({
+        label: t.label, y: t.y })), 'Frequency [GHz]',
+        { db: 'Magnitude [dB]', mag: '|S|', deg: 'Phase [deg]', vswr: 'VSWR',
+          zre: 'Re(Z) [Ω]', zim: 'Im(Z) [Ω]', zmag: '|Z| [Ω]', re: 'Re(S)', im: 'Im(S)',
+          groupdelay: 'Group delay [ns]' }[data.form])));
+  }
 
   const tbl = el('table', { class: 'grid', style: 'margin-top:12px' });
   const head = el('tr', {}, el('th', {}, 'Freq [GHz]'),
@@ -4553,6 +4798,10 @@ function polarChart(thetaDeg, series, ylabel, w = 560, h = 560) {
 
 let patternOn = false;
 async function showPattern(on, opts) {
+  if (on) return showField(true, { quantity: 'P', excitation: (opts || {}).excitation, freq: (opts || {}).freq });
+  return showPatternLegacy(on, opts);
+}
+async function showPatternLegacy(on, opts) {
   if (!on) {
     patternOn = false;
     const vb = $('#vt-pattern'); if (vb) vb.classList.remove('on');
@@ -4629,6 +4878,63 @@ async function reportConvergence() {
     body.appendChild(el('div', { class: 'chart-wrap', style: 'margin-top:12px' },
       chart(ds.map(c => c.pass), [{ label: 'ΔS', y: ds.map(c => c.delta_s) }],
         'Adaptive pass', 'max |ΔS|')));
+}
+
+/* Smith chart: the reflection plane with constant-resistance circles and
+   constant-reactance arcs, the trace drawn from S11 itself so nothing is
+   re-derived, with the first/last frequency and the best-match point marked. */
+function smithChart(freq, series, w = 560, h = 560) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width', '100%'); svg.style.maxWidth = '640px';
+  svg.style.font = '11px var(--mono, monospace)';
+  const add = (tag, at, txt) => {
+    const n = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(at)) n.setAttribute(k, v);
+    if (txt != null) n.textContent = txt;
+    svg.appendChild(n); return n;
+  };
+  const cx = w / 2, cy = h / 2 + 8, R = Math.min(w, h) / 2 - 40;
+  const X = g => cx + g * R, Y = g => cy - g * R;
+  const clip = 'smith-clip';
+  const defs = add('defs', {});
+  const cp = document.createElementNS(ns, 'clipPath'); cp.setAttribute('id', clip);
+  const cc = document.createElementNS(ns, 'circle');
+  cc.setAttribute('cx', cx); cc.setAttribute('cy', cy); cc.setAttribute('r', R);
+  cp.appendChild(cc); defs.appendChild(cp);
+  add('circle', { cx, cy, r: R, fill: 'var(--bg)', stroke: 'var(--border)' });
+  const g = document.createElementNS(ns, 'g'); g.setAttribute('clip-path', `url(#${clip})`);
+  svg.appendChild(g);
+  const gadd = (tag, at) => { const n = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(at)) n.setAttribute(k, v); g.appendChild(n); };
+  for (const r of [0.2, 0.5, 1, 2, 5]) {            // constant resistance
+    const c = r / (1 + r);
+    gadd('circle', { cx: X(c), cy: cy, r: R / (1 + r), fill: 'none', stroke: 'var(--border-soft)' });
+  }
+  for (const x of [0.2, 0.5, 1, 2, 5]) for (const sgn of [1, -1]) {   // constant reactance
+    gadd('circle', { cx: X(1), cy: Y(sgn / x), r: R / x, fill: 'none', stroke: 'var(--border-soft)' });
+  }
+  gadd('line', { x1: X(-1), y1: cy, x2: X(1), y2: cy, stroke: 'var(--border)' });
+  for (const r of [0.2, 0.5, 1, 2, 5])
+    add('text', { x: X((r - 1) / (r + 1)), y: cy + 12, 'text-anchor': 'middle', fill: 'var(--text-dim)' }, String(r));
+  series.forEach((s, i) => {
+    const col = PALETTE[i % PALETTE.length];
+    const pts = s.re.map((re, k) => `${X(re).toFixed(1)},${Y(s.im[k]).toFixed(1)}`);
+    add('polyline', { points: pts.join(' '), fill: 'none', stroke: col, 'stroke-width': 2 });
+    const k0 = 0, k1 = s.re.length - 1;
+    const mag = s.re.map((re, k) => Math.hypot(re, s.im[k]));
+    const kb = mag.indexOf(Math.min(...mag));
+    add('circle', { cx: X(s.re[k0]), cy: Y(s.im[k0]), r: 4, fill: col });
+    add('text', { x: X(s.re[k0]) + 6, y: Y(s.im[k0]) - 6, fill: col }, (freq[k0] / 1e9).toFixed(3) + ' GHz');
+    add('rect', { x: X(s.re[k1]) - 4, y: Y(s.im[k1]) - 4, width: 8, height: 8, fill: col });
+    add('text', { x: X(s.re[k1]) + 6, y: Y(s.im[k1]) + 14, fill: col }, (freq[k1] / 1e9).toFixed(3) + ' GHz');
+    add('path', { d: `M${X(s.re[kb])} ${Y(s.im[kb]) - 7} l6 11 l-12 0 z`, fill: 'none', stroke: col, 'stroke-width': 2 });
+    add('text', { x: X(s.re[kb]) + 8, y: Y(s.im[kb]) - 8, fill: col }, `best ${(freq[kb] / 1e9).toFixed(3)} GHz  |Γ| ${mag[kb].toFixed(3)}`);
+    add('rect', { x: 20 + i * 120, y: 12, width: 16, height: 3, fill: col });
+    add('text', { x: 42 + i * 120, y: 18, fill: 'var(--text)' }, s.label);
+  });
+  return svg;
 }
 
 /* SVG line chart */

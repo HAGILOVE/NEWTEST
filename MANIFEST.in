@@ -2,15 +2,14 @@ include README.md CHANGELOG.md LICENSE pyproject.toml
 recursive-include docs *.md
 recursive-include docs/screenshots *.png
 recursive-include aether/gui/static *
-recursive-include examples *.py
+recursive-include aether/gui/vendor *
+recursive-include examples *.py *.md *.aedt
 recursive-include tests *.py
 
 include run.py
 include *_WINDOWS.cmd
-recursive-include docs *.xml
 
 include validate_release.py
-recursive-include docs *.json *.patch
 recursive-include examples *.aedtz
 
 recursive-include examples *.dxf

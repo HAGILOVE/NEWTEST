@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .aether_cache/
 *.egg-info/
+*.s1p
+*.s2p
+*.html
+*.aedt.bak

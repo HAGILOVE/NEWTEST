@@ -118,6 +118,9 @@ class Viewport {
     this.selection = new Set();
     this.assign = [];
     this.showAssignments = true;
+    // the radiation box wraps the whole model and hides fields and patterns
+    // drawn inside it; it is available on request, not by default
+    this.showRadiation = false;
     this.opaque = false;
     this.mode = 'shaded';          // shaded | wireframe | shadedEdges
     this.showGrid = true;
@@ -450,6 +453,15 @@ class Viewport {
     const flat = [];
     for (const p of pts) flat.push(p[0], p[1], p[2]);
     this.draftBuf = { b: this._buf(new Float32Array(flat)), n: pts.length };
+  }
+
+  /* Direction glyphs for a vector field: a flat list of segment endpoints
+     [x0,y0,z0,x1,y1,z1, ...], drawn as GL lines over the model. */
+  setArrows(flat) {
+    const gl = this.gl;
+    if (this.arrowBuf) { gl.deleteBuffer(this.arrowBuf.b); this.arrowBuf = null; }
+    if (!flat || flat.length < 6) return;
+    this.arrowBuf = { b: this._buf(new Float32Array(flat)), n: flat.length / 3 };
   }
 
   /* Where a world point lands on screen, so the number can be labelled in
@@ -890,8 +902,13 @@ class Viewport {
     gl.depthMask(false);
     gl.disable(gl.DEPTH_TEST);
     for (const a of (this.assign || [])) {
+      if (a.type === 'radiation' && !this.showRadiation) continue;
       gl.uniform3fv(gl.getUniformLocation(P, 'uColor'), a.color);
-      gl.uniform1f(gl.getUniformLocation(P, 'uAlpha'), 0.42);
+      // a radiation box wraps the whole model and is seen through six faces;
+      // at the usual opacity it hides the very thing it surrounds
+      gl.uniform1f(gl.getUniformLocation(P, 'uAlpha'),
+        a.type === 'radiation' ? 0.07
+          : (a.type === 'lumped' || a.type === 'wave') ? 0.75 : 0.38);
       bindAttr(gl, a.b, aPos, 3);
       if (aNrm >= 0) bindAttr(gl, a.b, aNrm, 3);
       if (aHi >= 0) gl.disableVertexAttribArray(aHi);
@@ -923,6 +940,12 @@ class Viewport {
       bindAttr(gl, this.edgeBuf.b, a, 3);
       gl.lineWidth(3);
       gl.drawArrays(gl.LINES, 0, this.edgeBuf.n);
+    }
+    if (this.arrowBuf) {
+      const a = this._lineSetup(proj, view, [0.05, 0.05, 0.05, 1.0]);
+      bindAttr(gl, this.arrowBuf.b, a, 3);
+      gl.lineWidth(1.5);
+      gl.drawArrays(gl.LINES, 0, this.arrowBuf.n);
     }
     if (this.measureBuf && this.measureVisible!==false) {
       const a = this._lineSetup(proj, view, [0.16, 0.78, 1.0, 1.0]);

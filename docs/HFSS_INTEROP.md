@@ -247,14 +247,3 @@ the recorded absolute path second, so a project stays openable after it is
 moved or handed on. A part whose source cannot be found is still loaded — with
 its transforms, boundaries and ports — and reported in the import warnings
 rather than dropped.
-
-## 6. PyAEDT bridge (optional)
-
-With PyAEDT and a licensed Ansys install present:
-
-```python
-from aether.io.pyaedt_bridge import HfssSession, push_design, compare
-deviation = compare(design, aether_solution)     # worst dB difference per Sij
-```
-
-Nothing in Aether imports this module, so the package works without Ansys.

@@ -1,3 +1,34 @@
+# 1.8.0 — solver features HFSS users expect, and a modeler that draws the way they do
+
+**Solver**
+
+- **Interpolating and Fast sweeps are real.** Both labels used to run a full solve at every frequency. *Interpolating* now fits one rational model (set-valued AAA) through adaptively chosen solves, probing the midpoint of every gap and confirming where the model moves fastest; *Fast* projects the full operator onto a reduced basis grown at the worst-residual frequency. An 81-point X-band sweep needs 20 full solves instead of 81 at the same accuracy (|dS| < 1e-3 by default; error tolerance and maximum solutions are per sweep). Sweeps shorter than 7 points are solved directly.
+- **Eigenmode solver** (resonant frequency, Q, mode fields). The curl-free null space is projected out explicitly, so no spurious zero-frequency modes appear. Verified against analytic cavity resonances (0.004 % at second order), Q = 1/tan(d) for a lossy filling (exact), and Pozar's conductor Q for a copper cavity (0.24 %). Adaptive passes refine on mode movement. Radiation boundaries are rejected rather than solved badly.
+- **Far field and antenna parameters.** Stratton-Chu transform rewritten (chunked, proper quadrature) and verified against the exact field of a Hertzian dipole (power 0.1 %, directivity 1.7638 vs 1.7609 dBi). Accepted power is taken from the field itself (`P_rad + P_diss`), so gain and efficiency do not depend on port normalisation; the power absorbed by the radiation boundary is reported beside the far-field power as a check on the air region. A half-wave dipole model gives 2.25 dBi (theory 2.15), a null on the axis, round H-plane and Zin = 69 ohm at the 2.95 GHz resonance.
+- **Optimisation.** `ae.optimize` / Tools > Optimization: variables with ranges, goals (S-parameter in a band, notch frequency, eigenmode frequency, peak gain), Nelder-Mead, pattern search, L-BFGS-B or differential evolution. Every trial is a real solve on a copy; Apply best is one undo step.
+- **HFSS setup fields.** Minimum passes, minimum converged passes, refinement per pass, linear-step sweeps, edit setup / edit sweep; all round-trip through `.aedt`.
+
+**Bugs found and fixed on the way**
+
+- `OuterSelector` ("all outer faces") also selected the surface of PEC bodies cut out of the solution volume, so a radiation boundary landed on antenna metal and the input resistance doubled. It now means the outside of the air region only.
+- The direct solver ordered columns with COLAMD, which is for A^T A; the FEM matrix has a symmetric pattern. MMD_AT_PLUS_A is 85x faster at 8.7k unknowns.
+- A mesh operation on a sheet passed its surface tag as a volume and aborted gmsh; Netgen optimisation segfaulted on small port sheets.
+- `Circle` bounds were inflated along the axis; a failed multi-edit did not roll back `solve_inside`.
+
+**Desktop**
+
+- **Results:** E, H and the **surface current** on the metal, on the surfaces, on selected objects or on a cut plane; peak or any instant of the RF cycle with a phase slider and animation; dB scale; vector arrows. Radiation pattern report (polar / rectangular, antenna-parameter table, 3-D pattern), eigenmode table, and per-mode fields.
+- **Time animation of every result.** Pick a frequency and press Animate: E, H, the surface current and the radiated field move through the RF cycle, with a speed control and a phase slider. Quantity *Far field* animates the instantaneous radiated |E| as a 3-D surface that breathes in and out (or shows static gain in dBi); *Component* X / Y / Z plots the signed instantaneous component, which is what shows a wave travelling or a charge sloshing. The frequency selector is always shown (greyed when only one frequency was saved).
+- **The radiation boundary can be hidden** (Results > Show Radiation Boundary, and in the exported viewer). It surrounds the model and used to cover every field plot and the pattern; it is now off by default and faint when on.
+- **Save As > three.js 3D viewer (\*.html).** One self-contained page (three.js r149 embedded, works from disk, no network) with the model (colours, transparency, per-object visibility, ports, boundaries, edges) and, for a solved design, the complex E / H / Js on surfaces and on a cut plane through each axis, the complex far field, the S-parameters and the antenna table. Because the stored data is complex, the page's phase slider, animation, |V| / X / Y / Z component, frequency and excitation selectors are arithmetic on the file, not baked frames. Also File > Export 3D Viewer (three.js)…, `export.threejs` over RPC, and `aether.gui.threejs.export(session, path)`.
+- **Drawing:** XY / YZ / ZX work planes (a rectangle was always drawn on XY whatever plane was meant), plane taken from a hovered flat face, Tab to type values with the mouse paused, a click or Enter to accept. New by-points circle, sphere and cone. Drawn faces are valid port and boundary targets.
+- **Editing:** selecting several objects turns the property grid into one panel that sets material, colour, transparency and visibility on all of them in one undo step. A basic colour palette with a "more colours" picker replaces the bare colour box.
+- Insert Eigenmode Design, an eigenmode setup dialog, and a Setup/Sweep dialog laid out like HFSS's.
+
+**Housekeeping**
+
+- Release patches, test-result XML and per-version upgrade notes removed; `examples/` now holds nine complete `.aedt` projects (dipole and patch antennas, waveguide, filter, coax, cavities, a parametric slab) built by `examples/build_examples.py`, with scripts for the dipole, optimisation, sweep strategies and eigenmodes.
+
 # 1.7.9 — the import report, the mesh, and assigning a port by pointing at it
 
 Built against the same user project as 1.7.7 and 1.7.8, and against the import report exported from it: 15 unsupported-PML material errors, 6 unresolved PML radiation boundaries, 20 unresolved parts and a setup that would not validate.

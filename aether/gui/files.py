@@ -42,6 +42,10 @@ FILTERS: Dict[str, List[Tuple[str, List[str]]]] = {
             ("BREP (*.brep)", [".brep", ".brp"]),
             ("STL / OBJ", [".stl", ".obj"]),
             ("All files", [])],
+    # Save As: the project formats, plus the stand-alone three.js viewer
+    "projectsave": [("AEDT project (*.aedt, *.aedtz)", [".aedt", ".aedtz"]),
+                    ("three.js 3D viewer (*.html)", [".html", ".htm"]),
+                    ("All files", [])],
     "touchstone": [("Touchstone (*.sNp, *.ts)",
                     [".s1p", ".s2p", ".s3p", ".s4p", ".s5p", ".s6p", ".ts"]),
                    ("All files", [])],

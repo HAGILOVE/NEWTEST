@@ -378,6 +378,50 @@ def _save(s: Session, path: str = "", mode: str = "auto", **_):
     return {"ok": True, "path": p}
 
 
+@command("export.threejs")
+def _export_threejs(s: Session, path: str = "", results: bool = True,
+                    maxFreqs: int = 6, maxExcitations: int = 4, **_):
+    """
+    Save the open design -- and its solution, when there is one -- as one
+    stand-alone HTML file with an embedded three.js viewer.
+
+    The file keeps the complex E / H / Js vectors and the complex far field, so
+    the phase, the field component and the frequency are controls of the page
+    rather than frames baked in at export time.
+    """
+    from . import threejs
+    d = s.require_design()
+    p = os.path.abspath(os.path.expanduser(path or ""))
+    if not path:
+        raise ValueError("no file name given")
+    if os.path.splitext(p)[1].lower() not in (".html", ".htm"):
+        p += ".html"
+    want = bool(results) and s.solution is not None
+    if want and not s.solution.fields:
+        s.messages.add("The solution has no saved fields, so the viewer will "
+                       "show the model only. Analyse with 'Save fields' "
+                       "enabled to export E/H/current/radiation.",
+                       "warning", "export")
+    s.progress.begin("Exporting 3-D viewer", stage="encoding")
+    try:
+        info = threejs.export(
+            s, p, max_freqs=max(1, int(maxFreqs)),
+            max_excitations=max(1, int(maxExcitations)),
+            with_results=want,
+            progress=lambda t: s.progress.step(detail=t))
+    finally:
+        s.progress.end()
+    s.messages.add(
+        f"Exported 3-D viewer to {info['path']} "
+        f"({info['bytes'] / 1e6:.1f} MB, {info['objects']} object(s)"
+        + (f", results at {info['frequencies']} frequenc"
+           f"{'y' if info['frequencies'] == 1 else 'ies'}" if info["results"]
+           else ", model only")
+        + ("" if info["offline"] else "; three.js loads from a CDN") + ")",
+        "info", "export")
+    return dict(info, ok=True)
+
+
 @command("project.insertDesign")
 def _insert(s: Session, name: str = "", solutionType: str = "driven_modal", **_):
     s.insert_design(name, solutionType)
@@ -2423,15 +2467,106 @@ def _mesh_view(s: Session, **_):
     return buf
 
 
+def _scalar_buffer(patch, scale="linear", floor_db=40.0, ref=None):
+    """A viewport buffer coloured by a patch's scalar, plus its colour range."""
+    from ..post.fieldview import to_unit_scale
+    from .tessellate import _pack
+    verts, tris = patch.verts, patch.tris
+    tv = verts[tris]
+    area2 = np.linalg.norm(np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0]),
+                           axis=1)
+    keep = area2 > max(float(area2.max()) * 1e-12, 1e-300)
+    tris = tris[keep]                       # the packer drops these silently
+    u, (lo, hi) = to_unit_scale(patch.values, scale, floor_db, ref,
+                                getattr(patch, "signed", False))
+    buf = _pack(verts, tris)
+    buf["scalar"] = np.round(u[tris.reshape(-1)], 5).tolist()
+    buf["range"] = [lo, hi]
+    return buf
+
+
+@command("view.fieldInfo")
+def _field_info(s: Session, **_):
+    """What can be plotted: saved frequencies, excitations/modes, quantities."""
+    sol = s.solution
+    if sol is None or not sol.fields:
+        raise RuntimeError("no field data — analyse with 'save fields' enabled")
+    names = ([f"Mode {m.index + 1}  ({m.f / 1e9:.4f} GHz)" for m in sol.modes]
+             if sol.modes else sol.design.excitation_names())
+    return {"freqs": [float(f) for f in sorted({k[0] for k in sol.fields})],
+            "excitations": names, "eigen": bool(sol.modes),
+            "bounds": [np.asarray(v).tolist() for v in sol.mesh.bounding_box()],
+            "radiation": any(b.btype == "radiation"
+                             for b in sol.design.boundaries)}
+
+
 @command("view.field")
 def _field_view(s: Session, freq: Optional[float] = None,
-                excitation: int = 0, **_):
+                excitation: int = 0, quantity: str = "E",
+                where: str = "surface", objects: Optional[List[str]] = None,
+                axis: str = "z", value: Any = 0.0, phase: Any = None,
+                scale: str = "linear", floorDb: float = 40.0,
+                arrows: int = 0, component: str = "mag", **_):
+    """
+    A field plot as a viewport surface.
+
+    ``quantity``  E | H | J (surface current)
+    ``where``     surface (all boundary faces / all conductors), objects
+                  (faces on the named objects) or cut (plane ``axis = value``)
+    ``phase``     None for the peak value, or degrees into the RF cycle
+    """
+    from ..post.fieldview import (QUANTITIES, conductor_faces,
+                                  cut_plane_patch, surface_patch)
     if s.solution is None or not s.solution.fields:
         raise RuntimeError("no field data — analyse with 'save fields' enabled")
+    if quantity not in QUANTITIES:
+        raise ValueError(f"quantity must be one of {', '.join(QUANTITIES)}")
+    if scale not in ("linear", "db"):
+        raise ValueError("scale must be linear or db")
+    from ..post.fieldview import COMPONENTS
+    if component not in COMPONENTS:
+        raise ValueError(f"component must be one of {', '.join(COMPONENTS)}")
     sol = s.solution
     f = freq if freq is not None else float(sol.freqs[-1])
     fs = sol.field(f, int(excitation))
-    return field_on_surface(fs, sol.mesh)
+    ph = None if phase in (None, "") else float(phase)
+    if component != "mag":
+        scale = "linear"                 # a signed value has no dB
+        if ph is None:
+            ph = 0.0
+    n_arrows = max(0, min(int(arrows), 1500))
+    if where == "cut":
+        v = to_si(value) if not isinstance(value, (int, float)) else float(value)
+        patch = cut_plane_patch(sol, fs, axis, v, quantity, ph, n_arrows,
+                                component)
+    else:
+        faces = None
+        if where == "objects":
+            names = list(objects or s.selection)
+            if not names:
+                raise ValueError("select one or more objects to plot on")
+            d = sol.design
+            shape = _entity(d, names[0]).shape if len(names) == 1 else \
+                prim.union(*[_entity(d, n).shape for n in names])
+            sel = ShapeSelector(shape, tol=1e-6)
+            mesh = sol.mesh
+            hit = np.nonzero(np.asarray(sel(mesh.surf_centroids,
+                                            mesh.surf_normals), bool))[0]
+            if quantity == "J":
+                hit = np.intersect1d(hit, conductor_faces(d, mesh))
+            faces = hit
+        patch = surface_patch(sol, fs, quantity, faces, ph, n_arrows,
+                              component)
+    # a peak plot is scaled to its own maximum; an instantaneous one to the
+    # peak of the cycle, so the colours stay comparable as the phase moves
+    ref = patch.peak if (ph is not None or patch.signed) else None
+    buf = _scalar_buffer(patch, scale, floorDb, ref)
+    buf["label"] = patch.label
+    buf["unit"] = patch.unit if scale == "linear" else "dB re peak"
+    buf["peak"] = patch.peak
+    buf["arrows"] = np.round(patch.arrows.reshape(-1), 7).tolist()
+    buf["freq"] = float(fs.freq)
+    return buf
 
 
 # ==========================================================================
@@ -2467,6 +2602,17 @@ def _report(s: Session, traces: Optional[List[dict]] = None,
             y = sp.vswr(i)
         elif form == "groupdelay":
             y = sp.group_delay(i, j) * 1e9
+        elif form in ("zre", "zim", "zmag"):
+            # input impedance seen at port i: Z = Z0 (1 + S) / (1 - S)
+            if i != j:
+                raise ValueError("impedance traces need a port with itself: "
+                                 "choose S(n,n)")
+            zin = sp.z0[:, i - 1] * (1 + z) / (1 - z)
+            y = {"zre": zin.real, "zim": zin.imag, "zmag": np.abs(zin)}[form]
+        elif form in ("re", "im"):
+            y = z.real if form == "re" else z.imag
+        elif form == "smith":
+            y = sp.db(i, j)                  # the chart is drawn from re / im
         else:
             y = sp.db(i, j)
         out.append({"label": f"S({names[i-1]},{names[j-1]})",
@@ -2604,22 +2750,40 @@ def _far_field(s: Session, freq: Optional[float] = None, excitation: int = 0,
 
 @command("view.pattern")
 def _pattern_view(s: Session, freq: Optional[float] = None,
-                  excitation: int = 0, floorDb: float = 30.0, **_):
-    """The 3-D radiation pattern as a surface the viewport can draw."""
+                  excitation: int = 0, floorDb: float = 30.0,
+                  phase: Any = None, **_):
+    """
+    The 3-D radiation pattern as a surface the viewport can draw.
+
+    Without ``phase`` the radius is gain in dB over a ``floorDb`` range.  With
+    ``phase`` (degrees into the RF cycle) it is the *instantaneous* far-field
+    magnitude ``|Re(E e^{j phase})|`` relative to its peak, so animating the
+    phase shows the radiated field breathing in and out over a cycle.
+    """
     ff = _farfield_for(s, freq, excitation, 2.0, 5.0)
-    g = ff.gain()
-    gdb = 10 * np.log10(np.maximum(g, 1e-30))
-    top = float(gdb.max())
-    floor = top - float(floorDb)
-    rad = np.clip((gdb - floor) / (top - floor), 0.0, 1.0)      # 0..1
     d = s.design
     lo, hi = d.bounding_box()
     scale = 0.42 * float(np.linalg.norm(hi - lo)) or 1.0
     centre = 0.5 * (lo + hi)
-    th, ph = ff.theta, np.append(ff.phi, ff.phi[0] + 2 * math.pi)
+    if phase in (None, ""):
+        g = ff.gain()
+        gdb = 10 * np.log10(np.maximum(g, 1e-30))
+        top = float(gdb.max())
+        floor = top - float(floorDb)
+        rad = np.clip((gdb - floor) / (top - floor), 0.0, 1.0)      # 0..1
+        rng, label, unit = [floor, top], "Gain", "dBi"
+    else:
+        ph = np.exp(1j * math.radians(float(phase)))
+        inst = np.sqrt((ff.E_theta * ph).real ** 2 + (ff.E_phi * ph).real ** 2)
+        peak = float(np.sqrt(np.abs(ff.E_theta) ** 2
+                             + np.abs(ff.E_phi) ** 2).max())
+        rad = np.clip(inst / max(peak, 1e-300), 0.0, 1.0)
+        rng = [0.0, 1.0]
+        label, unit = f"|E far| @ {float(phase):.0f}°", "rel. peak"
+    th, ph_ = ff.theta, np.append(ff.phi, ff.phi[0] + 2 * math.pi)
     rad = np.concatenate([rad, rad[:, :1]], axis=1)
-    TH, PH = np.meshgrid(th, ph, indexing="ij")
-    R = rad * scale
+    TH, PH = np.meshgrid(th, ph_, indexing="ij")
+    R = np.maximum(rad, 0.0) * scale
     pts = np.stack([R * np.sin(TH) * np.cos(PH), R * np.sin(TH) * np.sin(PH),
                     R * np.cos(TH)], axis=-1) + centre
     nt, npp = TH.shape
@@ -2637,7 +2801,8 @@ def _pattern_view(s: Session, freq: Optional[float] = None,
     tris = tris[area2 > max(float(area2.max()) * 1e-9, 1e-300)]
     buf = _pack(verts, tris)
     buf["scalar"] = np.round(rad.reshape(-1)[tris.reshape(-1)], 5).tolist()
-    buf["range"] = [floor, top]
+    buf["range"] = rng
+    buf["label"], buf["unit"], buf["freq"] = label, unit, float(ff.freq)
     return buf
 
 

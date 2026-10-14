@@ -1,0 +1,128 @@
+# Aether EM 1.8.0 — 사용 안내
+
+새 폴더에 압축 해제 후 `SETUP_WINDOWS.cmd` → `START_WINDOWS.cmd`. 완성된 예제는 `examples\*.aedt`(File ▸ Open Project).
+아래 수치는 이 릴리스를 만들면서 직접 측정한 값이고, 한계도 같이 적음.
+
+---
+
+## 1. 요청하신 항목별 정리
+
+| 요청 | 1.8.0 상태 |
+|---|---|
+| 오브젝트 다중 선택 후 재료·색·투명도 일괄 변경 | **됨.** 2개 이상 선택하면 속성창이 일괄 편집 패널로 바뀜(재료, 색, 투명도, 표시, Solve inside). 한 번의 Undo로 전부 되돌림 |
+| 색 지정은 기본 색 + 상세 설정 | **됨.** 12색 기본 팔레트(구리·금·은·회색·빨강·주황·노랑·초록·파랑·보라·흰색·검정) + `…` 버튼으로 전체 색 선택기 |
+| 사각형이 XY로만 그려지던 문제 | **수정.** XY / YZ / ZX 작업 평면을 선택해 그림. 입력한 좌표가 그대로 형상이 됨(브라우저 테스트로 3개 평면 모두 확인) |
+| 마우스로 위치 선택 + Tab으로 수치 입력 | **됨.** 아래 2장 |
+| 면 그리기 → 포트 지정, Lumped / Wave Port | **됨.** Rectangle·Circle로 면을 그리고, 선택 후 우클릭 `Assign Lumped Port…` / `Assign Wave Port…`. 두 도체 면을 클릭하는 `Port (pick)`도 유지 |
+| HFSS와 같은 Setup(주파수 등) | **됨.** 3장 |
+| E, H 필드, 전류 흐름, 안테나 방사 | **됨.** 4장 |
+| 불필요한 기능·asset 제거 | 릴리스 패치/결과 XML/구버전 안내/스크린샷 일부 삭제 |
+| 다이폴 안테나 완성 파일 + 여러 예제 | `examples/` 9개 프로젝트. 5장 |
+
+## 2. 그리기: 마우스 + Tab
+
+`Draw ▸ Draw Box / Rectangle / Cylinder / Circle / Sphere / Cone by Points`
+
+1. 패널의 **Plane**에서 XY / YZ / ZX 선택(또는 `P` 키로 순환). **Offset**은 평면의 위치.
+2. 첫 점: 클릭하거나 **Tab**을 눌러 X, Y, Z를 입력(다음 칸은 Tab, 이전은 Shift+Tab).
+3. 둘째 점·크기: 클릭하거나 Tab → `dX, dY`(Box는 높이 포함) 입력. 원형 도형은 Radius, 원기둥/원뿔은 Height(, Top radius).
+4. **Enter**로 확정, **클릭**도 지금까지 입력한 값을 확정. 입력 중에는 마우스를 움직여도 숫자가 덮어써지지 않음.
+5. `Esc`: 입력 칸 안에서는 마우스로 제어권을 되돌리고, 칸 밖에서는 한 점 뒤로(한 번 더 누르면 취소). `S` 스냅 토글.
+6. **Plane from face**(기본 켜짐): 첫 점을 찍기 전에 평평한 면 위로 마우스를 가져가면 그 면이 작업 평면이 됨(기판 윗면에 패치 그리기). 평면 버튼을 직접 누르면 꺼짐.
+
+높이는 항상 작업 평면의 법선 방향임(YZ 평면의 Box는 X 방향으로, ZX 평면의 원기둥 축은 Y).
+
+## 3. Setup / Sweep (HFSS와 같은 항목)
+
+`Simulation ▸ Add Solution Setup…`, 트리의 Setup 우클릭 `Edit Setup…`
+
+| 항목 | 의미 |
+|---|---|
+| Solution frequency | 적응형 메시를 세분화하는 주파수 |
+| Maximum number of passes / Minimum number of passes | 패스 수 범위 |
+| Minimum converged passes | 목표 ΔS를 연속으로 만족해야 하는 패스 수 |
+| Maximum delta S | 패스 간 최대 \|ΔS\| 목표 |
+| Refinement per pass [%] | 패스마다 세분화하는 요소 비율(기본 30) |
+| Basis function order | 1차(Whitney) / 2차 |
+
+`Add Frequency Sweep…`, 트리의 Sweep 우클릭 `Edit Sweep…`
+
+| 항목 | 의미 |
+|---|---|
+| Sweep type | **Discrete**(모든 점 풀이) / **Interpolating** / **Fast** |
+| Frequency setup | **Linear count** / **Linear step** / Log scale / Single point |
+| Error tolerance, Max solutions | Interpolating·Fast의 허용 오차와 최대 풀이 수 |
+| Save fields in this sweep | 필드 저장(필드·방사패턴에 필요) |
+
+**Interpolating / Fast는 이제 실제로 동작함.** 이전 버전에서는 라벨만 있고 모든 점을 풀었음. WR-90 81점 스윕은 Interpolating에서 전체 풀이 20회로 같은 정확도(|ΔS| < 1e-3)를 냄. 7점 미만의 짧은 스윕은 그냥 모든 점을 풂. 컷오프를 가로지르는 대역은 √ 분기점 때문에 풀이가 더 필요함(161점에 40회).
+
+## 4. 결과 보기
+
+**필드 플롯** — `Results ▸ E Field / H Field / Surface Current |Js| / Field on Cut Plane` (해석 전에 *Save fields*)
+
+- 양: |E|, |H|, **|Js|**(= n × H, 도체 표면 전류).
+- 대상: 모든 외곽면(전류는 모든 도체), 선택한 객체, 또는 **컷 플레인**(축 + 위치 슬라이더).
+- **Instantaneous**: RF 주기의 임의 위상에서의 값. `▶ Animate`로 돌리면 전류가 흐르는 것이 보임.
+- **Vector arrows**: 방향 표시. 스케일은 Linear 또는 dB(40 dB 범위).
+
+**시간 애니메이션** — 필드 패널(`Results ▸ E Field` 등)에서 주파수를 고르고 `▶ Animate`.
+
+- E, H, 표면 전류 |Js|와 **Far field(방사)** 모두 RF 한 주기 동안 움직임. `Speed`(느리게/보통/빠르게)와 위상 슬라이더 제공.
+- `Component`를 X / Y / Z로 하면 부호 있는 순시 성분이 나와 파동이 이동하는 모양이 보임(|V|는 맥동으로만 보임).
+- Far field는 순시 원거리 |E|가 3D 곡면으로 커졌다 작아졌다 함. 정적 이득(dBi)도 선택 가능.
+- 주파수 선택은 항상 보임. 저장된 주파수가 하나뿐이면 비활성이며, 여러 주파수를 보려면 이산(Discrete) 스윕에서 *Save fields in this sweep*을 켜야 함.
+- **Radiation 경계는 기본으로 숨김**(필드·패턴을 가리지 않도록). `Results ▸ Show Radiation Boundary`로 켜고 끔.
+
+**3D 뷰어 내보내기 (three.js)** — `File ▸ Save Project As…`에서 파일 형식을 *three.js 3D viewer (\*.html)*로 고르거나 `File ▸ Export 3D Viewer (three.js)…`.
+
+- 결과는 **하나의 HTML 파일**이며 three.js가 내장되어 있어 인터넷 없이 더블클릭으로 열림. 파이썬/Aether가 필요 없음.
+- 모델: 객체별 색·투명도·표시 토글, 포트·경계·모서리 표시, 마우스로 회전/이동/확대, XY·YZ·ZX·Iso 시점, 배경 전환, PNG 저장, 객체에 마우스를 올리면 이름·재료 표시.
+- 결과(해석 후, *Save fields* 필요): 표면과 X/Y/Z 중심 단면의 E, H, 도체 표면 전류, 방사패턴, S-파라미터 그래프(점을 눌러 주파수 이동), 안테나 파라미터 표.
+- 필드는 **복소수 그대로 저장**하므로 뷰어에서 위상 슬라이더, 애니메이션, |V|/X/Y/Z, 주파수·여기 선택이 모두 실시간으로 동작함(동영상이 아니라 데이터).
+- 한계: 저장하는 것은 내보낼 때의 해석 결과 하나임(주파수는 최대 6개, 여기 4개가 기본값이며 내보내기 창에서 조정). 단면은 모델 중심 한 위치에 고정이고, 메시가 클수록 파일이 커짐. 오프라인에서 열리도록 three.js(MIT) r149를 `aether/gui/vendor`에 포함함.
+
+**방사패턴** — `Results ▸ Far Field Radiation Pattern…`
+
+- 극좌표 / 직교 플롯(φ 컷 2개, 큰 원으로 φ와 φ+180° 반평면), Gain(θ/φ 성분)·Directivity 선택, `3D pattern`.
+- 표: 최대 지향성·이득, 실현 이득(mismatch 반영), 최대 방향, **복사 효율**, 전후방비, 축비, 그리고 **영역 점검**(경계 흡수전력 / 원거리장 전력, 1에 가까워야 함 — 크게 어긋나면 공기 영역이 너무 작거나 메시가 거칠다는 경고).
+- Radiation 경계가 있어야 하고 필드가 저장되어 있어야 함.
+
+**S-파라미터** — `Results ▸ Create Modal S-Parameter Report`: dB, \|S\|, 위상, **Smith chart**, VSWR, **Re/Im/\|Z\|**(입력 임피던스), Re/Im(S), 군지연.
+
+**Eigenmode** — `Project ▸ Insert HFSS Eigenmode Design` → Eigenmode Setup(모드 수, 최소 주파수, 최대 Δf) → Analyze → `Results ▸ Eigenmode Data`(주파수, Q, 수렴 표, 모드별 필드).
+
+**최적화** — `Tools ▸ Optimization…`: 변수 범위, 목표(S 파라미터 대역 조건, 노치 주파수, 고유모드 주파수, 최대 이득), 옵티마이저 선택. 매 시도는 복사본에서 실제 풀이를 하며 `Apply best values`가 한 번의 Undo 단계임. 변수는 치수에 연결되어 있어야 함(`Tools ▸ Design Variables…` + 치수 편집).
+
+## 5. 예제
+
+| 프로젝트 | 확인한 결과 |
+|---|---|
+| `dipole_antenna.aedt` | 예제 자체 설정(2패스 적응형 + Interpolating 17점, 풀이 12회·약 3분)으로 공진 2.95 GHz, Zin = 69 − 1j Ω, 최적 S11 −17 dB, 지향성 2.18 dBi(이론 2.15) @ θ=90°, 축 방향 −50 dBi, 전후방비 0.01 dB |
+| `wr90_waveguide.aedt` | 차단주파수 6.558 GHz(해석 6.557), 43점 Interpolating |
+| `iris_filter.aedt` | 9.46 GHz에서 S11 −75 dB(공진 대역통과), Fast sweep, 풀이 약 40초 |
+| `cavity_eigenmode.aedt` | TE101 9.0078 GHz(해석 9.0076) 외 4개 모드 |
+| `copper_cavity_eigenmode.aedt` | Q = 9178(Pozar 9182, 0.04 %) |
+
+자세한 목록과 GUI 작업 순서는 [examples/README.md](../examples/README.md). `python examples/build_examples.py --verify`로 모두 다시 만들고 실제로 풀어 확인할 수 있음.
+
+## 6. 이번에 찾아 고친 버그(결과 정확도에 영향)
+
+1. **Radiation 경계가 안테나 금속에 걸림.** `OuterSelector`("모든 외곽면")가 해석 영역에서 빠진 PEC 몸체의 표면까지 선택해, 안테나 도체 표면에 흡수 경계가 설정되고 있었음. 다이폴의 입력저항이 약 2배로 나오고 방사 전력 수지가 맞지 않던 원인. 이제 공기 영역의 바깥면만 뜻함. **안테나/코일 해석 결과가 이전 버전과 달라질 수 있음.**
+2. 직접 솔버가 대칭 패턴 행렬에 COLAMD(AᵀA용) 정렬을 써서 느렸음 → MMD_AT_PLUS_A로 바꿔 8.7k 미지수에서 38 s → 0.45 s.
+3. 시트(면) 객체에 대한 Mesh Operation이 gmsh를 중단시키던 문제, 작은 포트 시트가 있는 모델에서 Netgen 최적화가 프로세스를 죽이던 문제.
+4. `Circle` 경계상자가 축 방향으로 부풀려져 측정/범위가 틀리던 문제, 다중 편집이 실패했을 때 `solve_inside` 롤백이 안 되던 문제.
+
+## 7. 한계 (숨기지 않고 적음)
+
+- **PML, 주기 경계/Floquet 포트, Terminal(차동) 솔루션은 없음.** 안테나는 Radiation(1차 흡수) 경계로 푸므로 경계를 방사체에서 λ/4 이상 띄우고, 이득·효율의 **영역 점검** 값을 확인해야 함. 지향성·패턴 형태는 작은 영역에서도 비교적 잘 나오지만 절대 이득·효율은 그렇지 않음.
+- **Eigenmode는 Radiation 경계를 지원하지 않음**(해가 신뢰할 수 없어 검증 단계에서 거부). PEC, 유한 도전율, 표면 임피던스, 유전체 손실은 해석해로 검증됨.
+- 1차 요소는 얇은 와이어 안테나에서 입력 저항이 크게 나옴(같은 메시에서 1차 126 Ω vs 2차 92 Ω → 길이 튜닝 후 2차 적응형 69 Ω). **안테나는 2차 요소를 권장.** 예제 다이폴은 2차로 설정됨.
+- Fast sweep은 주파수마다 포트 2D 모드 해석을 하므로 작은 모델에서는 시간이 크게 줄지 않음(큰 3D 모델에서 이득). Interpolating은 포트 해석도 건너뜀.
+- 최적화의 국소 옵티마이저는 시작점이 해 근처여야 함(좁은 노치는 평탄 구간에서 못 내려옴). 이 경우 Differential evolution을 사용.
+- 면에서 작업 평면을 가져오는 기능은 축 정렬 면만 지원.
+- 해석 시간은 이 환경(Linux, 4코어)에서 측정한 값이며, 이 도구는 HFSS와의 수치 일치를 보증하지 않음. 중요한 설계는 실측 또는 독립 솔버로 검증해야 함.
+
+## 8. 검증
+
+- 파이썬 테스트(브라우저 제외) 전체 통과 + 브라우저(Chromium) 테스트 전체 통과. 신규: 스윕, Eigenmode, 원거리장, 최적화, 다중 선택, 작업 평면 드로잉, Setup 필드, 필드 플롯, 리포트 형식.
+- 해석해 비교: 직사각 공동 공진, 유전체 Q, 구리 Q, Hertz 다이폴 원거리장, 반파 다이폴 입력저항·지향성, WR-90 모드·차단주파수.

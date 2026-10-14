@@ -1,0 +1,688 @@
+$begin 'AnsoftProject'
+	FileVersion(1, 0)
+	Created='Wed Oct 14 14:16:10 2026'
+	Product='ElectronicsDesktop'
+	BuildVariant='Aether-EM'
+	$begin 'Desktop'
+		Version(2024, 2)
+		InfoAsciiString='Written by Aether-EM'
+	$end 'Desktop'
+	$begin 'Materials'
+		$begin 'abs_plastic'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='2.9'
+			permeability='1'
+			dielectric_loss_tangent='0.006'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'abs_plastic'
+		$begin 'air'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1.0006'
+			permeability='1'
+			AetherKind='dielectric'
+			AetherColor='#dfe8ef'
+			AetherTransparency=0.95
+		$end 'air'
+		$begin 'alumina_96'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='9.4'
+			permeability='1'
+			dielectric_loss_tangent='0.0006'
+			AetherKind='dielectric'
+			AetherColor='#efe7dd'
+			AetherTransparency=0.6
+		$end 'alumina_96'
+		$begin 'alumina_99_5'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='9.8'
+			permeability='1'
+			dielectric_loss_tangent='0.0003'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'alumina_99_5'
+		$begin 'aluminum'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='38000000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'aluminum'
+		$begin 'annealed_copper'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='58001000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'annealed_copper'
+		$begin 'brass'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='15000000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'brass'
+		$begin 'ceramic_bariumtitanate'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1200'
+			permeability='1'
+			dielectric_loss_tangent='0.03'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'ceramic_bariumtitanate'
+		$begin 'copper'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='58000000'
+			mass_density='8933'
+			thermal_conductivity='400'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'copper'
+		$begin 'ferrite_generic'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='12'
+			permeability='100'
+			magnetic_loss_tangent='0.02'
+			AetherKind='dielectric'
+			AetherColor='#3a3a3a'
+			AetherTransparency=0.6
+		$end 'ferrite_generic'
+		$begin 'fr4_djordjevic'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='4.309835872'
+			permeability='1'
+			dielectric_loss_tangent='0.02035341508'
+			AetherKind='dielectric'
+			AetherColor='#2f7a3f'
+			AetherTransparency=0.6
+		$end 'fr4_djordjevic'
+		$begin 'fr4_epoxy'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='4.4'
+			permeability='1'
+			dielectric_loss_tangent='0.02'
+			AetherKind='dielectric'
+			AetherColor='#2f7a3f'
+			AetherTransparency=0.6
+		$end 'fr4_epoxy'
+		$begin 'gaas'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='12.9'
+			permeability='1'
+			dielectric_loss_tangent='0.0006'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'gaas'
+		$begin 'glass_pyrex'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='4.82'
+			permeability='1'
+			dielectric_loss_tangent='0.0054'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'glass_pyrex'
+		$begin 'gold'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='41000000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'gold'
+		$begin 'gold_drude_optical'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='-16767.41573'
+			permeability='1'
+			dielectric_loss_tangent='-3344.047778'
+			AetherKind='dielectric'
+			AetherColor='#d4af37'
+			AetherTransparency=0.6
+		$end 'gold_drude_optical'
+		$begin 'graphite'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='70000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'graphite'
+		$begin 'isola_i_tera_mt40'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.45'
+			permeability='1'
+			dielectric_loss_tangent='0.0031'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'isola_i_tera_mt40'
+		$begin 'mylar'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.2'
+			permeability='1'
+			dielectric_loss_tangent='0.005'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'mylar'
+		$begin 'nickel'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='14500000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'nickel'
+		$begin 'nylon'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3'
+			permeability='1'
+			dielectric_loss_tangent='0.02'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'nylon'
+		$begin 'pec'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='inf'
+			AetherKind='pec'
+			AetherColor='#b8b8b8'
+			AetherTransparency=0
+		$end 'pec'
+		$begin 'pmc'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			AetherKind='pmc'
+			AetherColor='#c8a8a8'
+			AetherTransparency=0
+		$end 'pmc'
+		$begin 'polyethylene'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='2.25'
+			permeability='1'
+			dielectric_loss_tangent='0.0004'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'polyethylene'
+		$begin 'polyimide'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.5'
+			permeability='1'
+			dielectric_loss_tangent='0.008'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'polyimide'
+		$begin 'quartz_fused'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.78'
+			permeability='1'
+			dielectric_loss_tangent='0.0001'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'quartz_fused'
+		$begin 'rogers_ro4003c'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.55'
+			permeability='1'
+			dielectric_loss_tangent='0.0027'
+			AetherKind='dielectric'
+			AetherColor='#8a5a2b'
+			AetherTransparency=0.6
+		$end 'rogers_ro4003c'
+		$begin 'rogers_ro4350b'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='3.66'
+			permeability='1'
+			dielectric_loss_tangent='0.0037'
+			AetherKind='dielectric'
+			AetherColor='#8a5a2b'
+			AetherTransparency=0.6
+		$end 'rogers_ro4350b'
+		$begin 'rogers_rt5880'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='2.2'
+			permeability='1'
+			dielectric_loss_tangent='0.0009'
+			AetherKind='dielectric'
+			AetherColor='#d9d2c4'
+			AetherTransparency=0.6
+		$end 'rogers_rt5880'
+		$begin 'rogers_rt6010'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='10.2'
+			permeability='1'
+			dielectric_loss_tangent='0.0023'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'rogers_rt6010'
+		$begin 'sapphire'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='9.4'
+			permeability='1'
+			dielectric_loss_tangent='0.0001'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'sapphire'
+		$begin 'silicon'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='11.9'
+			permeability='1'
+			dielectric_loss_tangent='0.005'
+			AetherKind='dielectric'
+			AetherColor='#4b4b55'
+			AetherTransparency=0.6
+		$end 'silicon'
+		$begin 'silver'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='63000000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'silver'
+		$begin 'solder'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='7000000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'solder'
+		$begin 'steel_stainless'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='1100000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'steel_stainless'
+		$begin 'taconic_tly5'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='2.2'
+			permeability='1'
+			dielectric_loss_tangent='0.0009'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'taconic_tly5'
+		$begin 'teflon_ptfe'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='2.1'
+			permeability='1'
+			dielectric_loss_tangent='0.0002'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'teflon_ptfe'
+		$begin 'tin'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='8700000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'tin'
+		$begin 'titanium'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='1820000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'titanium'
+		$begin 'tungsten'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			conductivity='18200000'
+			AetherKind='conductor'
+			AetherColor='#c0c0c0'
+			AetherTransparency=0
+		$end 'tungsten'
+		$begin 'vacuum'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='1'
+			permeability='1'
+			AetherKind='dielectric'
+			AetherColor='#dfe8ef'
+			AetherTransparency=0.95
+		$end 'vacuum'
+		$begin 'water_distilled'
+			CoordinateSystemType='Cartesian'
+			BulkOrSurfaceType=1
+			$begin 'PhysicsTypes'
+				set=['Electromagnetic']
+			$end 'PhysicsTypes'
+			permittivity='81'
+			permeability='1'
+			AetherKind='dielectric'
+			AetherColor='#8899aa'
+			AetherTransparency=0.6
+		$end 'water_distilled'
+	$end 'Materials'
+	$begin 'Design'
+		DesignType='HFSS'
+		Name='parallel_plate_lumped'
+		SolutionType='HFSS Modal Network'
+		DesignVersion=1
+		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.0015, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
+		AetherImportIssues='[]'
+		AetherDefaultBoundary='pec'
+		$begin 'ModelSetup'
+			DesignDataId=1
+			$begin 'Properties'
+				VersionID=1
+			$end 'Properties'
+			$begin 'GeometryCore'
+				BlockVersionID=3
+				$begin 'GeometryOperations'
+					ModelUnits='mm'
+					$begin 'ToplevelParts'
+						$begin 'GeometryPart'
+							$begin 'Attributes'
+								Name='Air'
+								Flags=''
+								MaterialValue='"vacuum"'
+								SolveInside=true
+								PartCoordinateSystem='Global'
+								Transparency=0.95
+								Color(223, 232, 239)
+								AetherIsSheet=false
+							$end 'Attributes'
+							$begin 'Operations'
+								$begin 'Operation'
+									OperationType='Create'
+									ID=1
+									ParentPartID=1
+									$begin 'GeometryPosition'
+										PartID=1
+									$end 'GeometryPosition'
+									$begin 'BoxParameters'
+										XPosition='0mm'
+										YPosition='0mm'
+										ZPosition='0mm'
+										XSize='20mm'
+										YSize='10mm'
+										ZSize='1mm'
+									$end 'BoxParameters'
+								$end 'Operation'
+							$end 'Operations'
+						$end 'GeometryPart'
+					$end 'ToplevelParts'
+				$end 'GeometryOperations'
+			$end 'GeometryCore'
+		$end 'ModelSetup'
+		$begin 'BoundarySetup'
+			MapCoefficients=false
+			$begin 'PMC_y0'
+				BoundType='Perfect H'
+				Name='PMC_y0'
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='y'
+					Value=0
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'PMC_y0'
+			$begin 'PMC_y1'
+				BoundType='Perfect H'
+				Name='PMC_y1'
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='y'
+					Value=0.01
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'PMC_y1'
+			$begin 'Port1'
+				Name='Port1'
+				ExcType='Lumped Port'
+				NumModes=1
+				UseIntLine=false
+				Impedance='37.67303137ohm'
+				Direction=[0, 0, 1]
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='x'
+					Value=0
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'Port1'
+			$begin 'Port2'
+				Name='Port2'
+				ExcType='Lumped Port'
+				NumModes=1
+				UseIntLine=false
+				Impedance='75.34606273ohm'
+				Direction=[0, 0, 1]
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='x'
+					Value=0.02
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'Port2'
+		$end 'BoundarySetup'
+		$begin 'AnalysisSetup'
+			$begin 'SolveSetups'
+				$begin 'Setup1'
+					SetupType='HfssDriven'
+					Name='Setup1'
+					IsEnabled=true
+					$begin 'SolveSetupProps'
+						Frequency='5GHz'
+						MaxDeltaS=0.02
+						MaximumPasses=6
+						MinimumPasses=1
+						MinimumConvergedPasses=1
+						PercentRefinement=30
+						BasisOrder=1
+					$end 'SolveSetupProps'
+					$begin 'Sweep'
+						Name='Sweep'
+						IsEnabled=true
+						Type='Discrete'
+						RangeType='LinearCount'
+						RangeStart='1GHz'
+						RangeEnd='10GHz'
+						RangeCount=10
+						SaveFields=false
+					$end 'Sweep'
+				$end 'Setup1'
+			$end 'SolveSetups'
+		$end 'AnalysisSetup'
+	$end 'Design'
+$end 'AnsoftProject'
