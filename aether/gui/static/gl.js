@@ -105,6 +105,23 @@ precision mediump float; uniform vec4 uColor;
 void main(){ gl_FragColor = uColor; }`;
 
 /* ------------------------------------------------------------- renderer */
+/* A line a -> b with an arrow head at b: the shaft and two barbs, as three
+   GL_LINES segments. The head points from ground to signal on a port. */
+function arrowSegments(a, b) {
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const L = Math.hypot(d[0], d[1], d[2]) || 1;
+  const u = d.map(v => v / L);
+  const ax = [Math.abs(u[0]), Math.abs(u[1]), Math.abs(u[2])];
+  const r = ax[0] <= ax[1] && ax[0] <= ax[2] ? [1, 0, 0] : ax[1] <= ax[2] ? [0, 1, 0] : [0, 0, 1];
+  let s = [u[1] * r[2] - u[2] * r[1], u[2] * r[0] - u[0] * r[2], u[0] * r[1] - u[1] * r[0]];
+  const sl = Math.hypot(...s) || 1; s = s.map(v => v / sl);
+  const h = 0.28 * L, w = 0.12 * L;
+  const back = [b[0] - u[0] * h, b[1] - u[1] * h, b[2] - u[2] * h];
+  return new Float32Array([...a, ...b,
+    ...b, back[0] + s[0] * w, back[1] + s[1] * w, back[2] + s[2] * w,
+    ...b, back[0] - s[0] * w, back[1] - s[1] * w, back[2] - s[2] * w]);
+}
+
 class Viewport {
   constructor(canvas) {
     this.canvas = canvas;
@@ -284,9 +301,7 @@ class Viewport {
         color: hex2rgb(it.color || '#ff4fa3'),
         center: it.center,
         line: it.line || null,
-        lineBuf: it.line
-          ? this._buf(new Float32Array([...it.line[0], ...it.line[1]]))
-          : null
+        lineBuf: it.line ? this._buf(arrowSegments(it.line[0], it.line[1])) : null
       });
     }
   }
@@ -922,7 +937,7 @@ class Viewport {
       const at = this._lineSetup(proj, view, [1, 1, 1, 0.95]);
       bindAttr(gl, a.lineBuf, at, 3);
       gl.lineWidth(3);
-      gl.drawArrays(gl.LINES, 0, 2);
+      gl.drawArrays(gl.LINES, 0, 6);
       gl.lineWidth(1);
     }
     gl.enable(gl.DEPTH_TEST);

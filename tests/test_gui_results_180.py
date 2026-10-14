@@ -147,3 +147,54 @@ def test_opacity_of_plot_and_model_can_be_set(tab):
     alphas = tab.evaluate("()=>currentBuffers.length")
     assert alphas >= 1
     assert not tab.errors
+
+
+# ------------------------------------------------------------- port polarity
+@pytest.fixture(scope="module")
+def dipole_tab(desktop, browser):
+    url, session = desktop
+    from test_farfield_180 import dipole
+    session.new_project("Dipole")
+    d = dipole()
+    session.project.designs[0] = d
+    session.design = d
+    session.solution = None
+    pg = browser.new_page(viewport={"width": 1500, "height": 950})
+    errs = []
+    pg.on("pageerror", lambda e: errs.append(str(e)))
+    pg.errs = errs
+    pg.goto(url)
+    pg.wait_for_function("window.__aetherReady === true", timeout=60000)
+    pg.wait_for_function("()=>STATE&&STATE.design&&STATE.design.ports.length===1", timeout=20000)
+    yield pg
+    pg.close()
+
+
+def test_port_properties_offer_reverse_and_edit_polarity(dipole_tab):
+    pg = dipole_tab
+    pg.evaluate("()=>showProps('port','P1')")
+    pg.get_by_text("⇄ Reverse polarity").click()
+    pg.wait_for_function("()=>STATE.design.ports[0].direction[2]<0", timeout=10000)
+    pg.evaluate("()=>dlgPolarity('P1')")
+    pg.wait_for_selector("#pgz", timeout=10000)
+    num = lambda sel: float(pg.input_value(sel).rstrip("mu"))        # "1mm" -> 1.0
+    assert num("#pgz") > 0 > num("#psz")              # reversed: ground is high
+    pg.get_by_text("⇄ Swap ground / signal").click()
+    assert num("#pgz") < 0 < num("#psz")
+    pg.locator(".dialog .foot .pri").click()
+    pg.wait_for_function("()=>STATE.design.ports[0].direction[2]>0", timeout=10000)
+    assert not pg.errs
+
+
+def test_assign_lumped_port_dialog_has_ground_signal_fields(dipole_tab):
+    pg = dipole_tab
+    pg.evaluate("()=>dlgExcitation('lumped')")
+    pg.wait_for_selector("#pl-axis", timeout=10000)
+    assert pg.locator("#plgz").count() == 1 and pg.locator("#plsz").count() == 1
+    pg.select_option("#pl-axis", "custom")
+    pg.fill("#plgz", "1mm")
+    pg.fill("#plsz", "-1mm")
+    pg.get_by_text("⇄ Swap ground / signal").click()
+    assert pg.input_value("#plgz") == "-1mm" and pg.input_value("#plsz") == "1mm"
+    pg.keyboard.press("Escape")
+    assert not pg.errs

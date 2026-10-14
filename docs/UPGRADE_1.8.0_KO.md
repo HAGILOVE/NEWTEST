@@ -5,6 +5,19 @@
 
 ---
 
+## 0. 해석이 너무 오래 걸릴 때 (측정값)
+
+3 GHz 2차 요소 다이폴(약 3.9만 미지수)을 이 환경(4코어)에서 풀었을 때:
+
+| 직접 해법 | 시간 |
+|---|---|
+| SuperLU (이전 기본) | **18분 넘게 끝나지 않음** (COLAMD / MMD / METIS 정렬 모두 5분 이상) |
+| **PARDISO (기본, 설치되어 있으면)** | 분해 약 **2 s**, 해석 전체 약 5 s (같은 행렬 잔차 2e-14, 지향성 2.245 dBi로 동일) |
+
+SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 3~4만을 넘으면 급격히 느려지는 것이 정상임(표준 3D 라플라시안 2.7만도 44 s). `SETUP_WINDOWS.cmd`가 `pypardiso`를 같이 설치하며, 실패해도 설치는 계속되고 내장 해법(느림)으로 동작함. 이미 설치한 환경은 `.venv\Scripts\pip install pypardiso` 한 줄이면 됨. 설치 여부는 메시지 창의 `linear solver ready [direct/pardiso …]`에서 확인.
+
+그 외 빨리 보는 방법: ① 기본 예제는 먼저 `Basis order = 1`, `Maximum passes = 1`, 스윕 점 수를 줄여 형태만 확인 ② 공기 영역(R, H)과 `max_element_size`를 키워 미지수를 줄임 ③ Interpolating 스윕 사용(전체 풀이 횟수가 줄어듦). 안테나 절대 이득·효율은 2차 요소와 충분한 공기 영역이 필요하므로 최종 확인은 줄이지 말 것.
+
 ## 1. 요청하신 항목별 정리
 
 | 요청 | 1.8.0 상태 |
@@ -64,6 +77,17 @@
 - 대상: 모든 외곽면(전류는 모든 도체), 선택한 객체, 또는 **컷 플레인**(축 + 위치 슬라이더).
 - **Instantaneous**: RF 주기의 임의 위상에서의 값. `▶ Animate`로 돌리면 전류가 흐르는 것이 보임.
 - **Vector arrows**: 방향 표시. 스케일은 Linear 또는 dB(40 dB 범위).
+
+**결과 목록·중간 결과·마커** — 
+
+- 왼쪽 프로젝트 트리의 `Results` 아래에 해석 후 `S Parameter Plot 1`, `Port Modes`, `Convergence`, `E Field`, `H Field`, `Surface Current`(방사 경계가 있으면 `Radiation Pattern`, `3D Radiation Pattern`)가 나열됨. 클릭하면 그 결과가 저장된 설정 그대로 열리고, `Results` 메뉴로 새로 만들면 목록에 추가됨. 우클릭: Duplicate / Rename / Delete.
+- **해석 도중에도** 적응형 패스가 끝날 때마다, 주파수 점이 풀릴 때마다 Results가 열리고 열려 있는 플롯이 자동으로 갱신됨(트리에 `running…` 표시). 중간에 실패/취소해도 그때까지의 결과는 남음.
+- 플롯은 **창 크기에 맞게 가득 차게** 그려짐. 위쪽 상자에서 X/Y 최소·최대를 직접 입력, 휠로 확대/축소, 드래그로 이동, 더블클릭 또는 `Auto`로 복귀.
+- **마커**: 플롯을 클릭하면 가장 가까운 곡선 위 점에 `m1, m2…`가 찍히고, 표에 X, Y, m1과의 차이(ΔX, ΔY)가 표시됨. 마커는 곡선을 따라 드래그, 더블클릭/× 로 삭제, `Marker ▲ Peak / ▼ Min`으로 극값에 바로 지정. 극좌표 패턴은 `Max [dB]`, `Range [dB]`를 입력해 스케일 조정.
+- 필드 패널의 `Plot opacity`, `Model opacity`로 방사 패턴 안쪽의 안테나가 보이도록 투명도를 조절.
+- **결과 저장**: 해석을 마친 프로젝트를 저장하면 `프로젝트.aedt.aeres`가 함께 저장되고, 다시 열면 재해석 없이 결과가 복원됨. `.aedt`를 수정했다면(다른 파일로 바뀐 것이므로) 결과는 불러오지 않음. 두 파일을 함께 옮겨야 함.
+
+**Lumped 포트의 Ground / Signal 방향** — 포트 필드는 **Ground 끝에서 Signal 끝 방향**임(HFSS의 적분선). `Assign Lumped Port…`에서 방향 축(±X/±Y/±Z)을 고르고 `Detect from selection`을 누르면 선택한 면의 크기로 두 끝점이 채워지며(직접 수정 가능, `⇄ Swap`), 3D 뷰에 ground→signal 화살표가 그려짐. 이미 만든 포트는 속성창 또는 우클릭의 `Reverse Polarity` / `Edit Polarity…`로 바꿈(Undo 한 번으로 복구, `.aedt`에 저장됨). 두 포트의 극성이 서로 반대면 S21 위상이 180° 틀어지므로 확인해야 함.
 
 **시간 애니메이션** — 필드 패널(`Results ▸ E Field` 등)에서 주파수를 고르고 `▶ Animate`.
 

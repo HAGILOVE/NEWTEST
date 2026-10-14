@@ -890,6 +890,79 @@ function dlgBoundary() {
   }});
 }
 
+/* Ground and signal ends of a lumped port.
+   The port field points from the Ground end to the Signal end -- HFSS's
+   integration line. Swapping the two reverses the sign of the port voltage:
+   unnoticed on a one-port, a 180-degree phase error in S21 between two ports.
+   The ends are found from the selected face and an axis, and stay editable. */
+function polarityFields(getSelector, current) {
+  const u = U();
+  const box = el('fieldset', {}, el('legend', {}, 'Polarity — ground → signal'));
+  const axisSel = sel('pl-axis', [['+z', 'Along +Z (ground low, signal high)'],
+    ['-z', 'Along −Z (ground high, signal low)'], ['+x', 'Along +X'], ['-x', 'Along −X'],
+    ['+y', 'Along +Y'], ['-y', 'Along −Y'], ['custom', 'Custom points']], '+z');
+  const zero = () => ['0' + u, '0' + u, '0' + u];
+  const gEl = xyz('plg', zero()), sEl = xyz('pls', zero());
+  const note = el('div', { class: 'hint', style: 'margin:4px 0 0' });
+  const set = (pre, v) => ['x', 'y', 'z'].forEach((c, i) => { $('#' + pre + c).value = fmtLen(v[i], u); });
+  const detect = async () => {
+    const a = axisSel.value;
+    if (a === 'custom') return;
+    try {
+      const geo = await rpc('excitation.portGeometry', { selector: getSelector() });
+      const k = 'xyz'.indexOf(a[1]), up = a[0] === '+';
+      const g = geo.center.slice(), sg = geo.center.slice();
+      g[k] = up ? geo.lo[k] : geo.hi[k]; sg[k] = up ? geo.hi[k] : geo.lo[k];
+      set('plg', g); set('pls', sg);
+      const len = Math.abs(geo.hi[k] - geo.lo[k]);
+      note.textContent = len > 0 ? `Gap ${fmtLen(len, u)} ${u} along ${a[1].toUpperCase()} — ` +
+        'if that is not the gap between your two conductors, choose another axis.'
+        : 'The selected face has no extent along this axis: choose another axis.';
+      note.style.color = len > 0 ? '' : 'var(--err)';
+    } catch (e) { note.textContent = String(e.message || e); note.style.color = 'var(--err)'; }
+  };
+  const swap = () => {
+    for (const c of ['x', 'y', 'z']) {
+      const a = $('#plg' + c), b = $('#pls' + c); [a.value, b.value] = [b.value, a.value];
+    }
+    axisSel.value = 'custom';
+  };
+  axisSel.onchange = detect;
+  box.append(field('Direction', axisSel), field('Ground (−) point', gEl),
+    field('Signal (+) point', sEl),
+    el('div', { style: 'display:flex;gap:8px;margin-top:6px' },
+      el('button', { onclick: detect }, 'Detect from selection'),
+      el('button', { onclick: swap, title: 'Reverse the polarity of the port' }, '⇄ Swap ground / signal')),
+    note);
+  // fill from a pre-selected face or object; with nothing chosen yet there is
+  // nothing to detect and an error would only be noise
+  try { const k = getSelector().kind; if (k === 'faces' || k === 'object') setTimeout(detect, 60); }
+  catch (e) { /* selector not readable yet */ }
+  return { node: box, read: () => ({ ground: g3('plg'), signal: g3('pls') }) };
+}
+
+/* Edit the polarity of a lumped port that already exists. */
+async function dlgPolarity(name) {
+  let geo;
+  try { geo = await rpc('excitation.portGeometry', { name }); }
+  catch (e) { return toastError(e.message || String(e)); }
+  const u = U();
+  const body = el('div');
+  const g = geo.ground || geo.center, sg = geo.signal || geo.center;
+  const gEl = xyz('pg', g.map(v => fmtLen(v, u))), sEl = xyz('ps', sg.map(v => fmtLen(v, u)));
+  body.append(field('Ground (−) point', gEl), field('Signal (+) point', sEl),
+    el('div', { style: 'margin-top:6px' }, el('button', { onclick: () => {
+      for (const c of ['x', 'y', 'z']) { const a = $('#pg' + c), b = $('#ps' + c); [a.value, b.value] = [b.value, a.value]; } } },
+      '⇄ Swap ground / signal')),
+    el('div', { class: 'hint' }, (geo.derived ? 'Taken from the port face and its field direction. ' : '') +
+      'The port field points from ground to signal. Reversing it changes the sign of the port voltage ' +
+      '(S21 between two ports shifts by 180°).'));
+  dialog({ title: `Port polarity — ${name}`, body, ok: 'Apply', onOk: async () => {
+    await guard(() => rpc('excitation.setPolarity', { name, ground: g3('pg'), signal: g3('ps') }));
+    await refreshAssignments();
+  } });
+}
+
 function dlgExcitation(kind) {
   const u = U();
   const body = el('div');
@@ -906,10 +979,14 @@ function dlgExcitation(kind) {
       'text', { placeholder: 'blank = keep modal Z' })));
   } else {
     body.appendChild(field('Impedance [Ω]', inp('ex-z', '50')));
-    body.appendChild(field('Field direction', xyz('exd', ['0', '0', '1'])));
+  }
+  let polar = null;
+  if (kind === 'lumped') {
+    polar = polarityFields(() => s.read());
+    body.appendChild(polar.node);
   }
   const useLine = el('input', { type: 'checkbox', id: 'ex-useline' });
-  body.appendChild(el('div', { class: 'check' }, useLine,
+  if (kind === 'wave') body.appendChild(el('div', { class: 'check' }, useLine,
     el('label', { for: 'ex-useline' }, 'Define an integration line')));
   const lineBox = el('div', { id: 'ex-linebox' });
   body.appendChild(lineBox);
@@ -923,7 +1000,7 @@ function dlgExcitation(kind) {
   body.appendChild(el('div', { class: 'hint' },
     kind === 'wave'
       ? 'A wave port solves the 2-D modes of its cross-section. The integration line turns the modal wave impedance into the line impedance V²/2P — needed for TEM lines such as coax or microstrip.'
-      : 'A lumped port drives a uniform field along the given direction and terminates in the stated impedance.'));
+      : 'A lumped port drives a uniform field between its ground and signal ends and terminates in the stated impedance. The arrow in the 3-D view runs from ground to signal.'));
   dialog({ title: kind === 'wave' ? 'Assign Wave Port' : 'Assign Lumped Port',
     body, ok: 'Assign', onOk: async () => {
       const p = {};
@@ -933,9 +1010,10 @@ function dlgExcitation(kind) {
         if (gv('ex-renorm')) p.renorm = parseFloat(gv('ex-renorm'));
       } else {
         p.impedance = parseFloat(gv('ex-z'));
-        p.direction = g3('exd').map(Number);
+        const pl = polar.read();
+        p.ground = pl.ground; p.signal = pl.signal;
       }
-      if ($('#ex-useline').checked) p.line = [g3('exs'), g3('exe')];
+      if (kind === 'wave' && $('#ex-useline').checked) p.line = [g3('exs'), g3('exe')];
       await guard(() => rpc('excitation.assign',
         { kind, name: gv('ex-name'), selector: s.read(), params: p }));
       await refreshAssignments();
@@ -2354,7 +2432,18 @@ function renderProps() {
         row('Impedance', Array.isArray(x.impedance)
           ? x.impedance[0].toFixed(3) + ' Ω' : x.impedance);
       }
-      row('Integration line', x.hasLine ? 'defined' : 'none');
+      row('Integration line', x.hasLine ? 'defined' : (x.kind === 'lumped' ? 'from field direction' : 'none'));
+      if (x.kind === 'lumped') {
+        const dv = x.direction || [0, 0, 1];
+        row('Field (ground → signal)', `(${dv.map(v => (v >= 0 ? '+' : '') + v.toFixed(2)).join(', ')})`);
+        tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
+          el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
+            el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
+              onclick: () => guard(() => rpc('excitation.setPolarity', { name: x.name, flip: true })
+                .then(refreshAssignments)) }, '⇄ Reverse polarity'),
+            el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
+              onclick: () => dlgPolarity(x.name) }, 'Edit polarity…')))));
+      }
       tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
         el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
           onclick: () => guard(() => rpc('excitation.delete', { name: x.name })
@@ -4250,7 +4339,13 @@ function treeContext(ev, type, name, extra) {
       ['Delete', () => guard(() => rpc('boundary.delete', { name })
         .then(refreshAssignments))]);
   } else if (type === 'port') {
-    items.push(['Properties…', () => showProps('port', name)],
+    const pd = (STATE.design.ports || []).find(x => x.name === name);
+    items.push(['Properties…', () => showProps('port', name)]);
+    if (pd && pd.kind === 'lumped') items.push(
+      ['Reverse Polarity (swap ground / signal)', () => guard(() =>
+        rpc('excitation.setPolarity', { name, flip: true }).then(refreshAssignments))],
+      ['Edit Polarity…', () => dlgPolarity(name)]);
+    items.push(
       ['Delete', () => guard(() => rpc('excitation.delete', { name })
         .then(refreshAssignments))]);
   } else if (type === 'sweep') {

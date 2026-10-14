@@ -151,6 +151,8 @@ def _design_json(s: Session) -> Optional[dict]:
             "renorm": _plain(getattr(p, "renormalize_z", None)),
             "deembed": float(getattr(p, "deembed", 0.0)),
             "hasLine": getattr(p, "integration_line", None) is not None,
+            "direction": [float(x) for x in getattr(p, "direction", (0, 0, 1))]
+            if p.kind == "lumped" else None,
             "selector": _selector_json(p.selector),
         } for p in d.ports],
         "meshOps": [{"name": m.name, "maxLength": float(m.max_length),
@@ -1715,6 +1717,17 @@ def _assign_port(s: Session, kind: str = "wave", name: str = "",
     if p.get("line"):
         a, b = p["line"]
         line = (tuple(to_si(x) for x in a), tuple(to_si(x) for x in b))
+    direction = p.get("direction", (0, 0, 1))
+    if kind == "lumped" and p.get("ground") and p.get("signal"):
+        # polarity as HFSS states it: an integration line from the ground
+        # (reference) end to the signal end; the port field points along it
+        g = np.array([to_si(x) for x in p["ground"]], float)
+        sg = np.array([to_si(x) for x in p["signal"]], float)
+        v = sg - g
+        if float(np.linalg.norm(v)) <= 1e-12:
+            raise ValueError("the ground and signal points are the same")
+        direction = [float(x) for x in v / np.linalg.norm(v)]
+        line = (tuple(float(x) for x in g), tuple(float(x) for x in sg))
     if kind == "wave":
         d.add_wave_port(nm, selector=sel, num_modes=int(p.get("modes", 1)),
                         deembed=p.get("deembed", 0.0),
@@ -1723,7 +1736,7 @@ def _assign_port(s: Session, kind: str = "wave", name: str = "",
     else:
         d.add_lumped_port(nm, selector=sel,
                           impedance=complex(p.get("impedance", 50.0)),
-                          direction=p.get("direction", (0, 0, 1)),
+                          direction=direction,
                           integration_line=line)
     s.dirty = True
     n = _warn_if_empty(s, d, sel, nm, "Port")
@@ -1843,6 +1856,105 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
         "integration line from ground to signal.", "info", "excitation")
     return {"ok": True, "name": nm, "sheet": sheet_name, "faces": n,
             "gap": length, "width": wide}
+
+
+def _lumped_ends(d, port):
+    """``(ground, signal)`` points of a lumped port, in metres.
+
+    A port with an integration line has them explicitly. One defined only by
+    a field direction has them implied: the port face's extent along that
+    direction, ground at the low end, signal at the high end."""
+    if getattr(port, "integration_line", None):
+        a, b = port.integration_line
+        return np.asarray(a, float), np.asarray(b, float)
+    got = _model_triangles(d)
+    if got is None:
+        return None
+    tris, cent, nrm = got
+    try:
+        m = np.asarray(port.selector(cent, nrm), bool)
+    except Exception:                                         # noqa: BLE001
+        return None
+    if not m.any():
+        return None
+    v = tris[m].reshape(-1, 3)
+    u = np.asarray(port.direction, float)
+    u = u / max(float(np.linalg.norm(u)), 1e-300)
+    proj = v @ u
+    c = v.mean(axis=0)
+    pc = float(c @ u)
+    return c + u * (float(proj.min()) - pc), c + u * (float(proj.max()) - pc)
+
+
+@command("excitation.portGeometry")
+def _port_geometry(s: Session, selector: Optional[dict] = None, name: str = "",
+                   **_):
+    """Where a port face is (centre, extent) and, for a lumped port, which end
+    is ground and which is signal. Lengths in metres."""
+    d = s.require_design()
+    port = None
+    if name:
+        port = d.get_port(name)
+        sel = port.selector
+    else:
+        sel = _make_selector(d, selector or {"kind": "plane"})
+    got = _model_triangles(d)
+    if got is None:
+        raise ValueError("there is no geometry to take a port from")
+    tris, cent, nrm = got
+    m = np.asarray(sel(cent, nrm), bool)
+    if not m.any():
+        raise ValueError("the selection does not touch any face of the model")
+    v = tris[m].reshape(-1, 3)
+    out = {"center": [float(x) for x in v.mean(axis=0)],
+           "lo": [float(x) for x in v.min(axis=0)],
+           "hi": [float(x) for x in v.max(axis=0)], "faces": int(m.sum())}
+    if port is not None and port.kind == "lumped":
+        ends = _lumped_ends(d, port)
+        if ends is not None:
+            out["ground"] = [float(x) for x in ends[0]]
+            out["signal"] = [float(x) for x in ends[1]]
+            out["derived"] = getattr(port, "integration_line", None) is None
+    return out
+
+
+@command("excitation.setPolarity")
+def _set_polarity(s: Session, name: str = "", ground: Optional[list] = None,
+                  signal: Optional[list] = None, flip: bool = False, **_):
+    """Set which end of a lumped port is ground and which is signal.
+
+    ``flip`` swaps the present ends (reverses the sign of the port voltage, so
+    S21 between two such ports changes by 180 degrees); otherwise give both
+    points."""
+    d = s.require_design()
+    port = d.get_port(name)
+    if port.kind != "lumped":
+        raise ValueError("polarity applies to lumped ports; a wave port gets "
+                         "its polarity from its integration line")
+    if flip:
+        ends = _lumped_ends(d, port)
+        if ends is None:
+            raise ValueError("the port does not touch the model, so its ends "
+                             "cannot be found")
+        g, sg = ends[1], ends[0]
+    else:
+        if not ground or not signal:
+            raise ValueError("give the ground and the signal point")
+        g = np.array([to_si(x) for x in ground], float)
+        sg = np.array([to_si(x) for x in signal], float)
+    v = sg - g
+    L = float(np.linalg.norm(v))
+    if L <= 1e-12:
+        raise ValueError("the ground and signal points are the same")
+    port.integration_line = (tuple(float(x) for x in g),
+                             tuple(float(x) for x in sg))
+    port.direction = tuple(float(x) for x in v / L)
+    d.mesh = None
+    s.dirty = True
+    s.messages.add(f"Port {name!r}: field from ground to signal along "
+                   f"({port.direction[0]:+.2f}, {port.direction[1]:+.2f}, "
+                   f"{port.direction[2]:+.2f}).", "info", "excitation")
+    return {"ok": True, "direction": list(port.direction)}
 
 
 @command("excitation.delete")
@@ -2499,6 +2611,14 @@ def _view_assignments(s: Session, **_):
         if il:
             item["line"] = [[float(x) for x in il[0]],
                             [float(x) for x in il[1]]]
+        elif p.kind == "lumped":
+            # no explicit line: show the one the field direction implies, so
+            # the polarity of every lumped port is visible as an arrow
+            ends = _lumped_ends(d, p)
+            if ends is not None:
+                item["line"] = [[float(x) for x in ends[0]],
+                                [float(x) for x in ends[1]]]
+                item["derived"] = True
         items.append(item)
     for b in d.boundaries:
         sel = pick(b.selector)
@@ -3103,6 +3223,7 @@ MUTATING = {
     "boundary.assign": "Assign boundary",
     "boundary.delete": "Delete boundary",
     "excitation.assign": "Assign excitation",
+    "excitation.setPolarity": "Set port polarity",
     "excitation.delete": "Delete excitation",
     "analysis.addSetup": "Add setup",
     "analysis.editSetup": "Edit setup",
