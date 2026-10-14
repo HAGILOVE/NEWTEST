@@ -430,8 +430,11 @@ def write_selector(parent: WarpBlock, sel, d) -> WarpBlock:
     though a face id could never survive one.
     """
     from ...geometry.select import (BoundingBoxFaceSelector, BoxSelector,
-                                    CylinderSelector, OuterSelector,
-                                    PlaneSelector, ShapeSelector)
+                                    CylinderSelector, FaceSelector,
+                                    IntersectSelector, InvertSelector,
+                                    MultiFaceSelector, OuterSelector,
+                                    PlaneSelector, ShapeSelector,
+                                    UnionSelector)
     b = parent.add_block("AetherSelector")
     if isinstance(sel, PlaneSelector):
         b.add_prop("Kind", "Plane")
@@ -457,8 +460,31 @@ def write_selector(parent: WarpBlock, sel, d) -> WarpBlock:
     elif isinstance(sel, ShapeSelector):
         b.add_prop("Kind", "Shape")
         b.add_prop("Objects", _selector_objects(sel, d))
-    else:
+    elif isinstance(sel, FaceSelector):
+        # a face picked in the viewport: stored as the geometry that finds it
+        b.add_prop("Kind", "Face")
+        b.add_prop("Point", [float(x) for x in sel.point])
+        b.add_prop("Normal", [float(x) for x in sel.normal])
+        b.add_prop("Lo", [float(x) for x in sel.lo])
+        b.add_prop("Hi", [float(x) for x in sel.hi])
+        b.add_prop("Planar", bool(sel.planar))
+        b.add_prop("Object", str(sel.object))
+        b.add_prop("Tol", float(sel.tol))
+    elif isinstance(sel, (MultiFaceSelector, UnionSelector, IntersectSelector,
+                          InvertSelector)):
+        kind = ("MultiFace" if isinstance(sel, MultiFaceSelector) else
+                "Union" if isinstance(sel, UnionSelector) else
+                "Intersect" if isinstance(sel, IntersectSelector) else "Invert")
+        b.add_prop("Kind", kind)
+        for child in sel.sels:
+            write_selector(b, child, d)
+    elif isinstance(sel, OuterSelector):
         b.add_prop("Kind", "Outer")
+    else:
+        # a selector made from a script function cannot be written down;
+        # say so instead of quietly turning it into "all outer faces"
+        b.add_prop("Kind", "Unsupported")
+        b.add_prop("Describe", type(sel).__name__)
     return b
 
 

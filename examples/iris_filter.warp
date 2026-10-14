@@ -1,6 +1,6 @@
 $begin 'WarpsProject'
 	FileVersion(1, 0)
-	Created='Wed Oct 14 16:29:13 2026'
+	Created='Wed Oct 14 16:30:49 2026'
 	Product='ElectronicsDesktop'
 	BuildVariant='Aether-EM'
 	$begin 'Desktop'
@@ -707,14 +707,38 @@ $begin 'WarpsProject'
 				BoundType='Perfect E'
 				Name='Iris1'
 				$begin 'AetherSelector'
-					Kind='Outer'
+					Kind='Union'
+					$begin 'AetherSelector'
+						Kind='Box'
+						Lo=[0, 0, 0.011999999]
+						Hi=[0.0059299999999999995, 0.01016, 0.012000001]
+						Tol=1e-09
+					$end 'AetherSelector'
+					$begin 'AetherSelector'
+						Kind='Box'
+						Lo=[0.01693, 0, 0.011999999]
+						Hi=[0.02286, 0.01016, 0.012000001]
+						Tol=1e-09
+					$end 'AetherSelector'
 				$end 'AetherSelector'
 			$end 'Iris1'
 			$begin 'Iris2'
 				BoundType='Perfect E'
 				Name='Iris2'
 				$begin 'AetherSelector'
-					Kind='Outer'
+					Kind='Union'
+					$begin 'AetherSelector'
+						Kind='Box'
+						Lo=[0, 0, 0.031999999]
+						Hi=[0.0059299999999999995, 0.01016, 0.032000001]
+						Tol=1e-09
+					$end 'AetherSelector'
+					$begin 'AetherSelector'
+						Kind='Box'
+						Lo=[0.01693, 0, 0.031999999]
+						Hi=[0.02286, 0.01016, 0.032000001]
+						Tol=1e-09
+					$end 'AetherSelector'
 				$end 'AetherSelector'
 			$end 'Iris2'
 			$begin 'Walls'

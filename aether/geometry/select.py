@@ -224,31 +224,58 @@ class Predicate:
         return np.asarray(self.func(cen, nrm), bool)
 
 
-def union_sel(*sels: Selector) -> Selector:
-    def _f(cen, nrm):
+class _Composite:
+    """Base of selectors made from other selectors. They are classes, not
+    closures, so a project file can write them down and read them back."""
+    outer_only = False
+
+    def __init__(self, *sels):
+        self.sels = list(sels)
+
+
+class UnionSelector(_Composite):
+    def __call__(self, cen, nrm):
         m = np.zeros(len(cen), bool)
-        for s in sels:
+        for s in self.sels:
             m |= s(cen, nrm)
         return m
-    return _f
+
+
+class IntersectSelector(_Composite):
+    def __call__(self, cen, nrm):
+        m = np.ones(len(cen), bool)
+        for s in self.sels:
+            m &= s(cen, nrm)
+        return m
+
+
+class InvertSelector(_Composite):
+    def __call__(self, cen, nrm):
+        return ~self.sels[0](cen, nrm)
+
+
+class MultiFaceSelector(UnionSelector):
+    """Several picked faces assigned together, as one boundary or one port."""
+
+    def __init__(self, faces):
+        super().__init__(*faces)
+        self.faces = self.sels
+
+
+def union_sel(*sels: Selector) -> Selector:
+    return UnionSelector(*sels)
 
 
 def intersect_sel(*sels: Selector) -> Selector:
-    def _f(cen, nrm):
-        m = np.ones(len(cen), bool)
-        for s in sels:
-            m &= s(cen, nrm)
-        return m
-    return _f
+    return IntersectSelector(*sels)
 
 
 def invert_sel(sel: Selector) -> Selector:
-    def _f(cen, nrm):
-        return ~sel(cen, nrm)
-    return _f
+    return InvertSelector(sel)
 
 
 __all__ = ["Selector", "PlaneSelector", "BoxSelector", "ShapeSelector",
            "CylinderSelector", "OuterSelector", "BoundingBoxFaceSelector",
            "FaceSelector", "Predicate", "union_sel", "intersect_sel",
-           "invert_sel"]
+           "invert_sel", "UnionSelector", "IntersectSelector",
+           "InvertSelector", "MultiFaceSelector"]

@@ -1003,9 +1003,30 @@ def _read_one_boundary(b, btype, btype_raw, name, sc, design, lib, report):
 def _selector_from_block(blk: WarpBlock, design: Design):
     """Rebuild an Aether selector written by :func:`writer.write_selector`."""
     from ...geometry.select import (BoundingBoxFaceSelector, BoxSelector,
-                                    CylinderSelector, OuterSelector,
-                                    PlaneSelector, ShapeSelector)
+                                    CylinderSelector, FaceSelector,
+                                    IntersectSelector, InvertSelector,
+                                    MultiFaceSelector, OuterSelector,
+                                    PlaneSelector, ShapeSelector,
+                                    UnionSelector)
     kind = str(blk.get("Kind", "Outer")).strip("'")
+    if kind == "Unsupported":
+        return None
+    if kind == "Face":
+        return FaceSelector(point=blk.get("Point", [0, 0, 0]),
+                            normal=blk.get("Normal", [0, 0, 1]),
+                            lo=blk.get("Lo", [0, 0, 0]), hi=blk.get("Hi", [0, 0, 0]),
+                            planar=bool(blk.get("Planar", True)),
+                            object=str(blk.get("Object", "")).strip("'"),
+                            tol=float(blk.get("Tol", 0.0)))
+    if kind in ("MultiFace", "Union", "Intersect", "Invert"):
+        kids = [_selector_from_block(c, design) for c in blk.blocks
+                if c.name == "AetherSelector"]
+        if any(k is None for k in kids) or not kids:
+            return None
+        if kind == "MultiFace":
+            return MultiFaceSelector(kids)
+        return {"Union": UnionSelector, "Intersect": IntersectSelector,
+                "Invert": InvertSelector}[kind](*kids)
     if kind == "Plane":
         win = blk.get("Window")
         return PlaneSelector(str(blk.get("Axis", "z")), float(blk.get("Value", 0.0)),
@@ -1072,7 +1093,11 @@ def _selector_for(b: WarpBlock, design: Design,
     """Best-effort geometric re-attachment of an Warps boundary."""
     aether = b.block("AetherSelector")
     if aether is not None:
-        return _selector_from_block(aether, design), ""
+        sel = _selector_from_block(aether, design)
+        if sel is None:
+            return None, ("its selection was made by a script function and "
+                          "could not be saved; assign it again")
+        return sel, ""
     objs = b.get("Objects")
     if objs is None:
         objs = b.get("Faces")

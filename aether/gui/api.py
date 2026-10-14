@@ -24,7 +24,7 @@ from ..core.logging import get_logger
 from ..core.materials import LIBRARY
 from ..geometry import primitives as prim
 from ..model import Sheet
-from ..geometry.select import (BoundingBoxFaceSelector, BoxSelector,
+from ..geometry.select import (MultiFaceSelector, BoundingBoxFaceSelector, BoxSelector,
                                CylinderSelector, FaceSelector, OuterSelector,
                                PlaneSelector, ShapeSelector, union_sel)
 from . import files as filesmod
@@ -1620,20 +1620,6 @@ def _face_selector(f: dict) -> FaceSelector:
                         lo=f.get("lo", (0, 0, 0)), hi=f.get("hi", (0, 0, 0)),
                         planar=bool(f.get("planar", True)),
                         object=str(f.get("object", "")))
-
-
-class MultiFaceSelector:
-    """Several picked faces assigned together, as one boundary or one port."""
-
-    def __init__(self, faces):
-        self.faces = list(faces)
-        self.outer_only = False
-
-    def __call__(self, cen, nrm):
-        m = np.zeros(len(cen), bool)
-        for f in self.faces:
-            m |= f(cen, nrm)
-        return m
 
 
 def _make_selector(d, spec: dict):
