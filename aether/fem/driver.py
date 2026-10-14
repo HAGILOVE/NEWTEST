@@ -47,6 +47,8 @@ class Solution:
     sweep_info: List[dict] = field(default_factory=list)
     #: eigenmode designs: the resonances found (``aether.fem.eigen.EigenMode``)
     modes: List[object] = field(default_factory=list)
+    #: True for a snapshot taken while the analysis is still running
+    partial: bool = False
 
     # -- convenience --------------------------------------------------
     @property
@@ -308,8 +310,14 @@ def solve_frequency(design, mesh, dofmap, ops, bts, freq: float,
 def solve_design(design, setup: Optional[str] = None,
                  sweep: Optional[str] = None, backend: str = "auto",
                  save_fields: bool = False, adaptive: Optional[bool] = None,
-                 progress: bool = True, cancel=None) -> Solution:
-    """Run a complete analysis (adaptive passes + frequency sweep)."""
+                 progress: bool = True, cancel=None,
+                 on_partial: Optional[Callable[["Solution"], None]] = None
+                 ) -> Solution:
+    """Run a complete analysis (adaptive passes + frequency sweep).
+
+    ``on_partial`` is called with a snapshot :class:`Solution`
+    (``partial=True``) after every adaptive pass and every solved frequency,
+    so results can be looked at while the analysis is still running."""
     from .control import checkpoint
     checkpoint(cancel)
     t0 = time.perf_counter()
@@ -325,8 +333,22 @@ def solve_design(design, setup: Optional[str] = None,
     use_adaptive = design.config.adaptive.enabled if adaptive is None else adaptive
 
     from .adaptive import adaptive_solve
+    names0 = design.excitation_names()
+
+    def on_pass(mesh_, dm_, f0_, S_, z0_, psols_, flds_, hist_):
+        if on_partial is None:
+            return
+        part = Solution(design, mesh_, dm_, np.array([f0_]),
+                        sparams=SParameters(np.array([f0_]), S_[None],
+                                            np.asarray(z0_)[None], names0),
+                        ports={float(f0_): psols_},
+                        fields={(float(f0_), j): fs for j, fs in flds_.items()},
+                        convergence=hist_, partial=True)
+        on_partial(part)
+
     mesh, dofmap, ops, bts, history = adaptive_solve(
-        design, st, backend=backend, enabled=use_adaptive, cancel=cancel)
+        design, st, backend=backend, enabled=use_adaptive, cancel=cancel,
+        on_pass=on_pass if on_partial is not None else None)
 
     # frequency list
     if sweep is None:
@@ -350,32 +372,54 @@ def solve_design(design, setup: Optional[str] = None,
     solved = np.zeros(len(freqs), bool)
 
     want_fields = save_fields or any(s.save_fields for s in sweeps)
-    with timed(log, f"frequency sweep ({len(freqs)} point(s))"):
-        for name, kind, fr, sw in plan:
-            checkpoint(cancel)
-            if kind != "discrete":
-                log.info("sweep %s: %s over %d point(s)", name, kind, len(fr))
-            r = run_sweep(design, mesh, dofmap, ops, bts, fr, kind,
-                          tol=getattr(sw, "tolerance", None),
-                          max_points=getattr(sw, "max_points", None),
-                          want_fields=want_fields, cancel=cancel,
-                          progress=progress)
-            r.info["name"] = name
-            sol.sweep_info.append(r.info)
-            if kind != "discrete":
-                log.info("sweep %s: %d full solve(s) for %d point(s) "
-                         "[%s, last probe error %.2e, %.2f s]", name,
-                         r.info["solved"], r.info["points"], r.info["kind"],
-                         r.info.get("last_probe_error", 0.0),
-                         r.info["seconds"])
-            ix = np.searchsorted(freqs, r.freqs)
-            # a real solve outranks a reconstruction at a shared frequency
-            take = r.solved | ~solved[ix]
-            ix, rr = ix[take], np.nonzero(take)[0]
-            Sall[ix], Gall[ix], Zportall[ix] = r.S[rr], r.gamma[rr], r.zport[rr]
-            solved[ix] = solved[ix] | r.solved[rr]
-            sol.ports.update(r.ports)
-            sol.fields.update(r.fields)
+
+    from . import sweep as _sweepmod
+    seen: Dict[float, tuple] = {}
+
+    def point_hook(res_, i_):
+        f_ = float(res_.freqs[i_])
+        seen[f_] = (res_.S[i_].copy(), res_.zport[i_].copy())
+        sol.ports.update({f_: res_.ports[f_]})
+        sol.fields.update({k: v for k, v in res_.fields.items() if k[0] == f_})
+        fl = np.array(sorted(seen))
+        part = Solution(design, mesh, dofmap, fl,
+                        sparams=SParameters(fl, np.array([seen[f][0] for f in fl]),
+                                            np.array([seen[f][1] for f in fl]),
+                                            names0),
+                        ports=dict(sol.ports), fields=dict(sol.fields),
+                        convergence=history, partial=True)
+        on_partial(part)
+
+    _sweepmod.POINT_HOOK = point_hook if on_partial is not None else None
+    try:
+        with timed(log, f"frequency sweep ({len(freqs)} point(s))"):
+            for name, kind, fr, sw in plan:
+                checkpoint(cancel)
+                if kind != "discrete":
+                    log.info("sweep %s: %s over %d point(s)", name, kind, len(fr))
+                r = run_sweep(design, mesh, dofmap, ops, bts, fr, kind,
+                              tol=getattr(sw, "tolerance", None),
+                              max_points=getattr(sw, "max_points", None),
+                              want_fields=want_fields, cancel=cancel,
+                              progress=progress)
+                r.info["name"] = name
+                sol.sweep_info.append(r.info)
+                if kind != "discrete":
+                    log.info("sweep %s: %d full solve(s) for %d point(s) "
+                             "[%s, last probe error %.2e, %.2f s]", name,
+                             r.info["solved"], r.info["points"], r.info["kind"],
+                             r.info.get("last_probe_error", 0.0),
+                             r.info["seconds"])
+                ix = np.searchsorted(freqs, r.freqs)
+                # a real solve outranks a reconstruction at a shared frequency
+                take = r.solved | ~solved[ix]
+                ix, rr = ix[take], np.nonzero(take)[0]
+                Sall[ix], Gall[ix], Zportall[ix] = r.S[rr], r.gamma[rr], r.zport[rr]
+                solved[ix] = solved[ix] | r.solved[rr]
+                sol.ports.update(r.ports)
+                sol.fields.update(r.fields)
+    finally:
+        _sweepmod.POINT_HOOK = None
     sol.solved = solved
 
     names = design.excitation_names()

@@ -2105,9 +2105,18 @@ function renderTree() {
           title: `${m.where} — max element ${fmtLen(m.maxLength, U())}`,
           onclick: () => showProps('meshop', m.name) });
     }
-    add(2, 'res', 'Results', 'results', { dim: !STATE.hasSolution,
-      tag: STATE.hasSolution ? 'solved' : 'no solution',
-      onclick: () => STATE.hasSolution ? openReport('sparam') : null });
+    const resOpen = add(2, 'res', 'Results', 'results', { dim: !STATE.hasSolution,
+      kids: RESULTS.items.length,
+      tag: !STATE.hasSolution ? 'no solution'
+        : STATE.solutionPartial ? 'running…' : 'solved',
+      onclick: () => STATE.hasSolution ? openReport('sparam', true) : null });
+    if (resOpen) for (const it of RESULTS.items)
+      add(3, 'rs:' + it.id, it.title, 'result', {
+        sel: RESULTS.active === it,
+        tag: it.kind === 'field' ? 'view' : 'plot',
+        title: 'Click to open · right-click for more',
+        ctxName: it.id,
+        onclick: () => openResult(it) });
   }
 }
 
@@ -2678,10 +2687,12 @@ let fieldOn = false;
    any instant of the RF cycle (animated, so current can be seen to flow). */
 let FIELD = { quantity: 'E', where: 'surface', axis: 'z', pos: null,
   excitation: 0, freq: null, instant: false, phase: 0, scale: 'linear',
-  arrows: false, info: null, timer: null, busy: false, comp: 'mag', speed: 1 };
+  arrows: false, info: null, timer: null, busy: false, comp: 'mag', speed: 1,
+  modelAlpha: 1, plotAlpha: 1 };
 
 async function showField(on, opts) {
   if (!on) { closeFieldPanel(); return; }
+  if (activePage !== 'modeler') selectPage('modeler');   // the plot lives in the 3-D view
   if (opts) {
     if (opts.excitation != null) FIELD.excitation = opts.excitation;
     if (opts.freq != null) FIELD.freq = opts.freq;
@@ -2699,6 +2710,7 @@ async function showField(on, opts) {
     fieldOn = true;
     $('#vt-field') && $('#vt-field').classList.add('on');
     await plotField();
+    trackFieldResult();
   });
 }
 
@@ -2726,7 +2738,11 @@ function buildFieldPanel() {
     ['J', 'Js  surface current']].concat(info.radiation ? [['P', 'Far field  (radiation)']] : []),
     FIELD.quantity);
   q.onchange = () => { FIELD.quantity = q.value; if (q.value === 'J' && FIELD.where === 'cut') FIELD.where = 'surface';
-    if (q.value === 'J' || q.value === 'P') FIELD.comp = 'mag'; buildFieldPanel(); redraw(); };
+    if (q.value === 'J' || q.value === 'P') FIELD.comp = 'mag';
+    // a pattern is a closed surface around the antenna: show it see-through
+    FIELD.plotAlpha = q.value === 'P' ? 0.7 : 1;
+    if (q.value === 'P') FIELD.modelAlpha = Math.min(FIELD.modelAlpha, 0.9);
+    buildFieldPanel(); redraw(); };
   row('Quantity', q);
   const isP = FIELD.quantity === 'P';
   if (!isP) {
@@ -2800,6 +2816,18 @@ function buildFieldPanel() {
     ar.onchange = () => { FIELD.arrows = ar.checked; redraw(); };
     row('Vector arrows', ar);
   }
+  // Opacity of the plot itself and of the model behind it, so the antenna can
+  // be seen inside its radiation pattern (and the field through a heavy body)
+  const slider = (id, key, lo) => {
+    const r = el('input', { type: 'range', id, min: String(lo), max: '1', step: '0.05',
+      value: String(FIELD[key]), style: 'width:100%' });
+    r.oninput = () => { FIELD[key] = parseFloat(r.value); };
+    r.onchange = () => { FIELD[key] = parseFloat(r.value); redraw(); };
+    return r;
+  };
+  row('Plot opacity', slider('fp-pa', 'plotAlpha', 0.1));
+  if (FIELD.where !== 'surface' || FIELD.quantity === 'J' || FIELD.quantity === 'P')
+    row('Model opacity', slider('fp-ma', 'modelAlpha', 0.05));
   box.appendChild(el('div', { class: 'note', id: 'fp-note' }, ''));
 }
 
@@ -2834,11 +2862,15 @@ async function plotField() {
         phase: FIELD.instant ? FIELD.phase : null, scale: FIELD.scale,
         arrows: FIELD.arrows ? 500 : 0, component: FIELD.comp });
     }
-    f.name = '__field__'; f.color = '#888888'; f.transparency = 0;
+    f.name = '__field__'; f.color = '#888888';
+    f.transparency = 1 - Math.min(1, Math.max(0.1, FIELD.plotAlpha));
     // surface plots replace the model; cut planes, currents and the far field
     // sit around or inside it
     const keepModel = FIELD.where === 'cut' || FIELD.quantity === 'J' || FIELD.quantity === 'P';
-    const base = keepModel ? currentBuffers.filter(o => !o.placeholder) : [];
+    const m = Math.min(1, Math.max(0.05, FIELD.modelAlpha));
+    const base = keepModel ? currentBuffers.filter(o => !o.placeholder).map(o =>
+      m >= 0.999 ? o : Object.assign({}, o,
+        { transparency: 1 - (1 - (o.transparency == null ? 0.4 : o.transparency)) * m })) : [];
     VP.setObjects(base.concat([f]), VP.bbox);
     VP.setArrows(f.arrows && f.arrows.length ? f.arrows : null);
     if (FIELD.quantity === 'P') $('#vp-assign') && ($('#vp-assign').style.display = 'none');
@@ -4205,6 +4237,14 @@ function treeContext(ev, type, name, extra) {
       null,
       ['Delete', () => guard(() => rpc('modeler.delete', { names: [name] })
         .then(() => refreshGeometry(false)))]);
+  } else if (type === 'result') {
+    const it = RESULTS.items.find(x => x.id === name);
+    if (it) items.push(['Open', () => openResult(it)],
+      ['Duplicate', () => { const c = addResult(it.kind, it.sub, JSON.parse(JSON.stringify(it.state)));
+        c.plots = JSON.parse(JSON.stringify(it.plots)); renderTree(); openResult(c); }],
+      ['Rename…', () => { const n = prompt('Result name', it.title);
+        if (n && n.trim()) { it.title = n.trim(); renderTree(); renderTabs(); } }],
+      null, ['Delete', () => removeResult(it)]);
   } else if (type === 'boundary') {
     items.push(['Properties…', () => showProps('boundary', name)],
       ['Delete', () => guard(() => rpc('boundary.delete', { name })
@@ -4535,29 +4575,149 @@ function ensurePage(id, title) {
 }
 
 /* ------------------------------------------------------------- reports */
-async function openReport(kind) {
+/* ----------------------------------------------------------- results list
+   Every report and field plot is an entry under Results in the project tree,
+   with its own settings (Y-axis form and traces, axis ranges, markers, field
+   quantity, frequency ...). Clicking an entry opens it as it was left; the
+   Results menu creates a new one. While an analysis is running the entries
+   follow the partial results (see liveRefresh). */
+const RESULTS = { items: [], active: null, seq: {}, id: 0, key: '', loose: {},
+                  serial: -1, busy: false };
+const RESULT_BASE = { sparam: 'S Parameter Plot', farfield: 'Radiation Pattern',
+  modes: 'Port Modes', convergence: 'Convergence', eigen: 'Eigenmode Data',
+  E: 'E Field', H: 'H Field', J: 'Surface Current', P: '3D Radiation Pattern' };
+const FIELD_KEYS = ['quantity', 'where', 'axis', 'pos', 'excitation', 'freq',
+  'instant', 'phase', 'scale', 'arrows', 'comp', 'speed', 'modelAlpha', 'plotAlpha'];
+
+function resultState(kind) {
+  if (kind === 'sparam') return { form: reportForm, traces: reportTraces };
+  if (kind === 'farfield') return Object.assign({}, ffState);
+  if (kind === 'field') { const o = {}; for (const k of FIELD_KEYS) o[k] = FIELD[k]; return o; }
+  return {};
+}
+function applyResultState(item) {
+  const st = item.state || {};
+  if (item.kind === 'sparam') { reportForm = st.form || 'db'; reportTraces = st.traces || null; }
+  else if (item.kind === 'farfield') Object.assign(ffState, st);
+  else if (item.kind === 'field') for (const k of FIELD_KEYS) if (k in st) FIELD[k] = st[k];
+}
+function captureResult() {
+  const it = RESULTS.active;
+  if (it) it.state = resultState(it.kind);
+}
+function plotState(key) {
+  const store = RESULTS.active ? RESULTS.active.plots : RESULTS.loose;
+  return store[key] || (store[key] = { view: null, markers: [] });
+}
+function pageIdFor(base) { return RESULTS.active ? 'rep-' + RESULTS.active.id : base; }
+function pageTitleFor(base) { return RESULTS.active ? RESULTS.active.title : base; }
+
+function addResult(kind, sub, state) {
+  const base = RESULT_BASE[sub || kind] || kind;
+  const n = RESULTS.seq[base] = (RESULTS.seq[base] || 0) + 1;
+  const item = { id: 'r' + (++RESULTS.id), kind, sub: sub || kind,
+    title: base + ' ' + n, state: state || resultState(kind), plots: {} };
+  RESULTS.items.push(item);
+  return item;
+}
+function removeResult(item) {
+  RESULTS.items = RESULTS.items.filter(x => x !== item);
+  if (RESULTS.active === item) RESULTS.active = null;
+  closePage('rep-' + item.id);
+  renderTree();
+}
+
+async function openResult(item) {
+  RESULTS.active = item;
+  applyResultState(item);
+  RESULTS.opening = true;
+  try {
+    if (item.kind === 'field') { selectPage('modeler'); await showField(true); }
+    else if (item.kind === 'sparam') await reportSParam();
+    else if (item.kind === 'farfield') await reportFarField();
+    else if (item.kind === 'modes') await reportModes();
+    else if (item.kind === 'convergence') await reportConvergence();
+    else if (item.kind === 'eigen') await reportEigen();
+  } finally { RESULTS.opening = false; }
+  renderTree();
+}
+
+/* Menu / ribbon entry: make a new result and open it. */
+async function openReport(kind, reuse) {
   if (!STATE.hasSolution) return toastError('No solution — run Analyze first');
-  if (kind === 'eigen' || (STATE.design?.solutionType === 'eigenmode' &&
-      (kind === 'sparam' || kind === 'modes'))) return reportEigen();
-  if (kind === 'farfield') return reportFarField();
-  if (kind === 'sparam') return reportSParam();
-  if (kind === 'modes') return reportModes();
-  if (kind === 'convergence') return reportConvergence();
+  if (kind === 'sparam' && STATE.design?.solutionType === 'eigenmode') kind = 'eigen';
+  if (kind === 'modes' && STATE.design?.solutionType === 'eigenmode') kind = 'eigen';
+  const single = ['modes', 'convergence', 'eigen'].includes(kind);
+  let item = (single || reuse) && RESULTS.items.find(x => x.kind === kind);
+  if (!item) item = addResult(kind);
+  return openResult(item);
+}
+
+/* A field plot started from the menu is recorded too, so it is listed. */
+function trackFieldResult() {
+  if (RESULTS.opening) { captureResult(); return; }
+  const act = RESULTS.active;
+  if (act && act.kind === 'field' && act.state.quantity === FIELD.quantity) {
+    captureResult(); return;
+  }
+  RESULTS.active = addResult('field', FIELD.quantity, resultState('field'));
+  renderTree();
+}
+
+async function seedResults() {
+  const key = STATE.hasSolution && STATE.design
+    ? STATE.project.name + ':' + STATE.design.name : '';
+  if (key === RESULTS.key) return;
+  RESULTS.key = key; RESULTS.items = []; RESULTS.active = null; RESULTS.seq = {};
+  RESULTS.loose = {};
+  $$('.doc-page').forEach(n => { if ((n.dataset.page || '').startsWith('rep-')) closePage(n.dataset.page); });
+  if (!key) { renderTree(); return; }
+  if (STATE.design.solutionType === 'eigenmode') addResult('eigen');
+  else { addResult('sparam'); addResult('modes'); addResult('convergence'); }
+  try {
+    const fi = await rpc('view.fieldInfo');
+    if (STATE.design.solutionType !== 'eigenmode') {
+      addResult('field', 'E', Object.assign(resultState('field'), { quantity: 'E', where: 'cut' }));
+      addResult('field', 'H', Object.assign(resultState('field'), { quantity: 'H', where: 'cut' }));
+      addResult('field', 'J', Object.assign(resultState('field'), { quantity: 'J', where: 'surface' }));
+      if (fi.radiation) {
+        addResult('farfield');
+        addResult('field', 'P', Object.assign(resultState('field'), { quantity: 'P' }));
+      }
+    }
+  } catch (e) { /* no saved fields: the report entries are enough */ }
+  renderTree();
+}
+
+/* Follow a growing partial solution: redraw whichever result is on screen. */
+async function liveRefresh() {
+  if (RESULTS.busy || !STATE.hasSolution) return;
+  const it = RESULTS.active;
+  if (!it) return;
+  const onScreen = it.kind === 'field' ? fieldOn : activePage === 'rep-' + it.id;
+  if (!onScreen) return;
+  RESULTS.busy = true;
+  try {
+    if (it.kind === 'field') await plotField(); else await openResult(it);
+  } catch (e) { /* the next tick tries again */ }
+  finally { RESULTS.busy = false; }
 }
 
 let reportForm = 'db';
 let reportTraces = null;
 
 async function reportSParam() {
-  const page = ensurePage('rep-s', 'S-Parameter Plot');
+  // fetch first: the page is cleared and rebuilt in one go, so a live refresh
+  // during a running analysis does not flash an empty window
+  const data = await rpc('results.report',
+    { form: reportForm, traces: reportTraces });
+  const page = ensurePage(pageIdFor('rep-s'), pageTitleFor('S-Parameter Plot'));
   const wrap = el('div', { class: 'report' });
   const bar = el('div', { class: 'report-toolbar' });
   const body = el('div', { class: 'report-body' });
   wrap.append(bar, body);
   page.appendChild(wrap);
 
-  const data = await rpc('results.report',
-    { form: reportForm, traces: reportTraces });
   const n = data.nPort;
   bar.appendChild(el('label', {}, 'Y axis'));
   const fs = sel('rp-form', [['db', 'dB(S)'], ['mag', '|S|'],
@@ -4604,7 +4764,10 @@ async function reportSParam() {
         label: t.label, y: t.y })), 'Frequency [GHz]',
         { db: 'Magnitude [dB]', mag: '|S|', deg: 'Phase [deg]', vswr: 'VSWR',
           zre: 'Re(Z) [Ω]', zim: 'Im(Z) [Ω]', zmag: '|Z| [Ω]', re: 'Re(S)', im: 'Im(S)',
-          groupdelay: 'Group delay [ns]' }[data.form])));
+          groupdelay: 'Group delay [ns]' }[data.form],
+        { xUnit: ' GHz', yUnit: { db: ' dB', deg: '°', zre: ' Ω', zim: ' Ω', zmag: ' Ω',
+            groupdelay: ' ns' }[data.form] || '', state: plotState('sparam:' + data.form),
+          onChange: captureResult })));
   }
 
   const tbl = el('table', { class: 'grid', style: 'margin-top:12px' });
@@ -4617,11 +4780,13 @@ async function reportSParam() {
       el('td', { class: 'num' }, (data.freq[k] / 1e9).toFixed(5)),
       ...data.traces.map(t => el('td', { class: 'num' }, t.y[k].toFixed(4)))));
   }
-  body.appendChild(el('div', { style: 'margin-top:12px' }, tbl));
+  body.appendChild(el('details', { class: 'data-table' },
+    el('summary', {}, 'Data table'), tbl));
+  captureResult();
 }
 
 async function reportEigen() {
-  const page = ensurePage('rep-e', 'Eigenmode Data');
+  const page = ensurePage(pageIdFor('rep-e'), pageTitleFor('Eigenmode Data'));
   const d = await rpc('results.eigenModes');
   const wrap = el('div', { class: 'report' });
   const body = el('div', { class: 'report-body' });
@@ -4664,20 +4829,23 @@ async function reportEigen() {
         'Adaptive pass', 'max relative Δf')));
 }
 
-let ffState = { excitation: 0, freq: null, mode: 'polar', comp: 'total' };
+let ffState = { excitation: 0, freq: null, mode: 'polar', comp: 'total',
+  top: null, span: 40 };
 
 async function reportFarField() {
-  const page = ensurePage('rep-ff', 'Radiation Pattern');
+  let d, failure = null;
+  try {
+    d = await rpc('results.farField', { excitation: ffState.excitation,
+      freq: ffState.freq, cuts: [0, 90] });
+  } catch (e) { failure = e; }
+  const page = ensurePage(pageIdFor('rep-ff'), pageTitleFor('Radiation Pattern'));
   const wrap = el('div', { class: 'report' });
   const bar = el('div', { class: 'report-toolbar' });
   const body = el('div', { class: 'report-body' });
   wrap.append(bar, body);
   page.appendChild(wrap);
-  let d;
-  try {
-    d = await rpc('results.farField', { excitation: ffState.excitation,
-      freq: ffState.freq, cuts: [0, 90] });
-  } catch (e) {
+  if (failure) {
+    const e = failure;
     body.appendChild(el('p', { class: 'hint', style: 'color:var(--err)' },
       String(e.message || e)));
     return;
@@ -4705,6 +4873,20 @@ async function reportFarField() {
     ['phi_pol', 'Gain (φ)'], ['directivity', 'Directivity']], ffState.comp);
   sc.onchange = () => { ffState.comp = sc.value; again(); };
   bar.appendChild(sc);
+  if (ffState.mode === 'polar') {
+    // the radial scale: outer ring value and dynamic range, both editable
+    bar.appendChild(el('label', {}, 'Max [dB]'));
+    const tp = el('input', { type: 'text', size: 5, placeholder: 'auto',
+      value: ffState.top == null ? '' : String(ffState.top) });
+    tp.onchange = () => { const v = parseFloat(tp.value);
+      ffState.top = Number.isFinite(v) ? v : null; again(); };
+    bar.appendChild(tp);
+    bar.appendChild(el('label', {}, 'Range [dB]'));
+    const spn = el('input', { type: 'text', size: 4, value: String(ffState.span) });
+    spn.onchange = () => { const v = parseFloat(spn.value);
+      ffState.span = v > 3 ? v : 40; again(); };
+    bar.appendChild(spn);
+  }
   bar.appendChild(el('span', { style: 'flex:1' }));
   bar.appendChild(el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
     onclick: () => { selectPage('modeler'); showPattern(true, ffState); } },
@@ -4718,8 +4900,10 @@ async function reportFarField() {
     opp: c.opposite[ffState.comp] }));
   const ylab = ffState.comp === 'directivity' ? 'Directivity [dBi]' : 'Gain [dBi]';
   body.appendChild(el('div', { class: 'chart-wrap' },
-    ffState.mode === 'polar' ? polarChart(d.theta, series, ylab)
-      : chart(d.theta, series, 'Theta [deg]', ylab)));
+    ffState.mode === 'polar'
+      ? polarChart(d.theta, series, ylab, ffState.top, ffState.span)
+      : chart(d.theta, series, 'Theta [deg]', ylab, { xUnit: '°', yUnit: ' dBi',
+          state: plotState('ff:' + ffState.comp), onChange: captureResult })));
 
   const m = d.summary;
   const t = el('table', { class: 'grid', style: 'margin-top:14px' });
@@ -4741,18 +4925,18 @@ async function reportFarField() {
   if (m.boundaryToFarFieldPower != null)
     row('Boundary / far-field power (domain check)',
         m.boundaryToFarFieldPower.toFixed(2) + '  (≈ 1 when the air region is adequate)');
-  body.appendChild(el('div', { style: 'margin-top:12px' }, t));
+  body.appendChild(el('details', { class: 'data-table', open: true },
+    el('summary', {}, 'Antenna parameters'), t));
+  captureResult();
 }
 
 /* Polar plot of dB values against theta, φ cuts mirrored across the axis the
    way an antenna engineer reads a pattern: 0° up, a cut drawn as the φ and
    φ+180° half-planes joined. */
-function polarChart(thetaDeg, series, ylabel, w = 560, h = 560) {
+function polarChart(thetaDeg, series, ylabel, topDb = null, spanDb = 40, w = 560, h = 560) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  svg.setAttribute('width', '100%');
-  svg.style.maxWidth = '640px';
   svg.style.font = '11px var(--mono, monospace)';
   const add = (tag, at, txt) => {
     const n = document.createElementNS(ns, tag);
@@ -4762,12 +4946,13 @@ function polarChart(thetaDeg, series, ylabel, w = 560, h = 560) {
   };
   const cx = w / 2, cy = h / 2 + 8, R = Math.min(w, h) / 2 - 56;
   const all = series.flatMap(s => s.y).filter(Number.isFinite);
-  const top = Math.ceil(Math.max(...all) / 5) * 5, span = 40, floor = top - span;
+  const top = topDb != null ? topDb : Math.ceil(Math.max(...all) / 5) * 5,
+    span = spanDb || 40, floor = top - span;
   const rad = v => R * Math.max(0, Math.min(1, (v - floor) / span));
   for (let i = 1; i <= 4; i++) {
     add('circle', { cx, cy, r: R * i / 4, fill: 'none', stroke: 'var(--border-soft)' });
     add('text', { x: cx + 4, y: cy - R * i / 4 - 2, fill: 'var(--text-dim)' },
-      (floor + span * i / 4).toFixed(0));
+      (+(floor + span * i / 4).toFixed(1)).toString());
   }
   for (let a = 0; a < 360; a += 30) {
     const t = a * Math.PI / 180;
@@ -4832,7 +5017,7 @@ async function showPatternLegacy(on, opts) {
 }
 
 async function reportModes() {
-  const page = ensurePage('rep-m', 'Port Modes');
+  const page = ensurePage(pageIdFor('rep-m'), pageTitleFor('Port Modes'));
   const d = await rpc('results.portModes');
   const wrap = el('div', { class: 'report' });
   const body = el('div', { class: 'report-body' });
@@ -4857,7 +5042,7 @@ async function reportModes() {
 }
 
 async function reportConvergence() {
-  const page = ensurePage('rep-c', 'Convergence');
+  const page = ensurePage(pageIdFor('rep-c'), pageTitleFor('Convergence'));
   const d = await rpc('results.convergence');
   const wrap = el('div', { class: 'report' });
   const body = el('div', { class: 'report-body' });
@@ -4887,7 +5072,7 @@ function smithChart(freq, series, w = 560, h = 560) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  svg.setAttribute('width', '100%'); svg.style.maxWidth = '640px';
+
   svg.style.font = '11px var(--mono, monospace)';
   const add = (tag, at, txt) => {
     const n = document.createElementNS(ns, tag);
@@ -4940,58 +5125,275 @@ function smithChart(freq, series, w = 560, h = 560) {
 /* SVG line chart */
 const PALETTE = ['#2b6cb0', '#c53030', '#2f855a', '#6b46c1', '#b7791f',
   '#0987a0', '#97266d', '#4a5568'];
-function chart(x, series, xlabel, ylabel, w = 900, h = 380) {
-  const L = 68, R = 24, T = 22, B = 46;
-  const W = w - L - R, H = h - T - B;
-  const ys = series.flatMap(s => s.y).filter(Number.isFinite);
-  let y0 = Math.min(...ys), y1 = Math.max(...ys);
-  if (!(y1 > y0)) { y0 -= 1; y1 += 1; }
-  const padY = (y1 - y0) * 0.07; y0 -= padY; y1 += padY;
-  const x0 = Math.min(...x), x1 = Math.max(...x);
-  const X = v => L + (v - x0) / ((x1 - x0) || 1) * W;
-  const Y = v => T + (y1 - v) / ((y1 - y0) || 1) * H;
+/* ------------------------------------------------------ interactive plot
+   One plot engine for every x/y report (S-parameters, patterns in rectangular
+   form, convergence). It fills whatever space it is given and redraws at the
+   real pixel size, so text stays readable instead of being scaled with the
+   picture.
+
+   Axes     X/Y min and max are editable boxes; the mouse wheel zooms about the
+            cursor (Shift = X only, Alt = Y only) and dragging pans; Auto goes
+            back to the data range.
+   Markers  click puts a marker on the nearest point of the nearest trace
+            (m1, m2, ...), drag moves it along its trace, double-click or
+            Delete removes it; "to Peak" / "to Min" jump to the extreme of a
+            trace. The table lists each marker and its difference from m1.
+   `opt.state` ({view, markers}) lets the caller keep both across a redraw. */
+function niceTicks(lo, hi, n) {
+  const span = hi - lo;
+  if (!(span > 0)) return [lo];
+  const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / mag, step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step)
+    out.push(Math.abs(v) < step * 1e-9 ? 0 : +v.toPrecision(12));
+  return out;
+}
+const fmtNum = (v, d = 5) => Number.isFinite(v) ? (+v.toPrecision(d)).toString() : '–';
+
+function chart(x, series, xlabel, ylabel, opt = {}) {
+  if (typeof opt === 'number') opt = {};            // old (w, h) signature
+  const st = opt.state || {};
+  st.view = st.view || null;                         // null = auto
+  st.markers = st.markers || [];
+  const xUnit = opt.xUnit || '', yUnit = opt.yUnit || '';
   const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  svg.setAttribute('width', '100%');
-  svg.style.font = '11px var(--mono, monospace)';
-  const add = (tag, at, txt) => {
-    const n = document.createElementNS(ns, tag);
-    for (const [k, v] of Object.entries(at)) n.setAttribute(k, v);
-    if (txt != null) n.textContent = txt;
-    svg.appendChild(n); return n;
+  const L = 64, R = 18, T = 30, B = 44;
+
+  const finite = series.flatMap(s => s.y).filter(Number.isFinite);
+  const auto = () => {
+    let y0 = Math.min(...finite), y1 = Math.max(...finite);
+    if (!(y1 > y0)) { y0 -= 1; y1 += 1; }
+    const pad = (y1 - y0) * 0.06;
+    const x0 = Math.min(...x), x1 = Math.max(...x);
+    return { x0, x1: x1 > x0 ? x1 : x0 + 1, y0: y0 - pad, y1: y1 + pad };
   };
-  add('rect', { x: L, y: T, width: W, height: H, fill: 'var(--bg)',
-    stroke: 'var(--border)' });
-  for (let i = 0; i <= 5; i++) {
-    const v = y0 + (y1 - y0) * i / 5, yy = Y(v);
-    add('line', { x1: L, y1: yy, x2: L + W, y2: yy, stroke: 'var(--border-soft)' });
-    add('text', { x: L - 7, y: yy + 4, 'text-anchor': 'end',
-      fill: 'var(--text-dim)' }, fmtTick(v));
+  const V = () => st.view || auto();
+
+  const root = el('div', { class: 'plot' });
+  const tools = el('div', { class: 'plot-tools' });
+  const area = el('div', { class: 'plot-area' });
+  const mtab = el('div', { class: 'plot-markers' });
+  root.append(tools, area, mtab);
+
+  // ---- axis boxes
+  const box = key => {
+    const i = el('input', { type: 'text', size: 8, title: key });
+    i.onchange = () => {
+      const v = parseFloat(i.value);
+      if (!Number.isFinite(v)) { sync(); return; }
+      const cur = Object.assign({}, V()); cur[key] = v;
+      if (cur.x1 > cur.x0 && cur.y1 > cur.y0) st.view = cur;
+      draw(); sync(); opt.onChange && opt.onChange();
+    };
+    return i;
+  };
+  const bx0 = box('x0'), bx1 = box('x1'), by0 = box('y0'), by1 = box('y1');
+  const sync = () => {
+    const v = V();
+    bx0.value = fmtNum(v.x0, 6); bx1.value = fmtNum(v.x1, 6);
+    by0.value = fmtNum(v.y0, 6); by1.value = fmtNum(v.y1, 6);
+    autoBtn.classList.toggle('on', !st.view);
+  };
+  const autoBtn = el('button', { title: 'Fit both axes to the data (also: double-click the plot)',
+    onclick: () => { st.view = null; draw(); sync(); opt.onChange && opt.onChange(); } }, 'Auto');
+  const lab = t => el('span', { class: 'lbl' }, t);
+  tools.append(lab('X'), bx0, lab('…'), bx1, lab('Y'), by0, lab('…'), by1, autoBtn,
+    el('span', { class: 'sep' }),
+    el('button', { title: 'Put a marker on the highest point of the first trace',
+      onclick: () => jump(true) }, 'Marker ▲ Peak'),
+    el('button', { title: 'Put a marker on the lowest point of the first trace',
+      onclick: () => jump(false) }, 'Marker ▼ Min'),
+    el('button', { onclick: () => { st.markers.length = 0; draw(); table();
+      opt.onChange && opt.onChange(); } }, 'Clear markers'),
+    el('span', { class: 'hint', style: 'margin:0 0 0 auto' },
+      'click: marker · wheel: zoom · drag: pan · dbl-click: auto'));
+
+  let svg = null, W = 900, H = 420, drag = null, hoverTxt = null;
+  const X = v => L + (v - V().x0) / ((V().x1 - V().x0) || 1) * (W - L - R);
+  const Y = v => T + (V().y1 - v) / ((V().y1 - V().y0) || 1) * (H - T - B);
+  const invX = px => V().x0 + (px - L) / (W - L - R) * (V().x1 - V().x0);
+  const invY = py => V().y1 - (py - T) / (H - T - B) * (V().y1 - V().y0);
+
+  function nearestIndex(si, xv) {
+    // x is sorted ascending in every report
+    let lo = 0, hi = x.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; (x[m] < xv) ? lo = m : hi = m; }
+    return Math.abs(x[lo] - xv) <= Math.abs(x[hi] - xv) ? lo : hi;
   }
-  for (let i = 0; i <= 6; i++) {
-    const v = x0 + (x1 - x0) * i / 6, xx = X(v);
-    add('line', { x1: xx, y1: T, x2: xx, y2: T + H, stroke: 'var(--border-soft)' });
-    add('text', { x: xx, y: T + H + 17, 'text-anchor': 'middle',
-      fill: 'var(--text-dim)' }, fmtTick(v));
+  function nearestPoint(px, py) {
+    const xv = invX(px); let best = null;
+    series.forEach((s, si) => {
+      const k = nearestIndex(si, xv), yv = s.y[k];
+      if (!Number.isFinite(yv)) return;
+      const d = Math.abs(Y(yv) - py);
+      if (!best || d < best.d) best = { s: si, k, d };
+    });
+    return best;
   }
-  series.forEach((s, i) => {
-    const pts = s.y.map((v, k) => Number.isFinite(v)
-      ? `${X(x[k]).toFixed(2)},${Y(v).toFixed(2)}` : null)
-      .filter(Boolean).join(' ');
-    add('polyline', { points: pts, fill: 'none',
-      stroke: PALETTE[i % PALETTE.length], 'stroke-width': 1.9,
-      'stroke-linejoin': 'round' });
-    add('rect', { x: L + 10 + i * 128, y: T - 15, width: 16, height: 3,
-      fill: PALETTE[i % PALETTE.length] });
-    add('text', { x: L + 30 + i * 128, y: T - 10,
-      fill: 'var(--text)' }, s.label);
+  function jump(peak) {
+    const ys = series[0].y; let k = -1;
+    ys.forEach((v, i) => { if (Number.isFinite(v) && (k < 0 ||
+      (peak ? v > ys[k] : v < ys[k]))) k = i; });
+    if (k >= 0) { st.markers.push({ s: 0, k }); draw(); table(); opt.onChange && opt.onChange(); }
+  }
+
+  function draw() {
+    area.innerHTML = '';
+    W = Math.max(area.clientWidth, 320); H = Math.max(area.clientHeight, 240);
+    svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.style.font = '11px var(--mono, monospace)';
+    svg.style.display = 'block';
+    const add = (tag, at, txt, parent) => {
+      const n = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(at)) n.setAttribute(k, v);
+      if (txt != null) n.textContent = txt;
+      (parent || svg).appendChild(n); return n;
+    };
+    const v = V();
+    add('rect', { x: L, y: T, width: W - L - R, height: H - T - B,
+      fill: 'var(--bg)', stroke: 'var(--border)' });
+    const clip = add('clipPath', { id: 'plot-clip' });
+    add('rect', { x: L, y: T, width: W - L - R, height: H - T - B }, null, clip);
+    for (const t of niceTicks(v.y0, v.y1, Math.max(3, Math.round((H - T - B) / 55)))) {
+      const yy = Y(t);
+      add('line', { x1: L, y1: yy, x2: W - R, y2: yy, stroke: 'var(--border-soft)' });
+      add('text', { x: L - 7, y: yy + 4, 'text-anchor': 'end', fill: 'var(--text-dim)' }, fmtTick(t));
+    }
+    for (const t of niceTicks(v.x0, v.x1, Math.max(3, Math.round((W - L - R) / 90)))) {
+      const xx = X(t);
+      add('line', { x1: xx, y1: T, x2: xx, y2: H - B, stroke: 'var(--border-soft)' });
+      add('text', { x: xx, y: H - B + 16, 'text-anchor': 'middle', fill: 'var(--text-dim)' }, fmtTick(t));
+    }
+    const g = add('g', { 'clip-path': 'url(#plot-clip)' });
+    series.forEach((s, i) => {
+      const pts = [];
+      s.y.forEach((yv, k) => { if (Number.isFinite(yv)) pts.push(`${X(x[k]).toFixed(1)},${Y(yv).toFixed(1)}`); });
+      add('polyline', { points: pts.join(' '), fill: 'none', stroke: PALETTE[i % PALETTE.length],
+        'stroke-width': 2, 'stroke-linejoin': 'round' }, null, g);
+    });
+    // legend, wrapped over as many rows as the width needs
+    let lx = L + 6, ly = T - 12;
+    series.forEach((s, i) => {
+      const w = 34 + s.label.length * 6.6;
+      if (lx + w > W - R && lx > L + 6) { lx = L + 6; ly -= 0; }
+      add('rect', { x: lx, y: ly - 3, width: 16, height: 3, fill: PALETTE[i % PALETTE.length] });
+      add('text', { x: lx + 21, y: ly, fill: 'var(--text)' }, s.label);
+      lx += w;
+    });
+    add('text', { x: L + (W - L - R) / 2, y: H - 8, 'text-anchor': 'middle', fill: 'var(--text)' }, xlabel);
+    add('text', { x: 14, y: T + (H - T - B) / 2, 'text-anchor': 'middle', fill: 'var(--text)',
+      transform: `rotate(-90 14 ${T + (H - T - B) / 2})` }, ylabel);
+    // markers
+    st.markers.forEach((m, mi) => {
+      const sr = series[m.s]; if (!sr) return;
+      const px = X(x[m.k]), py = Y(sr.y[m.k]);
+      if (px < L - 1 || px > W - R + 1) return;
+      add('line', { x1: px, y1: T, x2: px, y2: H - B, stroke: PALETTE[m.s % PALETTE.length],
+        'stroke-dasharray': '3 3', opacity: 0.8 });
+      const hit = add('g', { class: 'mk', 'data-i': mi, style: 'cursor:ew-resize' });
+      add('circle', { cx: px, cy: py, r: 6, fill: 'var(--bg)',
+        stroke: PALETTE[m.s % PALETTE.length], 'stroke-width': 2.2 }, null, hit);
+      const tx = Math.min(px + 8, W - R - 120);
+      add('rect', { x: tx - 3, y: Math.max(py - 30, T + 2), width: 120, height: 26, rx: 3,
+        fill: 'var(--panel)', stroke: 'var(--border)', opacity: 0.94 }, null, hit);
+      add('text', { x: tx + 2, y: Math.max(py - 30, T + 2) + 11, fill: 'var(--text)' },
+        `m${mi + 1}  ${fmtNum(x[m.k])}${xUnit}`, hit);
+      add('text', { x: tx + 2, y: Math.max(py - 30, T + 2) + 23, fill: PALETTE[m.s % PALETTE.length] },
+        `${fmtNum(sr.y[m.k])}${yUnit}`, hit);
+    });
+    hoverTxt = add('text', { x: W - R - 4, y: T + 14, 'text-anchor': 'end', fill: 'var(--text-dim)' }, '');
+    area.appendChild(svg);
+    wire();
+  }
+
+  function table() {
+    mtab.innerHTML = '';
+    if (!st.markers.length) return;
+    const t = el('table', { class: 'grid' });
+    t.appendChild(el('tr', {}, ...['Marker', 'Trace', 'X' + (xUnit ? ` [${xUnit.trim()}]` : ''),
+      'Y' + (yUnit ? ` [${yUnit.trim()}]` : ''), 'ΔX vs m1', 'ΔY vs m1', ''].map(h => el('th', {}, h))));
+    const m0 = st.markers[0];
+    st.markers.forEach((m, mi) => {
+      const sr = series[m.s]; if (!sr) return;
+      const dx = mi ? x[m.k] - x[m0.k] : null, dy = mi ? sr.y[m.k] - series[m0.s].y[m0.k] : null;
+      t.appendChild(el('tr', {},
+        el('td', { style: `color:${PALETTE[m.s % PALETTE.length]};font-weight:600` }, 'm' + (mi + 1)),
+        el('td', {}, sr.label),
+        el('td', { class: 'num' }, fmtNum(x[m.k], 7)), el('td', { class: 'num' }, fmtNum(sr.y[m.k], 6)),
+        el('td', { class: 'num' }, dx == null ? '—' : fmtNum(dx, 6)),
+        el('td', { class: 'num' }, dy == null ? '—' : fmtNum(dy, 6)),
+        el('td', {}, el('button', { class: 'lnk', onclick: () => {
+          st.markers.splice(mi, 1); draw(); table(); opt.onChange && opt.onChange(); } }, '×'))));
+    });
+    mtab.appendChild(t);
+  }
+
+  function wire() {
+    const pos = e => { const r = svg.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    svg.addEventListener('pointerdown', e => {
+      svg.setPointerCapture(e.pointerId);
+      const [px, py] = pos(e), mk = e.target.closest && e.target.closest('.mk');
+      drag = { px, py, v: Object.assign({}, V()), moved: false,
+        marker: mk ? parseInt(mk.dataset.i) : -1 };
+    });
+    svg.addEventListener('pointermove', e => {
+      const [px, py] = pos(e);
+      if (drag) {
+        const dx = px - drag.px, dy = py - drag.py;
+        if (Math.hypot(dx, dy) > 4) drag.moved = true;
+        if (drag.moved && drag.marker >= 0) {
+          const m = st.markers[drag.marker];
+          m.k = nearestIndex(m.s, invX(px)); draw(); table();
+        } else if (drag.moved) {
+          const ux = (drag.v.x1 - drag.v.x0) / (W - L - R), uy = (drag.v.y1 - drag.v.y0) / (H - T - B);
+          st.view = { x0: drag.v.x0 - dx * ux, x1: drag.v.x1 - dx * ux,
+                      y0: drag.v.y0 + dy * uy, y1: drag.v.y1 + dy * uy };
+          draw(); sync();
+        }
+        return;
+      }
+      if (px > L && px < W - R && py > T && py < H - B) {
+        const b = nearestPoint(px, py);
+        if (b && hoverTxt) hoverTxt.textContent =
+          `${series[b.s].label}   ${fmtNum(x[b.k])}${xUnit}  →  ${fmtNum(series[b.s].y[b.k])}${yUnit}`;
+      }
+    });
+    svg.addEventListener('pointerup', e => {
+      const d = drag; drag = null;
+      if (!d) return;
+      if (d.moved) { opt.onChange && opt.onChange(); return; }
+      if (d.marker >= 0) return;                          // a click on a marker
+      const [px, py] = pos(e);
+      if (px < L || px > W - R || py < T || py > H - B) return;
+      const b = nearestPoint(px, py);
+      if (b) { st.markers.push({ s: b.s, k: b.k }); draw(); table(); opt.onChange && opt.onChange(); }
+    });
+    svg.addEventListener('dblclick', e => {
+      const mk = e.target.closest && e.target.closest('.mk');
+      if (mk) st.markers.splice(parseInt(mk.dataset.i), 1); else st.view = null;
+      draw(); sync(); table(); opt.onChange && opt.onChange();
+    });
+    svg.addEventListener('wheel', e => {
+      e.preventDefault();
+      const [px, py] = pos(e), f = e.deltaY > 0 ? 1.18 : 1 / 1.18, v = V();
+      const cx = invX(px), cy = invY(py), nv = Object.assign({}, v);
+      if (!e.altKey) { nv.x0 = cx - (cx - v.x0) * f; nv.x1 = cx + (v.x1 - cx) * f; }
+      if (!e.shiftKey) { nv.y0 = cy - (cy - v.y0) * f; nv.y1 = cy + (v.y1 - cy) * f; }
+      st.view = nv; draw(); sync(); opt.onChange && opt.onChange();
+    }, { passive: false });
+  }
+  root.tabIndex = 0;
+  root.addEventListener('keydown', e => {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && st.markers.length) {
+      st.markers.pop(); draw(); table(); opt.onChange && opt.onChange(); }
   });
-  add('text', { x: L + W / 2, y: h - 8, 'text-anchor': 'middle',
-    fill: 'var(--text)' }, xlabel);
-  add('text', { x: 14, y: T + H / 2, 'text-anchor': 'middle',
-    fill: 'var(--text)', transform: `rotate(-90 14 ${T + H / 2})` }, ylabel);
-  return svg;
+  // fill whatever the parent gives, now and when the window is resized
+  new ResizeObserver(() => { if (area.clientWidth > 0) { draw(); } }).observe(area);
+  requestAnimationFrame(() => { sync(); table(); });
+  return root;
 }
 const fmtTick = v => Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-3 && v !== 0)
   ? v.toExponential(2) : (Math.round(v * 1000) / 1000).toString();
@@ -5152,11 +5554,15 @@ function pollJob() {
     const s = await r.json();
     const wasRunning = STATE.job.running;
     STATE = s; renderAll();
+    if (s.solutionSerial !== RESULTS.serial) {       // new partial / final data
+      RESULTS.serial = s.solutionSerial;
+      if (s.hasSolution) liveRefresh();
+    }
     if (!s.job.running) {
       clearInterval(jobWatch);
       if (wasRunning && !s.job.error && s.hasSolution) {
         setStatus('Analysis complete', '');
-        openReport('sparam');
+        openReport('sparam', true);
       }
     }
   }, 900);
@@ -5336,6 +5742,7 @@ function renderAll() {
   renderTree(); renderProps(); renderTabs(); refreshStatus();
   VP && VP.setSelection(STATE.selection);
   updateOverlay();
+  seedResults();
 }
 
 async function loadMaterials() {

@@ -106,6 +106,11 @@ def _check(cancel):
     checkpoint(cancel)
 
 
+#: Called with ``(result, index)`` after every full solve, so a caller can show
+#: the points that exist so far while the rest are still being computed.
+POINT_HOOK = None
+
+
 def _full_solve(res, i, design, mesh, dofmap, ops, bts, f, want_fields):
     S, z0, psols, flds, gam, zport = solve_frequency(
         design, mesh, dofmap, ops, bts, float(f), save_field=want_fields)
@@ -114,6 +119,11 @@ def _full_solve(res, i, design, mesh, dofmap, ops, bts, f, want_fields):
     res.ports[float(f)] = psols
     for j, fs in flds.items():
         res.fields[(float(f), j)] = fs
+    if POINT_HOOK is not None:
+        try:
+            POINT_HOOK(res, i)
+        except Exception:                                   # noqa: BLE001
+            log.debug("partial-result hook failed", exc_info=True)
     return S
 
 

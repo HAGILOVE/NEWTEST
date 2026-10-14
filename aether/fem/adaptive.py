@@ -128,7 +128,7 @@ def remesh_from_error(design, mesh, err: np.ndarray, freq: float,
 
 
 def adaptive_solve(design, setup, backend: str = "auto",
-                   enabled: bool = True, cancel=None) -> Tuple:
+                   enabled: bool = True, cancel=None, on_pass=None) -> Tuple:
     """
     Run the adaptive passes and return the converged discretisation.
 
@@ -173,6 +173,11 @@ def adaptive_solve(design, setup, backend: str = "auto",
                  p, mesh.n_tets, dm.n_dof,
                  "--" if dS is None else f"{dS:.5f}")
         S_prev = S
+        if on_pass is not None:
+            try:
+                on_pass(mesh, dm, f0, S, z0, psols, flds, list(history))
+            except Exception:                               # noqa: BLE001
+                log.debug("partial-result hook failed", exc_info=True)
         if dS is not None and dS <= setup.delta_s and p >= setup.min_passes:
             converged += 1
             if converged >= max(int(getattr(setup, 'min_converged', 1)), cfg.min_converged_passes):

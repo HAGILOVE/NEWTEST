@@ -214,6 +214,8 @@ def state_json(s: Session) -> dict:
         "job": s.job.to_json(),
         "task": s.progress.to_json(),
         "hasSolution": s.solution is not None,
+        "solutionPartial": bool(getattr(s.solution, "partial", False)),
+        "solutionSerial": int(getattr(s, "solution_serial", 0)),
         "history": {"canUndo": s.can_undo, "canRedo": s.can_redo,
                     "undo": s.undo_label(), "redo": s.redo_label(),
                     "clipboard": len(s.clipboard)},
@@ -387,7 +389,8 @@ def _save_results(s: Session, path: str, enabled: bool = True) -> str:
     from ..io import results as resio
     sol = s.solution
     stale = resio.results_path(path)
-    if not enabled or sol is None or sol.design is not s.design:
+    if (not enabled or sol is None or sol.design is not s.design
+            or getattr(sol, "partial", False)):
         if os.path.isfile(stale):
             try:
                 os.remove(stale)

@@ -175,6 +175,7 @@ class SolveJob:
     total_passes: int = 0
     freq_done: int = 0
     freq_total: int = 0
+    partial_points: int = 0
     stage: str = ""
 
     @property
@@ -210,6 +211,7 @@ class Session:
         self.study_spec = {}
         self.opt_results = {}
         self.solution = None
+        self.solution_serial = 0
         self.selection: List[str] = []
         # Face and edge picks, alongside the object selection. A face pick is
         # {"object": name, "face": index, "point": [x, y, z],
@@ -374,6 +376,7 @@ class Session:
             st = d.get_setup(setup_name or None)
             self.cancel_event.clear()
             self.solution = None
+            self.solution_serial += 1
             self.job = SolveJob(setup=st.name, running=True,
                                 started=time.time(),
                                 total_passes=st.max_passes,
@@ -387,6 +390,14 @@ class Session:
                              args=(setup_name, kw, d), daemon=True)
         t.start()
 
+    def _publish_partial(self, part) -> None:
+        """Make an in-progress snapshot the current solution, so every Results
+        command works while the analysis is still running. Plain reference
+        assignment: readers see either the old or the new snapshot."""
+        self.solution = part
+        self.solution_serial += 1
+        self.job.partial_points = int(len(part.freqs))
+
     def _solve_worker(self, setup_name, kw, d):
         try:
             self.messages.add(f"Analysis started for {self.job.setup!r}.",
@@ -394,11 +405,13 @@ class Session:
             probe = _ProgressProbe(self.job)
             logging.getLogger("aether").addHandler(probe)
             try:
-                sol = d.solve(setup=setup_name or None, cancel=self.cancel_event, **kw)
+                sol = d.solve(setup=setup_name or None, cancel=self.cancel_event,
+                              on_partial=self._publish_partial, **kw)
             finally:
                 logging.getLogger("aether").removeHandler(probe)
             with self._lock:
                 self.solution = sol
+                self.solution_serial += 1
                 self.job.running = False
                 self.job.done = True
                 self.job.finished = time.time()
@@ -433,6 +446,10 @@ class Session:
                 from ..fem.control import SolveCancelled
                 self.job.stage = "cancelled" if isinstance(exc, SolveCancelled) else "failed"
             self.messages.add(f"Analysis failed: {exc}", "error", "analysis")
+            if getattr(self.solution, "partial", False):
+                self.messages.add("The results computed before it stopped "
+                                  "are still available in Results.", "info",
+                                  "analysis")
             log.debug("solve traceback:\n%s", traceback.format_exc())
 
 
