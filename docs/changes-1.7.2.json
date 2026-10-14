@@ -1,0 +1,17 @@
+[
+  "README.md",
+  "aether/diagnostics.py",
+  "aether/gui/api.py",
+  "aether/gui/static/app.js",
+  "aether/gui/static/gl.js",
+  "aether/gui/tessellate.py",
+  "aether/io/aedt/translate.py",
+  "aether/io/aedt/writer.py",
+  "aether/model.py",
+  "aether/version.py",
+  "docs/UPGRADE_1.7.2_KO.md",
+  "docs/test-results-1.7.2.xml",
+  "pyproject.toml",
+  "tests/test_release_172.py",
+  "tests/viewport_172.cjs"
+]

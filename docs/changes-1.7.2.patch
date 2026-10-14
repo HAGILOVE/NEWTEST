@@ -1,0 +1,819 @@
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,11 @@
++# Aether EM 1.7.2 — selection, measurement and import diagnostics
++
++최신 안내: [docs/UPGRADE_1.7.2_KO.md](docs/UPGRADE_1.7.2_KO.md)
++
++새 폴더에서 SETUP_WINDOWS.cmd → START_WINDOWS.cmd 순서로 실행. 곡면 음영, 더블클릭 선택, O/F/E/V 호버 강조, 두 점 측정 및 HFSS 누락/재료 진단 개선. 전체 HFSS/Parasolid 호환은 지원하지 않음. 아래는 이전 버전 기록임.
++
++---
++
+ # Aether EM 1.7.1 — import repair
+ 
+ **이번 오류 수정 안내: [docs/IMPORT_FIX_1.7.1_KO.md](docs/IMPORT_FIX_1.7.1_KO.md)**
+--- a/aether/diagnostics.py
++++ b/aether/diagnostics.py
+@@ -6,7 +6,7 @@
+ 
+ 
+ def additional_errors(d):
+-    errs = []
++    errs = import_errors(d)
+     if d.solution_type != "driven_modal":
+         errs.append(
+             f"{d.solution_type}: only driven_modal is implemented by the current solver"
+@@ -147,3 +147,28 @@
+             "hfssNativeFullCompatibility": False,
+         },
+     }
++
++
++def import_errors(d):
++    """Prevent solving a partial imported model or assumed material assignment."""
++    import os,re
++    from .parametric import walk
++    from .geometry.primitives import ImportedShape
++    errors=[]
++    objects={o.name:o for o in d.solids+d.sheets}
++    for name,obj in objects.items():
++        for shape in walk(obj.shape):
++            if getattr(shape,"_cad_unreadable",""):
++                errors.append(f"{name}: geometry unavailable. Replace CAD Source with a readable STEP/BREP export.");break
++            if isinstance(shape,ImportedShape) and not os.path.isfile(shape.path):
++                errors.append(f"{name}: CAD source file is missing.");break
++        if getattr(obj,"import_material",""):
++            errors.append(f"{name}: unresolved imported material {obj.import_material!r}; assign the correct material before solving.")
++    for issue in getattr(d,"import_issues",[]):
++        m=re.match(r"(part|boundary|excitation) '([^']+)'",issue)
++        if m:
++            kind,name=m.groups()
++            names=objects if kind=='part' else {x.name for x in (d.boundaries if kind=='boundary' else d.ports)}
++            if name in names:continue
++        errors.append('Unresolved import: '+issue)
++    return list(dict.fromkeys(errors))
+--- a/aether/gui/api.py
++++ b/aether/gui/api.py
+@@ -223,6 +223,15 @@
+     return {"ok": True}
+ 
+ 
++@command("project.importStatus")
++def _import_status(s: Session, **_):
++    from ..diagnostics import import_errors
++    d=s.require_design()
++    return {"design":d.name,"errors":import_errors(d),"issues":getattr(d,"import_issues",[]),
++            "objects":[{"name":o.name,"missingGeometry":bool(getattr(o.shape,"_cad_unreadable","") or getattr(o.shape,"_cad_missing",False)),
++                        "materialIssue":getattr(o,"import_material","")} for o in d.solids+d.sheets]}
++
++
+ @command("project.open")
+ def _open(s: Session, path: str = "", **_):
+     from ..io.aedt.translate import read_project
+@@ -856,6 +865,7 @@
+     o = _entity(d, name)
+     if prop == "material":
+         o.material = d.materials.get(str(value))
++        o.import_material = ""
+         d.mesh = None
+     elif prop == "solveInside" and isinstance(o, Sheet):
+         raise ValueError("a sheet has no inside to solve")
+@@ -965,7 +975,7 @@
+     and the console reach the same state through the same command.
+     """
+     if mode:
+-        if mode not in ("object", "face", "edge"):
++        if mode not in ("object", "face", "edge", "point"):
+             raise ValueError(f"unknown selection mode {mode!r}")
+         s.select_mode = mode
+     if names is not None:
+@@ -983,7 +993,7 @@
+ @command("modeler.selectMode")
+ def _select_mode(s: Session, mode: str = "object", **_):
+     """Object / Face / Edge picking, the way a modeller switches with O F E."""
+-    if mode not in ("object", "face", "edge"):
++    if mode not in ("object", "face", "edge", "point"):
+         raise ValueError(f"unknown selection mode {mode!r}")
+     s.select_mode = mode
+     # Picks of another kind would linger invisibly and end up in the next
+--- a/aether/gui/static/app.js
++++ b/aether/gui/static/app.js
+@@ -969,6 +969,8 @@
+       if (mode === 'open') {
+         await loadMaterials();
+         await refreshGeometry(true);
++        const status=await rpc('project.importStatus');
++        if(status.errors.length)setTimeout(()=>dlgImportStatus(status),0);
+       }
+     }
+   });
+@@ -1112,6 +1114,7 @@
+     ['Measure by clicking ▸ Circle', () => startMeasurePick('circle')],
+     ['Resize to Dimensions…', dlgResize],
+     ['Edit Dimensions / Expressions…', dlgPrimitive],
++    ['HFSS Import Status…', dlgImportStatus],
+     ['Design Variables…', dlgVariables],
+     ['Select All', () => setSelection(objNames())],
+     ['Clear Selection', () => setSelection([])],
+@@ -1812,8 +1815,10 @@
+     tools.appendChild(b); return b;
+   };
+   VP.onContext = viewportContext;
++  let lastHover=0;
+   VP.onHover = (px, py) => {
+-    if (MEASURE_PICK) measurePickHover(px, py); else drawPickHover(px, py);
++    const now=performance.now();if(now-lastHover<32)return;lastHover=now;
++    if (MEASURE_PICK) measurePickHover(px, py); else if(DRAW_PICK) drawPickHover(px, py); else previewSelection(px,py);
+   };
+   VP.onPickAt = (px, py) => MEASURE_PICK ? measurePickClick(px, py) : DRAW_PICK ? drawPickClick(px, py) : false;
+   VP.onPick = (hit, ev) => {
+@@ -1821,16 +1826,23 @@
+     if (!hit) return clearPicks();
+     if (SEL_MODE === 'face') return pickFace(hit, add);
+     if (SEL_MODE === 'edge') return pickEdge(hit, add);
++    if (SEL_MODE === 'point') return pickVertex(hit, add);
+     const cur = new Set(add ? (STATE.selection || []) : []);
+-    cur.has(hit.name) ? cur.delete(hit.name) : cur.add(hit.name);
++    if(add && cur.has(hit.name))cur.delete(hit.name);else cur.add(hit.name);
+     setSelection([...cur]);
+   };
++  VP.onDoublePick=(hit,ev)=>{
++    if(DRAW_PICK||MEASURE_PICK||!hit)return;
++    setSelectMode('object');
++    const names=new Set(ev.ctrlKey||ev.metaKey?(STATE.selection||[]):[]);names.add(hit.name);setSelection([...names]);
++  };
++  VP.onLeave=()=>{$('#vp-hint').textContent='double-click object · drag rotate · wheel zoom · Ctrl+D fit';};
+   // Selection mode buttons, and the O / F / E keys that go with them --
+   // picking a face is how a boundary, a port or a mesh operation gets told
+   // *where*, so the mode lives in the viewport toolbar, not in a menu.
+   for (const [m, ic, label] of [['object', 'i-box', 'Select objects (O)'],
+                                 ['face', 'i-rect', 'Select faces (F)'],
+-                                ['edge', 'i-sweep', 'Select edges (E)']]) {
++                                ['edge', 'i-sweep', 'Select edges (E)'], ['point','i-rect','Select vertices (V)']]) {
+     const b = mk(label, ic, () => setSelectMode(m), 'vt-sel-' + m);
+     b.classList.toggle('on', SEL_MODE === m);
+   }
+@@ -2213,6 +2225,7 @@
+ let SEL_MODE = 'object';
+ let FACE_PICKS = [];
+ let EDGE_PICKS = [];
++let POINT_PICKS = [];
+ 
+ /* Measurement.
+    Every pick answers the question you had when you clicked: how long is that
+@@ -2220,8 +2233,11 @@
+    is asked for from the server (which has the real geometry) and shown in the
+    viewport next to the measured span, with the span itself drawn in 3-D. */
+ let MEASURE = null;
++let POINT_MEASURE_PINNED=false, MEASURE_REVISION=0;
+ 
+ async function refreshMeasure() {
++  if(POINT_MEASURE_PINNED || MEASURE_PICK)return;
++  const revision=++MEASURE_REVISION;
+   const box = $('#vp-measure');
+   const nothing = !FACE_PICKS.length && !EDGE_PICKS.length
+     && !(STATE?.selection || []).length;
+@@ -2233,8 +2249,10 @@
+     return;
+   }
+   try {
+-    MEASURE = await rpc('modeler.measure', {});
+-  } catch (e) { MEASURE = null; }
++    const result = await rpc('modeler.measure', {});
++    if(revision!==MEASURE_REVISION || POINT_MEASURE_PINNED || MEASURE_PICK)return;
++    MEASURE=result;
++  } catch (e) { if(revision!==MEASURE_REVISION || POINT_MEASURE_PINNED || MEASURE_PICK)return; MEASURE = null; }
+   VP && VP.setMeasure(MEASURE && MEASURE.line);
+   if (box) {
+     box.textContent = MEASURE ? MEASURE.text + (MEASURE.accuracy ? ' — ' + MEASURE.accuracy : '') : '';
+@@ -2264,11 +2282,14 @@
+ }
+ 
+ function setSelectMode(m) {
++  POINT_MEASURE_PINNED=false;++MEASURE_REVISION;
+   SEL_MODE = m;
++  if(VP){VP.selectMode=m;VP.setHover(null);}
++  POINT_PICKS=[];VP && VP.setPointSelection([]);
+   if (m !== 'face') { FACE_PICKS = []; VP && VP.setFaceSelection([]); }
+   if (m !== 'edge') { EDGE_PICKS = []; VP && VP.setEdgeSelection([]); }
+   refreshMeasure();
+-  ['object', 'face', 'edge'].forEach(k => {
++  ['object', 'face', 'edge', 'point'].forEach(k => {
+     const b = $('#vt-sel-' + k);
+     if (b) b.classList.toggle('on', k === m);
+   });
+@@ -2305,6 +2326,8 @@
+ }
+ 
+ function clearPicks() {
++  POINT_MEASURE_PINNED=false;++MEASURE_REVISION;
++  POINT_PICKS=[];VP && VP.setPointSelection([]);VP && VP.setHover(null);
+   FACE_PICKS = []; EDGE_PICKS = [];
+   VP && VP.setFaceSelection([]);
+   VP && VP.setEdgeSelection([]);
+@@ -2746,6 +2769,7 @@
+       if (k === 'o') setSelectMode('object');
+       else if (k === 'f') setSelectMode('face');
+       else if (k === 'e') setSelectMode('edge');
++      else if (k === 'v') setSelectMode('point');
+     }
+     if (e.key === 'Delete') deleteSelection();
+     if (e.key === 'F5') { e.preventDefault(); dlgValidate(); }
+@@ -2784,7 +2808,8 @@
+   return !STATE?.project?.dirty || window.confirm('Unsaved changes will be discarded. Choose Cancel and save first to keep them.');
+ }
+ function clearLocalPicks() {
+-  FACE_PICKS = []; EDGE_PICKS = []; MEASURE = null;
++  POINT_MEASURE_PINNED=false;++MEASURE_REVISION;
++  FACE_PICKS = []; EDGE_PICKS = []; POINT_PICKS=[]; MEASURE = null;
+   VP && VP.setMeasure(null);
+   const box = $('#vp-measure'); if (box) box.style.display = 'none';
+   placeMeasureLabel();
+@@ -2883,43 +2908,73 @@
+ function startMeasurePick(mode) {
+   if (!VP) return toastError('3-D viewport is unavailable.');
+   if (DRAW_PICK) cancelPointDraw();
++  clearPicks();
+   MEASURE_PICK = {mode, points:[]};
+   $('#vp-hint').textContent = 'Measure '+mode+': click '+(mode==='distance'?'2':'3')+' points · vertex snap within 12 px · Esc cancels';
+ }
+ function cancelMeasurePick() {
+-  MEASURE_PICK=null; VP && VP.setDraft(null);
++  MEASURE_PICK=null; VP && VP.setDraft(null);VP && VP.setHover(null);
+   $('#vp-hint').textContent='click select · drag rotate · wheel zoom';
+ }
+ function measurementHit(px,py) {
+-  const h=VP.planePoint(px,py,null);
+-  if (!h) return null;
+-  let best=12, point=h.point;
+-  // Snap only to endpoints of the edge nearest the visible surface hit.
+-  const hit=VP.pick(px,py);
+-  if (hit?.edge) for (const v of [hit.edge.a,hit.edge.b]) {
+-    const q=VP.project(v); if (!q) continue;
+-    const dist=Math.hypot(q.x-px,q.y-py);
+-    if (dist<best) {best=dist;point=v;}
+-  }
+-  return point;
++  const hit=VP.pickFeature(px,py,'point');
++  VP.setHover(hit,'point');
++  if(hit){$('#vp-hint').textContent=hit.name+' · '+hit.snapKind+' · '+hit.point.map(x=>fmtLen(x,U())).join(', ');return hit.point;}
++  $('#vp-hint').textContent='Move within 12 px of a visible vertex/edge sample · Esc cancels';
++  return null;
+ }
+ function measurePickHover(px,py) {
+-  if (!MEASURE_PICK?.points.length) return;
++  if (!MEASURE_PICK) return;
+   const point=measurementHit(px,py);
+-  if (point) VP.setDraft([...MEASURE_PICK.points,point]);
++  if (point && MEASURE_PICK.points.length) VP.setDraft([...MEASURE_PICK.points,point]);
+ }
+ function measurePickClick(px,py) {
+   const point=measurementHit(px,py); if (!point) return true;
+-  MEASURE_PICK.points.push(point);
++  if(MEASURE_PICK.points.some(p=>Math.hypot(...p.map((v,i)=>v-point[i]))<1e-12)){toastError('Choose a different point.');return true;}
++  MEASURE_PICK.points.push(point);VP.setPointSelection(MEASURE_PICK.points);
+   const n=MEASURE_PICK.mode==='distance'?2:3;
+   if (MEASURE_PICK.points.length<n) {
+     VP.setDraft(MEASURE_PICK.points);
+     $('#vp-hint').textContent='Measure: '+MEASURE_PICK.points.length+'/'+n+' points selected · Esc cancels';
+     return true;
+   }
+-  const {mode,points}=MEASURE_PICK;cancelMeasurePick();dlgMeasure();
+-  $('#dim-mode').value=mode;$('#dim-mode').dispatchEvent(new Event('change'));
+-  points.forEach((p,i)=>p.forEach((x,j)=>$('#dim-'+i+'-'+j).value=String(Number((x/UNIT_SCALE[U()]).toPrecision(12)))));
+-  $('#dim-calculate').click();
++  const {mode,points}=MEASURE_PICK;cancelMeasurePick();
++  showPointMeasurement(mode,points);
++
+   return true;
+ }
++
++
++function previewSelection(px,py) {
++  const hit=VP.pickFeature(px,py,SEL_MODE);VP.setHover(hit,SEL_MODE);
++  $('#vp-hint').textContent=hit?SEL_MODE+' · '+hit.name+(hit.vertex?' · '+hit.snapKind:''):'double-click object · O/F/E/V selection · Ctrl+D fit';
++}
++function pickVertex(hit,add) {
++  if(!hit.vertex)return;
++  POINT_PICKS=add?POINT_PICKS.concat([hit.point]).slice(-2):[hit.point];
++  VP.setPointSelection(POINT_PICKS);
++  $('#vp-hint').textContent='Point: '+hit.point.map(x=>fmtLen(x,U())).join(', ')+' · Ctrl+click second point to measure';
++  if(POINT_PICKS.length===2)showPointMeasurement('distance',POINT_PICKS);
++}
++async function showPointMeasurement(mode,points) {
++  POINT_MEASURE_PINNED=true;const revision=++MEASURE_REVISION;
++  await guard(async()=>{
++    const result=await rpc('modeler.measure',{mode,points:points.map(p=>p.map(x=>x+'m')),units:U()});
++    if(revision!==MEASURE_REVISION)return;
++    MEASURE=result;VP.setMeasure(result.line||null);VP.setPointSelection(points);
++    $('#vp-measure').textContent=result.text;$('#vp-measure').style.display='block';placeMeasureLabel();
++    const body=el('div',{},el('pre',{class:'dim-result'},result.text),el('div',{class:'hint'},'Measured between selected displayed vertices. Curved edge samples are tessellated; inspect coordinates for precision work.'),el('button',{onclick:()=>downloadMeasurement(result)},'Export CSV'));
++    dialog({title:'Picked-point measurement',body,ok:null,cancel:'Close'});
++  });
++}
++
++async function dlgImportStatus(status) {
++  await guard(async()=>{
++    const r=status||await rpc('project.importStatus');
++    const body=el('div',{},el('p',{},r.errors.length?'Import is incomplete. Solve is blocked until these items are repaired.':'No unresolved import blockers recorded.'),
++      el('p',{class:'hint'},'Native Parasolid bodies cannot be decoded by this OCC importer. Export the affected bodies from HFSS to STEP, then select each matching object and use Replace CAD Source. Reassign unknown materials and review ports, boundaries and PML.'),
++      ...r.errors.map(e=>el('p',{class:'eng-error'},e)),
++      el('button',{onclick:()=>exportCsvFile('aether-import-status.csv',[['Design','Issue'],...r.errors.map(e=>[r.design,e])])},'Export issue list CSV'));
++    dialog({title:'HFSS Import Status — '+r.design,body,width:'wide',ok:null,cancel:'Close'});
++  });
++}
+--- a/aether/gui/static/gl.js
++++ b/aether/gui/static/gl.js
+@@ -162,6 +162,7 @@
+   /* ---------------------------------------------------------- geometry */
+   setObjects(list, bbox) {
+     const gl = this.gl;
++    this.setHover(null); this.setPointSelection([]);
+     for (const o of this.objects) {
+       gl.deleteBuffer(o.pos); gl.deleteBuffer(o.nrm);
+       if (o.sca) gl.deleteBuffer(o.sca);
+@@ -193,6 +194,7 @@
+         faceOf: o.faceOf ? new Int32Array(o.faceOf) : null,
+         faces: o.faces || [],
+         faceEdges: o.faceEdges || [],
++        snapPoints: o.snapPoints || [], snapKind: o.snapKind || "display vertex",
+         hiCpu: new Float32Array(n),
+         hi: this._buf(new Float32Array(n)),
+         centroid: centroid(o.position.length ? o.position : (o.edgeVerts || []))
+@@ -266,7 +268,9 @@
+       const hi = o.hiCpu;
+       let changed = false;
+       for (let t = 0; t < hi.length / 3; t++) {
+-        const on = (set && o.faceOf && set.has(o.faceOf[t])) ? 1 : 0;
++        const selected=set && o.faceOf && set.has(o.faceOf[t]);
++        const preview=this.hover?.mode==='face' && this.hover.name===o.name && o.faceOf && this.hover.face===o.faceOf[t];
++        const on=selected?1:preview?0.45:0;
+         if (hi[t * 3] !== on) {
+           hi[t * 3] = hi[t * 3 + 1] = hi[t * 3 + 2] = on;
+           changed = true;
+@@ -298,12 +302,6 @@
+   /* The measurement line: the two points the reported distance is between. */
+   setMeasure(line) {
+     const gl = this.gl;
+-    if (this.draftBuf) {
+-      const a = this._lineSetup(proj, view, [0.36, 0.95, 0.55, 1.0]);
+-      bindAttr(gl, this.draftBuf.b, a, 3);
+-      gl.lineWidth(2);
+-      gl.drawArrays(gl.LINE_STRIP, 0, this.draftBuf.n);
+-    }
+     if (this.measureBuf) {
+       gl.deleteBuffer(this.measureBuf.b);
+       this.measureBuf = null;
+@@ -431,6 +429,65 @@
+     return best;
+   }
+ 
++
++  pickFeature(px,py,mode='object') {
++    const hit=this.pick(px,py);
++    if(mode==='object'||mode==='face')return hit;
++    const origin=this.ray(px,py).origin;
++    let best=null,bestPixels=mode==='point'?12:8;
++    const visible=(o,p)=>{
++      const q=this.project(p);if(!q)return false;
++      const front=this.pick(q.x,q.y);if(!front)return true;
++      const eye=this.ray(q.x,q.y).origin;
++      return V3.len(V3.sub(p,eye))<=front.distance+this.dist*1e-5;
++    };
++    for(const o of this.objects) {
++      if(o.visible===false||o.name==='__field__')continue;
++      if(mode==='point') {
++        const pts=o.snapPoints?.length?o.snapPoints:[];
++        for(const point of pts) {
++          const q=this.project(point);if(!q)continue;
++          const d=Math.hypot(q.x-px,q.y-py);
++          if(d<bestPixels&&visible(o,point)){bestPixels=d;best={name:o.name,point:[...point],snapKind:o.snapKind||'display vertex',vertex:true};}
++        }
++      } else {
++        const ev=o.evCpu,fe=o.faceEdges?.length?o.faceEdges:[];
++        if(!ev)continue;
++        for(let k=0;k<fe.length;k+=3) {
++          const a=Array.from(ev.slice(fe[k]*3,fe[k]*3+3)),b=Array.from(ev.slice(fe[k+1]*3,fe[k+1]*3+3));
++          const A=this.project(a),B=this.project(b);if(!A||!B)continue;
++          const dx=B.x-A.x,dy=B.y-A.y,t=Math.max(0,Math.min(1,((px-A.x)*dx+(py-A.y)*dy)/(dx*dx+dy*dy||1)));
++          const d=Math.hypot(px-A.x-t*dx,py-A.y-t*dy),point=V3.add(a,V3.scale(V3.sub(b,a),t));
++          if(d<bestPixels&&visible(o,point)){bestPixels=d;best={name:o.name,point,face:fe[k+2],edge:{a,b,face:fe[k+2],near:true,length:V3.len(V3.sub(b,a))}};}
++        }
++      }
++    }
++    return best;
++  }
++
++  setHover(hit,mode) {
++    const key=hit?JSON.stringify([mode,hit.name,hit.face,hit.edge?.a,hit.edge?.b,hit.point && mode==='point'?hit.point:null]):'';
++    if(key===this.hoverKey)return;
++    this.hoverKey=key;this.hover=hit?{...hit,mode}:null;
++    this.setFaceSelection(this.facePicks||[]);
++    if(this.hoverBuf){this.gl.deleteBuffer(this.hoverBuf.b);this.hoverBuf=null;}
++    let pts=[];
++    if(hit?.edge&&mode==='edge')pts=[...hit.edge.a,...hit.edge.b];
++    if(hit?.point&&mode==='point')pts=this._pointCross(hit.point);
++    if(pts.length)this.hoverBuf={b:this._buf(new Float32Array(pts)),n:pts.length/3};
++  }
++
++  _pointCross(point) {
++    const r=this.dist*.006,pts=[];
++    for(let i=0;i<3;i++){const a=[...point],b=[...point];a[i]-=r;b[i]+=r;pts.push(...a,...b);}
++    return pts;
++  }
++
++  setPointSelection(points) {
++    if(this.pointBuf){this.gl.deleteBuffer(this.pointBuf.b);this.pointBuf=null;}
++    const pts=(points||[]).flatMap(p=>this._pointCross(p));
++    if(pts.length)this.pointBuf={b:this._buf(new Float32Array(pts)),n:pts.length/3};
++  }
+ 
+   fit() {
+     const [lo, hi] = this.bbox;
+@@ -489,6 +546,8 @@
+         this.onHover(e.clientX - r.left, e.clientY - r.top, e);
+       }
+       if (!drag) return;
++      if(downAt && Math.hypot(e.clientX-downAt.x,e.clientY-downAt.y)<4)return;
++      this.setHover(null);
+       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+       drag.x = e.clientX; drag.y = e.clientY;
+       if (drag.mode === 'rot') {
+@@ -508,22 +567,29 @@
+         const px = e.clientX - r.left, py = e.clientY - r.top;
+         // a draw in progress consumes the click instead of selecting
+         if (this.onPickAt && this.onPickAt(px, py)) {
++          this.consumedPickAt=Date.now();
+           downAt = null; drag = null; c.style.cursor = 'default';
+           return;
+         }
+-        this.onPick(this.pick(px, py), e);
++        this.onPick(this.pickFeature(px, py, this.selectMode || 'object'), e);
+       }
+       downAt = null;
+       drag = null;
+       c.style.cursor = 'default';
+     };
+     c.addEventListener('pointerup', stop);
+-    c.addEventListener('pointercancel', stop);
++    c.addEventListener('pointercancel',()=>{downAt=null;drag=null;c.style.cursor='default';});
+     c.addEventListener('wheel', e => {
+       e.preventDefault();
+       this.dist *= Math.exp(Math.sign(e.deltaY) * 0.12);
+     }, { passive: false });
+-    c.addEventListener('dblclick', () => this.fit());
++    c.addEventListener('dblclick', e => {
++      if(e.button!==0 || Date.now()-(this.consumedPickAt||0)<500)return;
++      e.preventDefault();
++      const r=c.getBoundingClientRect();
++      if(this.onDoublePick)this.onDoublePick(this.pick(e.clientX-r.left,e.clientY-r.top),e);
++    });
++    c.addEventListener('pointerleave',()=>{this.setHover(null);if(this.onLeave)this.onLeave();});
+   }
+ 
+   _camera() {
+@@ -586,7 +652,7 @@
+       gl.uniform3fv(gl.getUniformLocation(P, 'uColor'), o.color);
+       gl.uniform1f(gl.getUniformLocation(P, 'uAlpha'),
+         sel ? Math.min(1, o.alpha + 0.22) : o.alpha);
+-      gl.uniform1f(gl.getUniformLocation(P, 'uSelected'), sel ? 1 : 0);
++      gl.uniform1f(gl.getUniformLocation(P, 'uSelected'), sel ? 1 : (this.hover?.mode==='object' && this.hover.name===o.name ? 0.6 : 0));
+       gl.uniform1f(gl.getUniformLocation(P, 'uUseScalar'), o.useScalar);
+       bindAttr(gl, o.pos, aPos, 3);
+       bindAttr(gl, o.nrm, aNrm, 3);
+@@ -676,6 +742,9 @@
+   _drawPicks(proj, view) {
+     const gl = this.gl;
+     gl.disable(gl.DEPTH_TEST);
++    for(const [buf,color,mode] of [[this.hoverBuf,[1,0.88,0.2,1],gl.LINES],[this.pointBuf,[0.2,0.9,1,1],gl.LINES],[this.draftBuf,[0.36,0.95,0.55,1],gl.LINE_STRIP]]) {
++      if(!buf)continue;const a=this._lineSetup(proj,view,color);bindAttr(gl,buf.b,a,3);gl.drawArrays(mode,0,buf.n);
++    }
+     if (this.edgeBuf) {
+       const a = this._lineSetup(proj, view, [1.0, 0.62, 0.16, 1.0]);
+       bindAttr(gl, this.edgeBuf.b, a, 3);
+--- a/aether/gui/tessellate.py
++++ b/aether/gui/tessellate.py
+@@ -32,7 +32,7 @@
+ def _pack(verts: np.ndarray, tris: np.ndarray,
+           face_of: Optional[np.ndarray] = None) -> Dict:
+     """
+-    Weld nothing, compute per-face normals, emit a flat-shaded buffer.
++    Preserve topology and smooth shading within each geometric face.
+ 
+     ``face_of`` gives the geometric face each triangle belongs to. It is what
+     makes face picking possible: a ray hit is a triangle index, and the face
+@@ -69,9 +69,21 @@
+     }
+     if face_of is None:
+         face_of = _cluster_faces(verts, tris, n)
++    # Smooth within each geometric face, never across a box edge or cylinder cap.
++    # Use (face, vertex) keys to keep sharp BREP face boundaries intact.
++    keys=np.column_stack([np.repeat(face_of,3),tris.ravel()])
++    _,inverse=np.unique(keys,axis=0,return_inverse=True)
++    weighted=np.repeat(n*area2[:,None],3,axis=0)
++    sums=np.zeros((int(inverse.max())+1,3)) if len(inverse) else np.empty((0,3))
++    np.add.at(sums,inverse,weighted)
++    if len(sums):sums/=np.maximum(np.linalg.norm(sums,axis=1,keepdims=True),1e-300)
++    out["normal"]=np.round(sums[inverse],6).ravel().tolist()
+     out["faceOf"] = [int(i) for i in face_of]
+     out["faces"] = _face_meta(verts, tris, n, area2 * 0.5, face_of)
+     out["faceEdges"] = _face_edges(tris, face_of)
++    boundary_vertices=np.unique(np.asarray(out["faceEdges"],int).reshape(-1,3)[:,:2]) if out["faceEdges"] else []
++    out["snapPoints"]=[verts[i].tolist() for i in boundary_vertices]
++    out["snapKind"]="display vertex"
+     return out
+ 
+ 
+@@ -188,7 +200,7 @@
+         gmsh.model.occ.synchronize()
+         gmsh.option.setNumber("Mesh.MeshSizeMax", h)
+         gmsh.option.setNumber("Mesh.MeshSizeMin", h / 30.0)
+-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 20)
++        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 96)
+         gmsh.model.mesh.generate(2)
+         tags, coords, _ = gmsh.model.mesh.getNodes()
+         tags = np.asarray(tags, np.int64)
+@@ -235,7 +247,7 @@
+     return a, u, np.cross(a, u)
+ 
+ 
+-def tessellate_analytic(shape: Shape, n_seg: int = 48) -> Dict:
++def tessellate_analytic(shape: Shape, n_seg: int = 128) -> Dict:
+     from ..geometry.primitives import _apply_xform_points
+ 
+     if isinstance(shape, Box):
+@@ -415,7 +427,7 @@
+         h = diag / 22.0
+         gmsh.option.setNumber("Mesh.MeshSizeMax", h)
+         gmsh.option.setNumber("Mesh.MeshSizeMin", h / 30.0)
+-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 20)
++        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 96)
+         gmsh.model.mesh.generate(2)
+         for i, (dim, tag) in enumerate(dts):
+             try:
+@@ -483,7 +495,8 @@
+             start=len(vertices)
+             vertices.extend(points.tolist())
+             for i in range(len(points)-1):edges.extend([start+i,start+i+1])
+-        return {"position":[],"normal":[],"count":0,"faceOf":[],"faces":[],"faceEdges":[],
++        return {"position":[],"normal":[],"count":0,"faceOf":[],"faces":[],"faceEdges":[v for i in range(0,len(edges),2) for v in (edges[i],edges[i+1],-1)],
++                "snapPoints":vertices,"snapKind":"drawing vertex",
+                 "edgeVerts":np.asarray(vertices).ravel().tolist(),"edges":edges,"referenceOnly":True}
+     key = _import_cache_key(shape)
+     if key is not None:
+--- a/aether/io/aedt/translate.py
++++ b/aether/io/aedt/translate.py
+@@ -457,8 +457,8 @@
+     for part in parts:
+         attrs = part.block("Attributes") or part
+         name = str(attrs.get("Name", f"Part{len(design.solids)+1}")).strip("'")
+-        mat = str(attrs.get("MaterialValue", attrs.get("MaterialName", "vacuum")))
+-        mat = mat.strip("'\" ")
++        candidates=[str(attrs.get(key,"") or "").strip("'\" ") for key in ("MaterialValue","MaterialName","Material")]
++        mat=next((value for value in candidates if value),"")
+         solve_inside = bool(attrs.get("SolveInside", True))
+         try:
+             shape = _shape_from_part(part, sc, name, report)
+@@ -472,12 +472,14 @@
+                 f"part {name!r}: no supported creation command "
+                 "(imported/lofted/swept bodies need the STEP export path)")
+             continue
++        unresolved_material = str(attrs.get("AetherUnresolvedMaterial", "") or "")
+         try:
+             material = lib.get(mat)
+         except KeyError:
++            unresolved_material = mat or "(unspecified)"
+             material = lib.get("vacuum")
+             report.warnings.append(
+-                f"part {name!r}: material {mat!r} unknown, using vacuum")
++                f"part {name!r}: material {mat!r} unknown; vacuum is a display placeholder. Assign the correct material before solving.")
+         try:
+             if bool(attrs.get("AetherIsSheet", False)):
+                 design.add_sheet(name, shape, material)
+@@ -485,6 +487,7 @@
+             else:
+                 design.add_solid(name, shape, material, solve_inside)
+                 obj = design.solids[-1]
++            obj.import_material = unresolved_material
+             col = attrs.get("AetherColor")
+             if col:
+                 obj.display_color = str(col).strip("'\"")
+@@ -1070,6 +1073,9 @@
+                 "not found next to the project or at its recorded path; "
+                 "use Modeler > Replace CAD source to point at it")
+ 
++    import json
++    previous=json.loads(blk.get("AetherImportIssues", "[]"))
++    design.import_issues=list(dict.fromkeys(previous+report.unresolved))
+     log.info("imported HFSS design %r: %d solids, %d boundaries, %d ports, "
+              "%d setups (%d unresolved)", name, len(report.solids),
+              len(report.boundaries), len(report.ports), len(report.setups),
+--- a/aether/io/aedt/writer.py
++++ b/aether/io/aedt/writer.py
+@@ -136,6 +136,7 @@
+     blk.add_prop("DesignVersion", 1)
+     import json
+     blk.add_prop("AetherConfig", json.dumps(d.config.to_dict()))
++    blk.add_prop("AetherImportIssues", json.dumps(getattr(d,"import_issues",[]),ensure_ascii=False))
+     blk.add_prop("AetherDefaultBoundary", getattr(d, "default_boundary", "pec"))
+ 
+     if d.variables:
+@@ -200,6 +201,8 @@
+     # come back looking like it did: a sheet that reopens as a solid is a
+     # different model.
+     att.add_prop("AetherIsSheet", bool(sheet))
++    if getattr(solid,"import_material",""):
++        att.add_prop("AetherUnresolvedMaterial",solid.import_material)
+     if getattr(solid, "display_color", None):
+         att.add_prop("AetherColor", solid.display_color)
+     if getattr(solid, "display_transparency", None) is not None:
+@@ -636,7 +639,7 @@
+             if target is None:
+                 doc.root.add(copy.deepcopy(generated))
+                 continue
+-            for key in ("DesignType", "Name", "SolutionType", "DesignVersion", "AetherConfig", "AetherDefaultBoundary"):
++            for key in ("DesignType", "Name", "SolutionType", "DesignVersion", "AetherConfig", "AetherDefaultBoundary", "AetherImportIssues"):
+                 target.set(key, generated.get(key))
+             target.children = [b for b in target.children
+                                if not (isinstance(b, AedtBlock) and b.name in modeled)]
+--- a/aether/model.py
++++ b/aether/model.py
+@@ -567,7 +567,7 @@
+             "solids": self.solids, "sheets": self.sheets,
+             "boundaries": self.boundaries, "ports": self.ports,
+             "setups": self.setups, "mesh_ops": self.mesh_ops,
+-            "variables": self.variables,
++            "variables": self.variables, "import_issues": getattr(self,"import_issues",[]),
+             "units": self.units, "solution_type": self.solution_type,
+             "config": self.config, "default_boundary": getattr(self, "default_boundary", "pec"),
+             "name": self.name, "materials": self.materials,
+@@ -584,6 +584,7 @@
+         self.setups = s["setups"]
+         self.mesh_ops = s.get("mesh_ops", [])
+         self.variables = s["variables"]
++        self.import_issues = s.get("import_issues", [])
+         self.config = s.get("config", self.config)
+         self.default_boundary = s.get("default_boundary", "pec")
+         self.units = s["units"]
+--- a/aether/version.py
++++ b/aether/version.py
+@@ -1,4 +1,4 @@
+ """Aether-EM version metadata."""
+-__version__ = "1.7.1"
++__version__ = "1.7.2"
+ __release__ = "2026.1"
+ __engine__ = "Aether-EM 3D Full-Wave FEM"
+--- a/docs/UPGRADE_1.7.2_KO.md
++++ b/docs/UPGRADE_1.7.2_KO.md
+@@ -0,0 +1,36 @@
++# Aether EM 1.7.2 — 선택·치수·곡면 표시 및 HFSS 진단
++
++새 폴더에 압축을 풀고 SETUP_WINDOWS.cmd 실행 후 START_WINDOWS.cmd로 시작해야 함. 기존 HFSS 원본은 보관하고 가져온 프로젝트는 다른 이름으로 저장해야 함.
++
++## 변경 내용
++
++- 원통의 기본 표시 분할을 128개로 늘리고, 같은 면 안에서 정점 법선을 평균하여 곡면 음영을 부드럽게 처리함. 상·하면 및 상자 모서리 경계는 유지함. OCC 표시 메시의 곡률 분할도 강화함. 이는 표시 개선이며 해석 정확도를 높였다는 의미는 아님.
++- 화면 왼쪽 버튼 더블클릭으로 도형 선택. Ctrl+D 또는 Fit 버튼으로 전체 보기. 작은 마우스 흔들림은 회전으로 취급하지 않음.
++- O: Object, F: Face, E: Edge, V: Point. 마우스를 가까이 가져가면 선택 후보를 강조함. 숨긴 물체와 다른 표면 뒤에 가려진 점은 선택 후보에서 제외함.
++- 두 점 측정 버튼을 누르고 두 위치를 순서대로 클릭하면 좌표 사이의 거리와 치수선을 표시함. 12 픽셀 이내의 표시 정점에 스냅함. 같은 점 중복 선택은 거부함. Esc로 취소. V 모드에서도 Ctrl+두 번째 점 클릭으로 측정 가능함.
++- DXF 열린 참조선에도 점·선 선택 정보를 제공함. 닫히지 않은 선은 면/체적을 가진 해석 형상이 아님.
++- 측정 중 초안선 표시의 undefined proj/view 오류와 완료 직후 더블클릭 충돌을 수정함. 늦게 도착한 일반 선택 치수 응답이 두 점 측정을 덮어쓰지 않도록 처리함.
++- HFSS 재료 항목이 비어 있으면 다른 재료 이름 항목도 확인함. 확인할 수 없는 재료는 표시용 vacuum 대체임을 명시하고, 올바른 재료를 지정하기 전에는 해석을 차단함.
++- Edit > HFSS Import Status에서 누락 형상·미확인 재료·미지원 가져오기 항목과 CSV 보고서를 확인할 수 있음. 관련 오류 상태는 저장/다시 열기에도 유지됨.
++- 1.7.1의 STEP 조립체 이름 오류, DXF 선/호 연결, UTF-16 HFSS 및 압축 프로젝트 경로 수정 포함.
++
++## 첨부 HFSS 오류의 의미와 남은 제한
++
++62개 중 58개가 읽을 수 없는 native Parasolid 형상이라는 로그는 가져오기가 완전하지 않다는 뜻임. 이번 버전이 Parasolid 변환기를 새로 구현한 것은 아님. 해당 형상은 HFSS에서 STEP으로 내보낸 후 Modeler > Replace CAD Source로 교체해야 함. 미지원 경계/포트 및 재료도 진단 보고서에 따라 복원해야 하며, PML 등 기존 엔진이 지원하지 않는 기능은 이 버전에서도 지원하지 않음. 가져오기 경고만 숨기고 해석을 진행하는 방식으로 해결하지 않았음.
++
++점 측정은 표시 정점 좌표를 사용함. 곡선의 점·선은 테셀레이션 샘플이므로 정확한 BREP 정점·곡선 길이와 다를 수 있음. 정밀 작업은 좌표와 기존 수치 입력/기본 형상 치수 기능을 함께 확인해야 함. 큰 CAD에서는 CPU 선택 계산이 느릴 수 있음.
++
++## 검증
++
++pytest: 458개 중 340개 통과, 118개 건너뜀, 오류/실패 0개. XML: test-results-1.7.2.xml. Python 컴파일 및 두 JavaScript 파일 구문 검사 통과. tests/test_release_172.py에는 곡면/끝면 법선, 실루엣 오차, DXF 참조 선택 정보, 미확인 가져오기 정보의 저장과 재료 수정, Node 기반 이벤트/스냅 검사를 추가함. Node 검사는 가짜 GPU 버퍼를 사용하는 로직 검사이며 실제 브라우저 렌더 검사가 아님.
++
++현재 환경에서 CAD 커널은 libGLU 부족으로 실행되지 않고 실제 브라우저/Windows 검증도 완료하지 못함. 사용자 원본 HFSS·STEP·DXF는 제공되지 않아 첨부 모델 자체의 재현 검증은 불가했음. 이전 docs/screenshots는 이전 버전 자료이며 1.7.2의 실행 증거가 아님.
++
++## Windows 확인 순서
++
++1. 원통을 만들고 회전·확대하여 측면 음영과 끝면 경계 확인.
++2. 두 도형을 더블클릭하여 각각 선택하고 Ctrl+D로 전체 보기 확인.
++3. O/F/E/V 각각 호버 강조 및 클릭 선택 확인. DXF 참조선은 E/V로 확인.
++4. 두 점 측정 버튼 → 서로 다른 두 정점 클릭 → 좌표/단위/치수선 확인. Esc 취소와 CSV 내보내기도 확인.
++5. HFSS 열기 → Import Status 확인 → 형상 교체 및 재료 수정 → 다른 이름으로 저장 → 다시 열어 형상과 오류 상태 확인.
++6. 수정 전에는 누락 형상/미확인 재료가 해석을 막는지 확인. STEP 조립체 및 DXF 원본 재현에 문제가 남으면 원본 파일과 전체 로그가 필요함.
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@
+ 
+ [project]
+ name = "aether-em"
+-version = "1.7.1"
++version = "1.7.2"
+ description = "3-D full-wave electromagnetic field solver (FEM, Nedelec edge elements) with HFSS .aedt interoperability"
+ readme = "README.md"
+ requires-python = ">=3.9"
+--- a/tests/test_release_172.py
++++ b/tests/test_release_172.py
+@@ -0,0 +1,73 @@
++"""Rendering, import safety and point-picking regressions (no CAD dependency)."""
++import shutil
++import subprocess
++from pathlib import Path
++import numpy as np
++import pytest
++import aether as ae
++from aether.gui.tessellate import tessellate_analytic, tessellate
++from aether.geometry.primitives import Sketch, ImportedShape
++from aether.diagnostics import import_errors
++from aether.gui.api import dispatch
++from aether.gui.state import Session
++
++
++def test_cylinder_smooth_side_preserves_sharp_caps():
++    t=tessellate_analytic(ae.Cylinder((0,0,0),1,3))
++    p=np.array(t['position']).reshape(-1,3);n=np.array(t['normal']).reshape(-1,3)
++    side=np.abs(n[:,2])<.5
++    radial=p[side,:2]/np.linalg.norm(p[side,:2],axis=1)[:,None]
++    assert np.min(np.sum(n[side,:2]*radial,axis=1))>.999
++    assert np.allclose(np.abs(n[~side,2]),1)
++    # Silhouette chord deviation below 0.04% of radius.
++    xy=np.unique(p[side,:2],axis=0)
++    angles=np.sort(np.arctan2(xy[:,1],xy[:,0]))
++    gap=np.max(np.diff(np.r_[angles,angles[0]+2*np.pi]))
++    assert 1-np.cos(gap/2)<.0004
++
++
++def test_box_keeps_sharp_normals():
++    t=tessellate_analytic(ae.Box((0,0,0),(1,2,3)))
++    n=np.array(t['normal']).reshape(-1,3)
++    assert np.all(np.sum(np.abs(n)>.01,axis=1)==1)
++    assert len(t['faces'])==6
++
++
++def test_drawing_exposes_points_and_edges():
++    t=tessellate(Sketch([[[0,0,0],[1,2,0],[3,2,0]]]))
++    assert len(t['snapPoints'])==3
++    assert t['faceEdges']==[0,1,-1,1,2,-1]
++    assert t['count']==0
++
++
++def new_session():
++    s=Session();s.new_project('Safety')
++    dispatch(s,'modeler.draw',{'shape':'box','name':'Box1','params':{'position':[0,0,0],'size':[1,2,3]}})
++    return s
++
++
++def test_missing_geometry_and_material_block_import():
++    s=new_session();o=s.design.solids[0]
++    o.shape=ImportedShape('/missing/model.step');o.import_material='unknown alloy'
++    errors=import_errors(s.design)
++    assert any('CAD source' in e for e in errors)
++    assert any('material' in e for e in errors)
++    assert dispatch(s,'project.importStatus')['errors']==errors
++
++
++def test_import_flags_survive_save_reopen_and_material_repair(tmp_path):
++    s=new_session();s.design.solids[0].import_material='unknown alloy'
++    s.design.import_issues=["part 'LostPart': unsupported creation"]
++    p=str(tmp_path/'flags.aedtz')
++    dispatch(s,'project.save',{'path':p});dispatch(s,'project.open',{'path':p})
++    assert any('material' in e for e in import_errors(s.design))
++    assert any('LostPart' in e for e in import_errors(s.design))
++    dispatch(s,'modeler.setProperty',{'name':'Box1','prop':'material','value':'copper'})
++    assert not any('material' in e for e in import_errors(s.design))
++    dispatch(s,'modeler.selectMode',{'mode':'point'})
++
++
++def test_viewport_events_and_snap_logic():
++    node=shutil.which('node')
++    if not node:pytest.skip('Node needed for isolated viewport logic checks')
++    subprocess.run([node,str(Path(__file__).with_name('viewport_172.cjs'))],check=True)
+--- a/tests/viewport_172.cjs
++++ b/tests/viewport_172.cjs
+@@ -0,0 +1,25 @@
++// Pure event/geometry tests with stub buffers, not an actual browser render.
++const fs=require('fs'),vm=require('vm'),assert=require('assert');
++const ctx={window:{},Float32Array,Uint32Array,Uint16Array,console,Date};
++vm.runInNewContext(fs.readFileSync(require('path').join(__dirname,'../aether/gui/static/gl.js'),'utf8'),ctx);
++const v=Object.create(ctx.window.Viewport.prototype),events={};
++v.canvas={style:{},addEventListener:(k,f)=>events[k]=f,getBoundingClientRect:()=>({left:0,top:0}),setPointerCapture:()=>{}};
++v.dist=10;v.yaw=0;v.pitch=0;v.pan=[0,0];v.objects=[];v.gl={deleteBuffer:()=>{}};v._buf=x=>x;v.setHover=()=>{};
++v.pick=()=>({name:'Box'});v.pickFeature=v.pick;
++let picks=0,doubles=0;v.onPick=()=>picks++;v.onDoublePick=()=>doubles++;
++v._bindInput();
++const e=(x=10)=>({button:0,clientX:x,clientY:10,pointerId:1,preventDefault(){}});
++events.pointerdown(e());events.pointermove(e(12));assert.equal(v.yaw,0);
++events.pointercancel(e());events.pointerup(e());assert.equal(picks,0);
++events.pointerdown(e());events.pointerup(e());assert.equal(picks,1);
++events.dblclick(e());assert.equal(doubles,1);
++v.onPickAt=()=>true;events.pointerdown(e());events.pointerup(e());events.dblclick(e());assert.equal(doubles,1);
++v.setDraft([[0,0,0],[1,0,0]]);v.setMeasure([[0,0,0],[1,0,0]]); // Former undefined proj/view crash.
++delete v.pickFeature;
++v.project=p=>({x:p[0],y:p[1]});v.ray=()=>({origin:[0,0,0]});v.pick=()=>null;
++v.objects=[{name:'A',snapPoints:[[20,20,1]],evCpu:new Float32Array([10,10,1,30,10,1]),faceEdges:[0,1,0]}];
++assert.equal(v.pickFeature(22,20,'point').name,'A');assert.equal(v.pickFeature(50,50,'point'),null);
++assert.equal(v.pickFeature(20,12,'edge').edge.length,20);
++v.objects[0].visible=false;assert.equal(v.pickFeature(20,20,'point'),null);
++v.objects[0].visible=true;v.pick=()=>({name:'Front',distance:1});assert.equal(v.pickFeature(20,20,'point'),null);
++console.log('viewport event and snap regressions passed');

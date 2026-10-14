@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aether-em"
+version = "1.7.9"
+description = "3-D full-wave electromagnetic field solver (FEM, Nedelec edge elements) with HFSS .aedt interoperability"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "Aether-EM" }]
+keywords = ["electromagnetics", "FEM", "Maxwell", "S-parameters", "HFSS",
+            "microwave", "RF", "antenna", "waveguide", "touchstone"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Programming Language :: Python :: 3",
+]
+# Version floors track the first release that actually ships wheels for a
+# given Python: NumPy 2.1 / SciPy 1.14.1 for 3.13, NumPy 2.4 / SciPy 1.16.1
+# for 3.14. Without these, pip happily installs a build with no matching
+# binary and the failure surfaces much later as an opaque import error.
+dependencies = [
+  "numpy>=1.24",
+  "ezdxf>=1.3,<2",
+  "numpy>=2.1; python_version>='3.13'",
+  "numpy>=2.4; python_version>='3.14'",
+  "scipy>=1.10",
+  "scipy>=1.14.1; python_version>='3.13'",
+  "scipy>=1.16.1; python_version>='3.14'",
+]
+
+[project.optional-dependencies]
+mesh = ["gmsh>=4.11"]            # OpenCASCADE geometry + tetrahedral meshing
+plot = ["matplotlib>=3.7"]
+aedt = ["pyaedt>=0.9"]           # optional bridge to a licensed Ansys install
+dev  = ["pytest>=7.4", "pytest-cov"]
+all  = ["gmsh>=4.11", "matplotlib>=3.7", "pytest>=7.4"]
+
+[project.scripts]
+aether = "aether.cli:main"
+# Deliberately importable with a broken scientific stack: it is the tool you
+# reach for when `aether` itself will not start.
+aether-doctor = "aether._preflight:main"
+
+[tool.setuptools.packages.find]
+include = ["aether*"]
+
+[tool.setuptools.package-data]
+"aether.gui" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: full 3-D solves", "occ: needs the gmsh/OCC backend"]

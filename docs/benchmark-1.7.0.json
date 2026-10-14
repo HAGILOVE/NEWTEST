@@ -1,0 +1,43 @@
+{
+  "version": "1.7.0",
+  "python": "3.12.13",
+  "platform": "Linux-6.18.35-x86_64-with-glibc2.39",
+  "numpy": "2.3.5",
+  "scipy": "1.17.0",
+  "case": "PEC WR90, vacuum, 20mm long, 10GHz, TE10, builtin mesh, no adaptivity",
+  "limits": "This benchmark does not validate arbitrary CAD, radiation, PML or HFSS equivalence.",
+  "benchmarks": [
+    {
+      "basisOrder": 1,
+      "meshSizeM": 0.004,
+      "tetrahedra": 540,
+      "s11Magnitude": 0.0005501279762504265,
+      "s21Magnitude": 0.9999998486795916,
+      "phaseErrorDegrees": 0.2737568880302853,
+      "runtimeSeconds": 0.0416369270000132,
+      "passed": true
+    },
+    {
+      "basisOrder": 1,
+      "meshSizeM": 0.0025,
+      "tetrahedra": 2400,
+      "s11Magnitude": 0.00017286139630881978,
+      "s21Magnitude": 0.9999999850594679,
+      "phaseErrorDegrees": 0.15749587944076754,
+      "runtimeSeconds": 0.609332419999987,
+      "passed": true
+    },
+    {
+      "basisOrder": 2,
+      "meshSizeM": 0.005,
+      "tetrahedra": 360,
+      "s11Magnitude": 3.4795048361793155e-05,
+      "s21Magnitude": 0.9999999993946561,
+      "phaseErrorDegrees": 0.10916716717338285,
+      "runtimeSeconds": 0.5604989550000141,
+      "passed": true
+    }
+  ],
+  "parametricSaveReopenPassed": true,
+  "passed": true
+}

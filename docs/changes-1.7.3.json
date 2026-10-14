@@ -1,0 +1,14 @@
+[
+  "README.md",
+  "aether/gui/api.py",
+  "aether/gui/static/app.js",
+  "aether/gui/static/gl.js",
+  "aether/io/aedt/translate.py",
+  "aether/version.py",
+  "docs/UPGRADE_1.7.3_KO.md",
+  "docs/solum-validation-1.7.3.json",
+  "docs/test-results-1.7.3.xml",
+  "pyproject.toml",
+  "tests/test_release_173.py",
+  "tests/viewport_173.cjs"
+]

@@ -1,0 +1,186 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "status": "modified"
+  },
+  {
+    "path": "CHECK_WINDOWS.cmd",
+    "status": "added"
+  },
+  {
+    "path": "MANIFEST.in",
+    "status": "modified"
+  },
+  {
+    "path": "README.md",
+    "status": "modified"
+  },
+  {
+    "path": "SETUP_WINDOWS.cmd",
+    "status": "added"
+  },
+  {
+    "path": "START_WINDOWS.cmd",
+    "status": "added"
+  },
+  {
+    "path": "aether/__init__.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/diagnostics.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/fem/adaptive.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/fem/control.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/fem/driver.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/geometry/export.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/geometry/primitives.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/api.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/engineering.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/gui/files.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/measurement.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/gui/state.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/static/app.js",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/static/engineering.js",
+    "status": "added"
+  },
+  {
+    "path": "aether/gui/static/index.html",
+    "status": "modified"
+  },
+  {
+    "path": "aether/gui/static/style.css",
+    "status": "modified"
+  },
+  {
+    "path": "aether/io/aedt/archive.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/io/aedt/translate.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/io/aedt/tree.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/io/aedt/writer.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/io/native.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/mesh/generator.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/model.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/parametric.py",
+    "status": "added"
+  },
+  {
+    "path": "aether/post/sparam.py",
+    "status": "modified"
+  },
+  {
+    "path": "aether/version.py",
+    "status": "modified"
+  },
+  {
+    "path": "docs/UPGRADE_1.6.1_KO.md",
+    "status": "added"
+  },
+  {
+    "path": "docs/UPGRADE_1.7.0_KO.md",
+    "status": "added"
+  },
+  {
+    "path": "docs/benchmark-1.7.0.json",
+    "status": "added"
+  },
+  {
+    "path": "docs/test-results-1.6.1.xml",
+    "status": "added"
+  },
+  {
+    "path": "docs/test-results-1.7.0.xml",
+    "status": "added"
+  },
+  {
+    "path": "examples/parametric_wr90.aedtz",
+    "status": "added"
+  },
+  {
+    "path": "pyproject.toml",
+    "status": "modified"
+  },
+  {
+    "path": "run.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_engineering_170.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_gui_edit.py",
+    "status": "modified"
+  },
+  {
+    "path": "tests/test_preflight.py",
+    "status": "modified"
+  },
+  {
+    "path": "tests/test_release_161.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_release_browser.py",
+    "status": "added"
+  },
+  {
+    "path": "validate_release.py",
+    "status": "added"
+  }
+]

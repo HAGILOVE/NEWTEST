@@ -1,0 +1,14 @@
+[
+  "README.md",
+  "START_FAST_WINDOWS.cmd",
+  "aether/gui/api.py",
+  "aether/gui/static/gl.js",
+  "aether/gui/tessellate.py",
+  "aether/version.py",
+  "docs/UPGRADE_1.7.4_KO.md",
+  "docs/test-results-1.7.4.xml",
+  "pyproject.toml",
+  "tests/test_release_174.py",
+  "tests/viewport_173.cjs",
+  "tests/viewport_174.cjs"
+]

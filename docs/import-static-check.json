@@ -1,0 +1,5 @@
+{
+  "check": "pyflakes undefined-name checks",
+  "passed": true,
+  "issues": []
+}

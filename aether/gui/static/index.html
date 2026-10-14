@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aether Desktop</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%230a63b8' stroke-width='3'/><path d='M4 16h24M16 4v24' stroke='%230a63b8' stroke-width='2'/></svg>">
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></symbol>
+  <symbol id="i-cyl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="6" rx="8" ry="3.2"/><path d="M4 6v12c0 1.8 3.6 3.2 8 3.2s8-1.4 8-3.2V6"/></symbol>
+  <symbol id="i-sph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="3.6" ry="9"/></symbol>
+  <symbol id="i-cone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3 4 19h16z"/><ellipse cx="12" cy="19" rx="8" ry="2.6"/></symbol>
+  <symbol id="i-torus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="12" rx="9.2" ry="5.4"/><ellipse cx="12" cy="12" rx="4" ry="2"/></symbol>
+  <symbol id="i-rect" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 8.5 12 4l9.5 4.5L12 13z"/></symbol>
+  <symbol id="i-bool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9.5" cy="12" r="6.2"/><circle cx="14.5" cy="12" r="6.2"/></symbol>
+  <symbol id="i-move" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v18M3 12h18M12 3 9 6m3-3 3 3M12 21l-3-3m3 3 3-3M3 12l3-3m-3 3 3 3M21 12l-3-3m3 3-3 3"/></symbol>
+  <symbol id="i-import" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-bnd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 8.5h17M8.5 3.5v17" stroke-dasharray="2 2"/></symbol>
+  <symbol id="i-port" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h6m6 0h6"/><rect x="9" y="6.5" width="6" height="11" rx="1"/></symbol>
+  <symbol id="i-setup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+  <symbol id="i-sweep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 17c3 0 3-10 6-10s3 10 6 10 3-10 6-10"/></symbol>
+  <symbol id="i-mesh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8M7.5 5.5 16.5 18M16.5 5.5 7.5 18"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4l14 8-14 8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-report" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 20h18"/><path d="M4 16l5-6 4 4 6-9"/></symbol>
+  <symbol id="i-field" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h18M3 7h18M3 17h18" stroke-dasharray="3 2"/><circle cx="12" cy="12" r="2.4"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7V3M8 14h8v7H8z"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h6l2 2h10v11H3z"/></symbol>
+  <symbol id="i-new" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-mat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="5"/><circle cx="15" cy="15" r="5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6.5h6l2 2h10V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-drive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/><path d="M7 8h.01M7 16h.01"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 11 12 4l8 7"/><path d="M6 10v10h12V10"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 19V6m0 0-6 6m6-6 6 6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9h10a5 5 0 0 1 0 10H8"/><path d="M4 9l5-5M4 9l5 5"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 9H10a5 5 0 0 0 0 10h6"/><path d="M20 9l-5-5m5 5-5 5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="9" y="9" width="11" height="12" rx="1.5"/><path d="M15 6H5a1 1 0 0 0-1 1v10"/></symbol>
+  <symbol id="i-paste" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 4h6v3H9z"/><path d="M9 5.5H6a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1h-3"/></symbol>
+  <symbol id="i-dup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.5" y="3.5" width="10" height="10" rx="1"/><rect x="10.5" y="10.5" width="10" height="10" rx="1"/></symbol>
+  <symbol id="i-export" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20V9m0 0 4 4m-4-4-4 4"/><path d="M4 6V4h16v2"/></symbol>
+</svg>
+
+<div id="app">
+  <div id="titlebar">
+    <span class="logo">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6">
+        <circle cx="16" cy="16" r="12"/><path d="M4 16h24M16 4v24"/></svg>
+      Aether Desktop
+    </span>
+    <span class="doc" id="title-doc">Project1 — HFSSDesign1</span>
+    <span class="spacer"></span>
+    <span class="ver">Full-Wave FEM v__AETHER_VERSION__</span>
+  </div>
+
+  <div id="menubar"></div>
+
+  <div id="ribbon">
+    <div id="ribbon-tabs"></div>
+    <div id="ribbon-body"></div>
+  </div>
+
+  <div id="main">
+    <div id="leftdock">
+      <div class="dock-title">Project Manager</div>
+      <div id="tree"></div>
+      <div class="splitter h" id="split-props" title="Drag to resize · double-click to reset"></div>
+      <div id="props">
+        <div class="dock-title">Properties</div>
+        <div id="props-body"></div>
+      </div>
+    </div>
+
+    <div class="splitter v" id="split-left" title="Drag to resize · double-click to reset"></div>
+
+    <div id="center">
+      <div id="doctabs"></div>
+      <div id="docs">
+        <div class="doc-page active" data-page="modeler">
+          <div id="viewport">
+            <canvas id="gl"></canvas>
+            <div id="vp-overlay">
+              <div class="tl" id="vp-info"></div>
+              <div id="vp-measure"></div>
+              <div id="vp-assign"></div>
+              <div id="vp-dim"></div>
+              <div class="br" id="vp-hint">click select · LMB rotate · Shift+LMB / MMB pan · wheel zoom · dbl-click fit</div>
+              <div id="legend"></div>
+              <div id="legend-labels"></div>
+            </div>
+            <div id="vp-draw"></div>
+            <div id="vp-tools"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="splitter h" id="split-bottom" title="Drag to resize · double-click to reset"></div>
+
+  <div id="bottomdock">
+    <div id="bottomtabs">
+      <button data-b="messages" class="active">Message Manager</button>
+      <button data-b="progress">Progress</button>
+      <button data-b="console">Scripting Console</button>
+      <span class="spacer"></span>
+      <button class="mini" id="btn-dock-max" title="Maximise / restore this panel">▲</button>
+      <button class="mini" id="btn-clear-msgs">Clear</button>
+    </div>
+    <div class="bottom-page active" data-b="messages"><div id="messages"></div></div>
+    <div class="bottom-page" data-b="progress"><div id="progress"></div></div>
+    <div class="bottom-page" data-b="console">
+      <div id="console">
+        <div id="console-out">Python console — `design`, `project`, `solution`, `ae` are in scope.
+Ctrl+Enter runs. Anything you change here appears in the tree immediately.
+</div>
+        <div id="console-in"><span>&gt;&gt;&gt;</span><textarea id="console-src" spellcheck="false"></textarea></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="statusbar">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">Ready</span>
+    <span class="spacer"></span>
+    <span id="status-xyz" title="Cursor position on the work plane"></span>
+    <span id="status-sel">No selection</span>
+    <span id="status-mesh">Mesh: none</span>
+    <span id="status-units">Units: mm</span>
+  </div>
+</div>
+
+<div id="modal-back"></div>
+
+<script src="/gl.js"></script>
+<script>window.AETHER_TOKEN = "__AETHER_TOKEN__";</script>
+<script src="/engineering.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

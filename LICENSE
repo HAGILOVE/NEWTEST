@@ -1,0 +1,16 @@
+Aether-EM — Commercial Software License
+
+Copyright (c) 2026. All rights reserved.
+
+This software and its documentation are proprietary. Redistribution, sublicensing
+or commercial use requires a written license agreement from the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. Electromagnetic simulation results are numerical approximations; the
+licensee is responsible for validating them against measurement or an
+independent solver before relying on them for hardware decisions.
+
+"HFSS", "AEDT", "Ansys" and "Ansys Electronics Desktop" are trademarks of ANSYS,
+Inc. This product is not affiliated with, endorsed by or sponsored by ANSYS,
+Inc. Interoperability with the .aedt file format is provided for the benefit of
+users who own their own design data.
