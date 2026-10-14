@@ -265,7 +265,8 @@ def test_port_mode_report_covers_lumped_ports(page):
     page.click("#ribbon-tabs button:has-text('Results')")
     page.click(".rbtn:has-text('Port Modes')")
     page.wait_for_timeout(1200)
-    grid = page.locator('.doc-page[data-page="rep-m"]')
+    # each result is its own page now (rep-<id>); the active one is this report
+    grid = page.locator('.doc-page.active')
     assert grid.locator("table.grid tr").count() == 3      # header + 2 ports
     assert "TEM (lumped)" in grid.inner_text()
 
@@ -872,7 +873,7 @@ def test_drawing_a_box_from_two_clicked_points(edit_page):
     pg.fill("#dw-s0", "9")
     pg.press("#dw-s0", "Enter")
     pg.fill("#dw-s1", "4")
-    pg.press("#dw-s1", "Enter")
+    pg.press("#dw-s1", "Tab")          # Enter here would already accept the box
     pg.fill("#dw-h", "3")
     pg.press("#dw-h", "Enter")
     pg.wait_for_function(f"()=>STATE.design.objects.length==={n0 + 1}",

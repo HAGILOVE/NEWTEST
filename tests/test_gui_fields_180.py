@@ -127,8 +127,10 @@ def test_closing_the_panel_restores_the_model(tab):
 
 def test_the_smith_chart_draws_the_reflection_trace(tab):
     tab.evaluate("()=>{reportForm='smith'; return openReport('sparam')}")
-    tab.wait_for_selector(".doc-page.active svg polyline", timeout=60000)
+    # a one-frequency solution is a single point: attached, not "visible"
+    tab.wait_for_selector(".doc-page.active svg polyline", state="attached",
+                          timeout=60000)
     assert tab.locator(".doc-page.active svg circle").count() >= 10   # r and x circles
-    assert "GHz" in tab.locator(".doc-page.active svg").inner_text()
+    assert "GHz" in tab.locator(".doc-page.active svg").first.text_content()
     assert not tab.errors
     tab.evaluate("()=>{reportForm='db'}")

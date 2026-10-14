@@ -2616,7 +2616,7 @@ function initViewport() {
     .classList.add('on');
   mk('Mesh overlay', 'i-mesh', () => showMesh(!VP.wire), 'vt-mesh');
   mk('Field overlay', 'i-field', () => showField(!fieldOn), 'vt-field');
-  mk('3D radiation pattern', 'i-field', () => showPattern(!patternOn), 'vt-pattern');
+  mk('3D radiation pattern', 'i-field', () => showPattern(!patternShown()), 'vt-pattern');
 }
 
 function setViewMode(m) { VP.mode = m; $('#vp-info') && updateOverlay(); }
@@ -2798,6 +2798,7 @@ async function showField(on, opts) {
     buildFieldPanel();
     fieldOn = true;
     $('#vt-field') && $('#vt-field').classList.add('on');
+    $('#vt-pattern') && $('#vt-pattern').classList.toggle('on', FIELD.quantity === 'P');
     await plotField();
     trackFieldResult();
   });
@@ -2808,6 +2809,7 @@ function closeFieldPanel() {
   fieldOn = false;
   const box = $('#vp-field'); if (box) box.remove();
   $('#vt-field') && $('#vt-field').classList.remove('on');
+  $('#vt-pattern') && $('#vt-pattern').classList.remove('on');
   $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
   VP && VP.setArrows(null);
   refreshGeometry(false);
@@ -5076,39 +5078,13 @@ function polarChart(thetaDeg, series, ylabel, topDb = null, spanDb = 40, w = 560
   return svg;
 }
 
-let patternOn = false;
+/* The 3-D radiation pattern is the "P" quantity of the field panel, so it has
+   the same frequency, phase animation and opacity controls as every field. */
+const patternShown = () => fieldOn && FIELD.quantity === 'P';
 async function showPattern(on, opts) {
-  if (on) return showField(true, { quantity: 'P', excitation: (opts || {}).excitation, freq: (opts || {}).freq });
-  return showPatternLegacy(on, opts);
-}
-async function showPatternLegacy(on, opts) {
-  if (!on) {
-    patternOn = false;
-    const vb = $('#vt-pattern'); if (vb) vb.classList.remove('on');
-    $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
-    await refreshGeometry(false);
-    return;
-  }
-  await guard(async () => {
-    const f = await rpc('view.pattern', { excitation: (opts || {}).excitation || 0,
-      freq: (opts || {}).freq });
-    f.name = '__pattern__'; f.color = '#888888'; f.transparency = 0;
-    VP.setObjects([f], VP.bbox);
-    patternOn = true;
-    const vb = $('#vt-pattern'); if (vb) vb.classList.add('on');
-    const lg = $('#legend');
-    lg.style.background =
-      'linear-gradient(to top, #30123b, #4145ab, #1ba0d1, #46f884, #d5e11a, #f6883a, #900c00)';
-    lg.classList.add('on');
-    const lab = $('#legend-labels');
-    lab.innerHTML = '';
-    for (let i = 4; i >= 0; i--) {
-      const v = f.range[0] + (f.range[1] - f.range[0]) * i / 4;
-      lab.appendChild(el('span', {}, v.toFixed(1)));
-    }
-    lab.classList.add('on');
-    lab.insertBefore(el('span', { style: 'font-weight:600' }, 'Gain dBi'), lab.firstChild);
-  });
+  if (on) return showField(true, { quantity: 'P', excitation: (opts || {}).excitation,
+    freq: (opts || {}).freq });
+  if (patternShown()) closeFieldPanel();
 }
 
 async function reportModes() {

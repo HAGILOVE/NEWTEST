@@ -79,9 +79,12 @@ def test_switching_to_a_rectangular_plot(tab):
 
 def test_the_3d_pattern_is_drawn_in_the_viewport(tab):
     tab.evaluate("()=>{selectPage('modeler'); return showPattern(true,{})}")
-    tab.wait_for_function("()=>patternOn===true", timeout=60000)
+    tab.wait_for_function("()=>patternShown()===true&&!FIELD.busy", timeout=60000)
     assert tab.locator("#legend.on").count() == 1
-    assert "Gain dBi" in tab.locator("#legend-labels").inner_text()
+    assert "Gain" in tab.locator("#legend-labels").inner_text()
+    assert "dBi" in tab.locator("#legend-labels").inner_text()
+    # the pattern is a field-panel quantity now: animation and opacity controls
+    assert tab.locator("#fp-pa").count() == 1 and tab.locator("#fp-ma").count() == 1
     tab.evaluate("()=>showPattern(false)")
-    tab.wait_for_function("()=>patternOn===false", timeout=30000)
+    tab.wait_for_function("()=>patternShown()===false", timeout=30000)
     assert not tab.errors
