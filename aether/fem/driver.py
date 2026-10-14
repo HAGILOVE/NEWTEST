@@ -40,6 +40,11 @@ class Solution:
     fields: Dict[Tuple[float, int], FieldSolution] = field(default_factory=dict)
     convergence: List[dict] = field(default_factory=list)
     runtime: float = 0.0
+    #: True where the S-matrix comes from a FEM solve, False where an
+    #: interpolating/fast sweep reconstructed it
+    solved: Optional[np.ndarray] = None
+    #: one entry per sweep: strategy used, solves spent, tolerance, time
+    sweep_info: List[dict] = field(default_factory=list)
 
     # -- convenience --------------------------------------------------
     @property
@@ -67,6 +72,12 @@ class Solution:
                            f"{c['dof']:>8d} DOF, dS = "
                            + ("--" if c["delta_s"] is None
                               else f"{c['delta_s']:.5f}"))
+        for si in self.sweep_info:
+            if si.get("requested", "discrete") != "discrete":
+                out.append(f"  sweep {si.get('name', '')}: {si['kind']} -> "
+                           f"{si['solved']} full solve(s) for "
+                           f"{si['points']} point(s), "
+                           f"{si['seconds']:.2f} s")
         if self.sparams is not None:
             out.append("  " + self.sparams.summary().replace("\n", "\n  "))
         return "\n".join(out)
@@ -136,24 +147,51 @@ def _lumped_mode(mesh, dofmap, tris, direction) -> Tuple[np.ndarray, sp.csr_matr
 # --------------------------------------------------------------------------
 
 
-def solve_frequency(design, mesh, dofmap, ops, bts, freq: float,
-                    save_field: bool = False,
-                    port_cache: Optional[dict] = None):
-    """Assemble and solve at one frequency; return (S_raw, z0, ports, fields)."""
+@dataclass
+class PortData:
+    """
+    Everything the ports contribute at one frequency.
+
+    Kept separate from the volume operator because it is the part of a
+    frequency solve that cannot be reused across frequencies (the 2-D modal
+    eigenproblem is re-solved at every frequency) yet is small enough to cache
+    -- ``cols`` and ``proj`` are sparse, supported on the port faces only.
+    """
+    freq: float
+    port_sols: List[PortSolution]
+    #: ``(gamma, v)`` wave-port terms: ``A += gamma v v^T``
+    wave_terms: List[Tuple[complex, sp.csr_matrix]]
+    #: ``(coef, B)`` lumped-port terms: ``A += coef * B``
+    lumped_terms: List[Tuple[complex, sp.csr_matrix]]
+    rhs: sp.csr_matrix                  # (n_dof, n_exc) incident excitation
+    proj: sp.csr_matrix                 # (n_dof, n_exc) modal projection
+    z0: np.ndarray
+    zport: np.ndarray
+    gammas: np.ndarray
+    eps_of: Callable
+    mu_of: Callable
+
+
+def _col(v: np.ndarray, n: int) -> sp.csr_matrix:
+    nz = np.nonzero(np.abs(v) > 0)[0]
+    return sp.csr_matrix((v[nz], (nz, np.zeros(len(nz), int))), shape=(n, 1))
+
+
+def compute_port_data(design, mesh, dofmap, freq: float) -> PortData:
+    """Solve every port's modal problem at *freq* and assemble its terms."""
     k0 = 2.0 * math.pi * freq / c0
     eps, mu = _material_maps(design, mesh, freq)
     eps_of = lambda r: eps.get(r, 1.0 + 0j)
     mu_of = lambda r: mu.get(r, 1.0 + 0j)
-
-    A = ops.operator(k0, eps, mu)
-    A = bts.apply(A, k0, freq)
+    n = dofmap.n_dof
 
     port_sols: List[PortSolution] = []
-    rhs_cols: List[np.ndarray] = []
+    wave_terms, lumped_terms = [], []
+    rhs_cols: List[sp.csr_matrix] = []
+    proj_cols: List[sp.csr_matrix] = []
     z0_list: List[complex] = []
     zport_list: List[complex] = []
     gammas: List[complex] = []
-    proj_vecs: List[np.ndarray] = []
 
     for p in design.ports:
         idx = mesh.port_faces.get(p.name, np.zeros(0, np.int64))
@@ -167,13 +205,10 @@ def solve_frequency(design, mesh, dofmap, ops, bts, freq: float,
             port_sols.append(ps)
             for m in range(len(ps.modes)):
                 md = ps.modes[m]
-                v = ps.v(m)
-                nz = np.nonzero(np.abs(v) > 0)[0]
-                col = sp.csr_matrix((v[nz], (nz, np.zeros(len(nz), int))),
-                                    shape=(dofmap.n_dof, 1))
-                A = A + md.gamma * (col @ col.T)
-                rhs = 2.0 * md.gamma * v
-                rhs_cols.append(rhs)
+                v = _col(ps.v(m), n)
+                wave_terms.append((md.gamma, v))
+                rhs_cols.append(2.0 * md.gamma * v)
+                proj_cols.append(v)
                 # The power-wave normalisation must use the *modal wave*
                 # impedance: only that one satisfies Z ~ 1/gamma, which is
                 # what makes the resulting S-matrix exactly reciprocal for a
@@ -182,45 +217,73 @@ def solve_frequency(design, mesh, dofmap, ops, bts, freq: float,
                 z0_list.append(md.Z_wave)
                 zport_list.append(md.Z_port)
                 gammas.append(md.gamma)
-                proj_vecs.append(v)
         else:                                   # lumped port
             c, B, L, w = _lumped_mode(mesh, dofmap, tris, p.direction)
             Zs = complex(p.impedance) * w / L
             y = eta0 / Zs
-            A = A + (1j * k0 * y) * B
-            v = np.asarray(B @ c).ravel()
-            rhs_cols.append(2.0 * 1j * k0 * y * v)
+            coef = 1j * k0 * y
+            lumped_terms.append((coef, B))
+            v = _col(np.asarray(B @ c).ravel(), n)
+            rhs_cols.append(2.0 * coef * v)
+            proj_cols.append(v)
             z0_list.append(complex(p.impedance))
             zport_list.append(complex(p.impedance))
             gammas.append(1j * k0)
-            proj_vecs.append(v)
-            ps = PortSolution(p.name, freq, [], np.sort(tris, axis=1),
-                              np.zeros(0, np.int64), B,
-                              np.array([0.0, 0.0, 1.0]), 0.0, 1)
-            port_sols.append(ps)
+            port_sols.append(PortSolution(p.name, freq, [], np.sort(tris, axis=1),
+                                          np.zeros(0, np.int64), B,
+                                          np.array([0.0, 0.0, 1.0]), 0.0, 1))
+    return PortData(freq, port_sols, wave_terms, lumped_terms,
+                    sp.hstack(rhs_cols, format="csr"),
+                    sp.hstack(proj_cols, format="csr"),
+                    np.asarray(z0_list, complex), np.asarray(zport_list, complex),
+                    np.asarray(gammas, complex), eps_of, mu_of)
 
-    n_exc = len(rhs_cols)
-    Bmat = np.stack(rhs_cols, axis=1)
-    Ar, Br, keep = constrain(A.tocsr(), Bmat, bts.pec_dofs)
+
+def assemble_system(design, mesh, dofmap, ops, bts, freq: float,
+                    pd: Optional[PortData] = None):
+    """
+    The constrained linear system ``A x = B`` at *freq*.
+
+    Returns ``(Ar, Br, keep, pd)`` with the PEC degrees of freedom eliminated;
+    pass a cached ``pd`` to skip the port eigenproblems.
+    """
+    k0 = 2.0 * math.pi * freq / c0
+    pd = pd or compute_port_data(design, mesh, dofmap, freq)
+    eps, mu = _material_maps(design, mesh, freq)
+    A = ops.operator(k0, eps, mu)
+    A = bts.apply(A, k0, freq)
+    for gamma, v in pd.wave_terms:
+        A = A + gamma * (v @ v.T)
+    for coef, B in pd.lumped_terms:
+        A = A + coef * B
+    Ar, Br, keep = constrain(A.tocsr(), pd.rhs.toarray(), bts.pec_dofs)
+    return Ar, Br, keep, pd
+
+
+def extract_sparams(pd: PortData, X: np.ndarray) -> np.ndarray:
+    """Power-normalised S-matrix from the full-DOF solution columns *X*."""
+    n_exc = X.shape[1]
+    amp = np.asarray(pd.proj.T @ X)             # amp[i, j] = <E_j, e_i>
+    S = amp - np.eye(n_exc)                     # subtract the incident wave
+    sq = np.sqrt(pd.z0)
+    return S * (sq[None, :] / sq[:, None])      # power-wave normalisation
+
+
+def solve_frequency(design, mesh, dofmap, ops, bts, freq: float,
+                    save_field: bool = False,
+                    port_cache: Optional[dict] = None):
+    """Assemble and solve at one frequency; return (S_raw, z0, ports, fields)."""
+    Ar, Br, keep, pd = assemble_system(design, mesh, dofmap, ops, bts, freq)
     solver = LinearSolver(Ar, design.config.solver)
-    Xr = solver.solve(Br)
-    X = expand(Xr, keep, dofmap.n_dof)
-
-    P = np.stack(proj_vecs, axis=1)             # (n_dof, n_exc)
-    amp = P.T @ X                               # amp[i, j] = <E_j, e_i>
-    S = amp.copy()
-    S -= np.eye(n_exc)                          # subtract the incident wave
-    z0 = np.asarray(z0_list, complex)
-    zport = np.asarray(zport_list, complex)
-    sq = np.sqrt(z0)
-    S = S * (sq[None, :] / sq[:, None])         # power-wave normalisation
+    X = expand(solver.solve(Br), keep, dofmap.n_dof)
+    S = extract_sparams(pd, X)
 
     fields = {}
     if save_field:
-        for j in range(n_exc):
+        for j in range(X.shape[1]):
             fields[j] = FieldSolution(mesh, dofmap, X[:, j], freq,
-                                      eps_of, mu_of)
-    return S, z0, port_sols, fields, np.asarray(gammas, complex), zport
+                                      pd.eps_of, pd.mu_of)
+    return S, pd.z0, pd.port_sols, fields, pd.gammas, pd.zport
 
 
 # --------------------------------------------------------------------------
@@ -251,34 +314,48 @@ def solve_design(design, setup: Optional[str] = None,
         sweeps = [s for s in st.sweeps if s.name == sweep]
         if not sweeps:
             raise KeyError(f"no sweep named {sweep!r} in setup {st.name!r}")
-    freqs = np.unique(np.concatenate([s.frequencies() for s in sweeps])) \
-        if sweeps else np.array([st.frequency])
+    from .sweep import run_sweep
+    if sweeps:
+        plan = [(sw.name, sw.kind, sw.frequencies(), sw) for sw in sweeps]
+    else:
+        plan = [("adaptive", "discrete", np.array([st.frequency]), None)]
+    freqs = np.unique(np.concatenate([p[2] for p in plan]))
 
     sol = Solution(design, mesh, dofmap, freqs, convergence=history)
     n_exc = design.n_excitations
     Sall = np.zeros((len(freqs), n_exc, n_exc), complex)
-    Z0all = np.zeros((len(freqs), n_exc), complex)
     Gall = np.zeros((len(freqs), n_exc), complex)
     Zportall = np.zeros((len(freqs), n_exc), complex)
+    solved = np.zeros(len(freqs), bool)
 
     want_fields = save_fields or any(s.save_fields for s in sweeps)
     with timed(log, f"frequency sweep ({len(freqs)} point(s))"):
-        for i, f in enumerate(freqs):
+        for name, kind, fr, sw in plan:
             checkpoint(cancel)
-            S, z0, psols, flds, gam, zport = solve_frequency(
-                design, mesh, dofmap, ops, bts, float(f),
-                save_field=want_fields)
-            Sall[i] = S
-            Z0all[i] = z0
-            Gall[i] = gam
-            Zportall[i] = zport
-            sol.ports[float(f)] = psols
-            for j, fs in flds.items():
-                sol.fields[(float(f), j)] = fs
-            if progress:
-                log.info("  f = %10.6f GHz   |S11| = %7.4f  |S21| = %7.4f",
-                         f / 1e9, abs(S[0, 0]),
-                         abs(S[min(1, n_exc - 1), 0]))
+            if kind != "discrete":
+                log.info("sweep %s: %s over %d point(s)", name, kind, len(fr))
+            r = run_sweep(design, mesh, dofmap, ops, bts, fr, kind,
+                          tol=getattr(sw, "tolerance", None),
+                          max_points=getattr(sw, "max_points", None),
+                          want_fields=want_fields, cancel=cancel,
+                          progress=progress)
+            r.info["name"] = name
+            sol.sweep_info.append(r.info)
+            if kind != "discrete":
+                log.info("sweep %s: %d full solve(s) for %d point(s) "
+                         "[%s, last probe error %.2e, %.2f s]", name,
+                         r.info["solved"], r.info["points"], r.info["kind"],
+                         r.info.get("last_probe_error", 0.0),
+                         r.info["seconds"])
+            ix = np.searchsorted(freqs, r.freqs)
+            # a real solve outranks a reconstruction at a shared frequency
+            take = r.solved | ~solved[ix]
+            ix, rr = ix[take], np.nonzero(take)[0]
+            Sall[ix], Gall[ix], Zportall[ix] = r.S[rr], r.gamma[rr], r.zport[rr]
+            solved[ix] = solved[ix] | r.solved[rr]
+            sol.ports.update(r.ports)
+            sol.fields.update(r.fields)
+    sol.solved = solved
 
     names = design.excitation_names()
     # The reported reference impedance is the *port* impedance (the line

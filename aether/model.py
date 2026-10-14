@@ -214,6 +214,10 @@ class FrequencySweep:
     spacing: str = "linear"         # linear | log | single
     points: Optional[Sequence[float]] = None
     save_fields: bool = False
+    #: interpolating / fast sweeps: max |dS| the model may be wrong by, and the
+    #: most full solves it may spend; ``None`` -> ``Config.sweep`` defaults
+    tolerance: Optional[float] = None
+    max_points: Optional[int] = None
 
     def frequencies(self) -> np.ndarray:
         if self.points is not None:
@@ -239,10 +243,11 @@ class Setup:
 
     def add_sweep(self, name="Sweep1", start="1GHz", stop="10GHz", count=101,
                   kind="discrete", spacing="linear", points=None,
-                  save_fields=False) -> FrequencySweep:
+                  save_fields=False, tolerance=None,
+                  max_points=None) -> FrequencySweep:
         sw = FrequencySweep(name, kind, to_si(start, "frequency"),
                             to_si(stop, "frequency"), count, spacing,
-                            points, save_fields)
+                            points, save_fields, tolerance, max_points)
         self.sweeps.append(sw)
         return sw
 

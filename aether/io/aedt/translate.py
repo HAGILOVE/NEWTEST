@@ -1236,6 +1236,15 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
             st.add_sweep(swname, a, b,
                          int(sw.get("RangeCount", 101) or 101), kind)
         st.sweeps[-1].save_fields = bool(sw.get("SaveFields", False))
+        # HFSS stores the interpolating tolerance as a percentage of |S|
+        try:
+            if sw.get("InterpTolerance") is not None and kind != "discrete":
+                st.sweeps[-1].tolerance = min(
+                    max(float(sw.get("InterpTolerance")) / 100.0, 1e-6), 0.5)
+            if sw.get("InterpMaxSolns") is not None and kind != "discrete":
+                st.sweeps[-1].max_points = max(int(sw.get("InterpMaxSolns")), 4)
+        except (TypeError, ValueError):
+            pass
         points = sw.get("AetherFrequencyPoints")
         if points is not None:
             st.sweeps[-1].points = [float(v) for v in points]

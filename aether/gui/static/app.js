@@ -961,10 +961,25 @@ function dlgSweep(setupName) {
   body.appendChild(field('Spacing', sel('sw-sp',
     [['linear', 'Linear count'], ['log', 'Logarithmic'], ['single', 'Single point']], 'linear')));
   body.appendChild(field('Points', inp('sw-n', '41', 'number', { min: 1 })));
+  // Interpolating / Fast solve only some frequencies and reconstruct the rest;
+  // these two say how closely and how many full solves that may take.
+  const adv = el('div', { id: 'sw-adv' });
+  adv.appendChild(field('Error tolerance (|ΔS|)', inp('sw-tol', '0.001', 'number',
+    { min: 0, max: 1, step: 'any' })));
+  adv.appendChild(field('Max solutions', inp('sw-max', '100', 'number', { min: 4 })));
+  adv.appendChild(el('div', { class: 'hint' },
+    'Interpolating fits a rational model through adaptively chosen solves; ' +
+    'Fast projects the full operator onto a reduced basis. Sweeps shorter ' +
+    'than 7 points are always solved point by point.'));
+  body.appendChild(adv);
+  const showAdv = () => { adv.style.display = gv('sw-kind') === 'discrete' ? 'none' : ''; };
+  setTimeout(() => { showAdv(); $('#sw-kind').onchange = showAdv; }, 0);
   dialog({ title: 'Add Frequency Sweep', body, ok: 'OK', onOk: () =>
     guard(() => rpc('analysis.addSweep', { setup: gv('sw-setup'),
       name: gv('sw-name'), kind: gv('sw-kind'), start: gv('sw-a'),
-      stop: gv('sw-b'), count: gn('sw-n'), spacing: gv('sw-sp') })) });
+      stop: gv('sw-b'), count: gn('sw-n'), spacing: gv('sw-sp'),
+      tolerance: gv('sw-kind') === 'discrete' ? null : gv('sw-tol'),
+      maxPoints: gv('sw-kind') === 'discrete' ? null : gv('sw-max') })) });
 }
 
 async function dlgValidate() {

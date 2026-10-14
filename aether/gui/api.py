@@ -166,7 +166,8 @@ def _design_json(s: Session) -> Optional[dict]:
             "sweeps": [{"name": sw.name, "kind": sw.kind,
                         "start": sw.start, "stop": sw.stop,
                         "count": sw.count, "spacing": sw.spacing,
-                        "points": int(len(sw.frequencies()))}
+                        "points": int(len(sw.frequencies())),
+                        "tolerance": sw.tolerance, "maxPoints": sw.max_points}
                        for sw in st.sweeps],
         } for st in d.setups],
         "meshed": d.mesh is not None,
@@ -1773,12 +1774,22 @@ def _edit_setup(s: Session, name: str = "", **kw):
 @command("analysis.addSweep")
 def _add_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discrete",
                start: Any = "1GHz", stop: Any = "10GHz", count: int = 101,
-               spacing: str = "linear", **_):
+               spacing: str = "linear", tolerance: Any = None,
+               maxPoints: Any = None, **_):
     d = s.require_design()
     st = d.get_setup(setup or None)
     swn = (naming.unique_name([x.name for x in st.sweeps], name) if name
            else naming.suggest_sweep(st))
-    sw = st.add_sweep(swn, start, stop, int(count), kind, spacing)
+    if kind not in ("discrete", "interpolating", "fast"):
+        raise ValueError(f"unknown sweep type {kind!r}")
+    tol = float(tolerance) if tolerance not in (None, "") else None
+    if tol is not None and not 0 < tol < 1:
+        raise ValueError("error tolerance must be between 0 and 1 (|dS|)")
+    mp = int(maxPoints) if maxPoints not in (None, "") else None
+    if mp is not None and mp < 4:
+        raise ValueError("an adaptive sweep needs at least 4 solutions")
+    sw = st.add_sweep(swn, start, stop, int(count), kind, spacing,
+                      tolerance=tol, max_points=mp)
     s.dirty = True
     s.messages.add(f"Added sweep {sw.name!r}: {sw.start/1e9:g}–"
                    f"{sw.stop/1e9:g} GHz, {sw.count} points.", "info",

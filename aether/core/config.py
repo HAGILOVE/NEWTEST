@@ -61,7 +61,7 @@ class SweepSettings:
     kind: Literal["discrete", "fast", "interpolating"] = "discrete"
     rom_order: int = 12                  # Krylov moments for 'fast' (PRIMA/AWE)
     interp_tol: float = 1e-3
-    interp_max_points: int = 60
+    interp_max_points: int = 100
     save_fields: bool = False
 
 

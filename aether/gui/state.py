@@ -376,8 +376,11 @@ class Session:
             self.job = SolveJob(setup=st.name, running=True,
                                 started=time.time(),
                                 total_passes=st.max_passes,
-                                freq_total=int(sum(len(s.frequencies())
-                                                   for s in st.sweeps)) or 1,
+                                freq_total=int(sum(
+                                    len(s.frequencies()) if s.kind == "discrete"
+                                    else min(len(s.frequencies()),
+                                             s.max_points or d.config.sweep.interp_max_points)
+                                    for s in st.sweeps)) or 1,
                                 stage="meshing")
         t = threading.Thread(target=self._solve_worker,
                              args=(setup_name, kw, d), daemon=True)
@@ -402,6 +405,16 @@ class Session:
             self.messages.add(
                 f"Analysis complete in {self.job.elapsed:.1f} s "
                 f"({sol.sparams.n_freq} frequency points).", "info", "analysis")
+            for si in sol.sweep_info:
+                if si.get("requested", "discrete") == "discrete":
+                    continue
+                note = (f"Sweep {si.get('name', '')!r} ({si['kind']}): "
+                        f"{si['solved']} full solve(s) reconstructed "
+                        f"{si['points']} points")
+                if si["kind"] != si["requested"]:
+                    note = (f"Sweep {si.get('name', '')!r}: only {si['points']} "
+                            f"point(s), solved directly instead of {si['requested']}")
+                self.messages.add(note + ".", "info", "analysis")
         except Exception as exc:                 # pragma: no cover - surfaced in UI
             with self._lock:
                 self.job.running = False

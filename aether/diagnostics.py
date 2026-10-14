@@ -98,11 +98,6 @@ def report(d):
             for sh in walk(o.shape)
         ):
             errors.append("Imported CAD requires the OCC backend")
-    for st in d.setups:
-        if any(sw.kind != "discrete" for sw in st.sweeps):
-            warnings.append(
-                f"{st.name}: Fast/Interpolating labels currently execute full discrete frequency solves; no reduced-order speedup."
-            )
     if any(b.btype == "radiation" for b in d.boundaries):
         warnings.append(
             "Radiation uses a first-order absorbing boundary, not PML. Check air clearance and convergence."

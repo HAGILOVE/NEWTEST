@@ -497,6 +497,11 @@ def _write_setup(parent: AedtBlock, st) -> AedtBlock:
             s.add_prop("RangeEnd", _freq(sw.stop))
             s.add_prop("RangeCount", int(sw.count))
         s.add_prop("SaveFields", bool(sw.save_fields))
+        if sw.kind != "discrete":
+            if sw.tolerance is not None:
+                s.add_prop("InterpTolerance", float(sw.tolerance) * 100.0)
+            if sw.max_points is not None:
+                s.add_prop("InterpMaxSolns", int(sw.max_points))
         if sw.points is not None:
             s.add_prop("AetherFrequencyPoints", [float(v) for v in sw.frequencies()])
     return blk
