@@ -64,6 +64,17 @@ class Solution:
                   key=lambda k: abs(k[0] - freq))
         return self.fields[key]
 
+    def farfield(self, freq: Optional[float] = None, excitation: int = 0,
+                 n_theta: int = 91, n_phi: int = 72):
+        """
+        Power-normalised far field (1 W accepted) of one excitation.
+
+        Needs saved fields and a radiation boundary; see
+        :func:`aether.post.farfield.antenna_parameters`.
+        """
+        from ..post.farfield import antenna_parameters
+        return antenna_parameters(self, freq, excitation, n_theta, n_phi)
+
     def summary(self) -> str:
         out = [f"Solution for design {self.design.name!r}  "
                f"({len(self.freqs)} frequency point(s), {self.runtime:.2f} s)"]

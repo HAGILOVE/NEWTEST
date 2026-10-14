@@ -141,6 +141,18 @@ def _budget_size(volume: float, h: float) -> float:
 # --------------------------------------------------------------------------
 
 
+def _has_small_sheet(design, h: float) -> bool:
+    """True when some sheet's largest extent is below 1.5 element sizes."""
+    for sh in getattr(design, "sheets", []):
+        try:
+            lo, hi = sh.shape.bounds()
+            if float(np.max(np.asarray(hi) - np.asarray(lo))) < 1.5 * h:
+                return True
+        except Exception:                                   # pragma: no cover
+            continue
+    return False
+
+
 def generate_occ(design, freq: float, size: Optional[float] = None,
                  write_msh: Optional[str] = None,
                  size_field: Optional[str] = None) -> TetMesh:
@@ -216,11 +228,14 @@ def generate_occ(design, freq: float, size: Optional[float] = None,
             if not getattr(op, "enabled", True) or op.max_length <= 0:
                 continue
             vols: List[int] = []
+            surfs: List[int] = []
             for nm in op.objects:
                 vols += list(asm.solid_volumes.get(nm, []))
-                vols += list(getattr(asm, "sheet_surfaces", {}).get(nm, []))
-            surfs = _surfaces_for(gmsh, op.selector) if op.selector is not None \
-                else []
+                # a sheet is a surface entity: handing its tag to the volume
+                # list names a 3-D entity that does not exist and aborts gmsh
+                surfs += list(getattr(asm, "sheet_surfaces", {}).get(nm, []))
+            if op.selector is not None:
+                surfs += _surfaces_for(gmsh, op.selector)
             if not vols and not surfs:
                 log.warning("mesh operation %r matched nothing", op.name)
                 continue
@@ -253,7 +268,15 @@ def generate_occ(design, freq: float, size: Optional[float] = None,
         with timed(log, f"tetrahedral meshing (h={h:.4g} m)"):
             gmsh.model.mesh.generate(3)
             if cfg.optimize:
-                gmsh.model.mesh.optimize("Netgen", niter=2)
+                if _has_small_sheet(design, h):
+                    # Netgen's optimiser segfaults (taking the whole process
+                    # with it) on a sheet much smaller than the element size
+                    # -- a lumped-port gap, say. gmsh's own optimiser is safe.
+                    log.info("small port/sheet geometry: using the default "
+                             "mesh optimiser instead of Netgen")
+                    gmsh.model.mesh.optimize("", niter=2)
+                else:
+                    gmsh.model.mesh.optimize("Netgen", niter=2)
 
         mesh = _harvest(gmsh, region_names, sheet_groups)
         mesh.skipped_bodies = dict(asm.skipped)
@@ -458,8 +481,14 @@ def drop_pec_regions(mesh: TetMesh, design) -> TetMesh:
     names = {k: v for k, v in mesh.region_names.items() if k not in drop_ids}
     log.info("excluded %d element(s) inside PEC / non-solved bodies (%s)",
              int((~keep).sum()), ", ".join(sorted(skip)))
-    return TetMesh(mesh.nodes[used], remap[tets], reg, names, surf, stag,
-                   dict(mesh.tag_names), dict(mesh.skipped_bodies))
+    out = TetMesh(mesh.nodes[used], remap[tets], reg, names, surf, stag,
+                  dict(mesh.tag_names), dict(mesh.skipped_bodies))
+    # Nodes shared with a removed conductor: the faces made only of them are
+    # the conductor's surface, not the outside of the air region.
+    gone = np.zeros(mesh.n_nodes, bool)
+    gone[np.unique(mesh.tets[~keep])] = True
+    out.conductor_nodes = gone[used]
+    return out
 
 
 def boundary_triangle_data(mesh: TetMesh) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -477,6 +506,9 @@ def boundary_triangle_data(mesh: TetMesh) -> Tuple[np.ndarray, np.ndarray, np.nd
     nrm[flip] *= -1.0
     mesh.surf_owner_tet = owner
     mesh.surf_face_index = bidx
+    cn = getattr(mesh, "conductor_nodes", None)
+    mesh.surf_conductor = (cn[tris].all(axis=1) if cn is not None
+                           else np.zeros(len(tris), bool))
     return tris, cen, nrm
 
 
@@ -571,11 +603,19 @@ def tag_boundaries(mesh: TetMesh, design) -> TetMesh:
     n_outer = mesh.n_outer_faces
     outer_mask = np.zeros(len(tris), bool)
     outer_mask[:n_outer] = True
+    # "Outer" means the outside of the air region.  The surface of a PEC body
+    # that was cut out of the solution volume is a boundary of the mesh too,
+    # but a radiation or impedance condition assigned to "all outer faces"
+    # must never land on antenna metal.
+    conductor = np.zeros(len(tris), bool)
+    conductor[:n_outer] = getattr(mesh, "surf_conductor",
+                                  np.zeros(n_outer, bool))
+    mesh.surf_is_conductor = conductor
 
     def _eval(sel):
         m = np.asarray(sel(cen, nrm), bool)
         if getattr(sel, "outer_only", False):
-            m &= outer_mask
+            m &= outer_mask & ~conductor
         return m
 
     port_faces: Dict[str, np.ndarray] = {}

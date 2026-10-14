@@ -1028,9 +1028,14 @@ function dlgAnalyze() {
   body.appendChild(el('div', { class: 'check' },
     el('input', { type: 'checkbox', id: 'an-adapt', checked: 'checked' }),
     el('label', { for: 'an-adapt' }, 'Run adaptive passes')));
-  body.appendChild(el('div', { class: 'check' },
-    el('input', { type: 'checkbox', id: 'an-fields' }),
-    el('label', { for: 'an-fields' }, 'Save fields (enables field overlay)')));
+  // A far field is computed from the saved near field on the radiation
+  // boundary, so a model that has one almost always wants the fields kept.
+  const hasRad = (STATE.design?.boundaries || []).some(b => b.type === 'radiation');
+  const fieldsBox = el('input', { type: 'checkbox', id: 'an-fields' });
+  if (hasRad || STATE.design?.solutionType === 'eigenmode') fieldsBox.checked = true;
+  body.appendChild(el('div', { class: 'check' }, fieldsBox,
+    el('label', { for: 'an-fields' },
+      'Save fields (enables field overlay' + (hasRad ? ' and far-field patterns' : '') + ')')));
   dialog({ title: 'Analyze', body, ok: 'Start', onOk: async () => {
     selectBottom('progress');
     await rpc('analysis.analyze', { setup: gv('an-setup'),
@@ -1474,6 +1479,8 @@ const MENUS = [
     ['Create Modal S-Parameter Report', () => openReport('sparam')],
     ['Port Modes Table', () => openReport('modes')],
     ['Eigenmode Data', () => openReport('eigen')],
+    ['Far Field Radiation Pattern…', () => openReport('farfield')],
+    ['3D Radiation Pattern', () => showPattern(true)],
     ['Convergence Table', () => openReport('convergence')],
     null,
     ['Show Boundaries and Ports', toggleAssignments],
@@ -1560,8 +1567,10 @@ const RIBBON = {
     ['Reports', [['i-report', 'S-Parameters', () => openReport('sparam')],
       ['i-report', 'Port Modes', () => openReport('modes')],
       ['i-report', 'Eigenmodes', () => openReport('eigen')],
+      ['i-report', 'Radiation', () => openReport('farfield')],
       ['i-report', 'Convergence', () => openReport('convergence')]]],
     ['Fields', [['i-field', 'Field Overlay', () => showField(true)],
+      ['i-field', '3D Pattern', () => showPattern(true)],
       ['i-mesh', 'Mesh View', () => showMesh(true)]]],
     ['Data', [['i-export', 'Export', dlgExport], ['i-report','Metrics',dlgMetrics]]]
   ],
@@ -2301,6 +2310,7 @@ function initViewport() {
     .classList.add('on');
   mk('Mesh overlay', 'i-mesh', () => showMesh(!VP.wire), 'vt-mesh');
   mk('Field overlay', 'i-field', () => showField(!fieldOn), 'vt-field');
+  mk('3D radiation pattern', 'i-field', () => showPattern(!patternOn), 'vt-pattern');
 }
 
 function setViewMode(m) { VP.mode = m; $('#vp-info') && updateOverlay(); }
@@ -3948,6 +3958,7 @@ async function openReport(kind) {
   if (!STATE.hasSolution) return toastError('No solution — run Analyze first');
   if (kind === 'eigen' || (STATE.design?.solutionType === 'eigenmode' &&
       (kind === 'sparam' || kind === 'modes'))) return reportEigen();
+  if (kind === 'farfield') return reportFarField();
   if (kind === 'sparam') return reportSParam();
   if (kind === 'modes') return reportModes();
   if (kind === 'convergence') return reportConvergence();
@@ -4062,6 +4073,169 @@ async function reportEigen() {
     body.appendChild(el('div', { class: 'chart-wrap', style: 'margin-top:12px' },
       chart(ds.map(c => c.pass), [{ label: 'max Δf', y: ds.map(c => c.delta_f) }],
         'Adaptive pass', 'max relative Δf')));
+}
+
+let ffState = { excitation: 0, freq: null, mode: 'polar', comp: 'total' };
+
+async function reportFarField() {
+  const page = ensurePage('rep-ff', 'Radiation Pattern');
+  const wrap = el('div', { class: 'report' });
+  const bar = el('div', { class: 'report-toolbar' });
+  const body = el('div', { class: 'report-body' });
+  wrap.append(bar, body);
+  page.appendChild(wrap);
+  let d;
+  try {
+    d = await rpc('results.farField', { excitation: ffState.excitation,
+      freq: ffState.freq, cuts: [0, 90] });
+  } catch (e) {
+    body.appendChild(el('p', { class: 'hint', style: 'color:var(--err)' },
+      String(e.message || e)));
+    return;
+  }
+  ffState.freq = d.freq;
+  const again = () => reportFarField();
+  if (d.excitations.length > 1) {
+    bar.appendChild(el('label', {}, 'Excitation'));
+    const se = sel('ff-ex', d.excitations.map((n, i) => [i, n]), ffState.excitation);
+    se.onchange = () => { ffState.excitation = parseInt(se.value); again(); };
+    bar.appendChild(se);
+  }
+  if (d.freqs.length > 1) {
+    bar.appendChild(el('label', {}, 'Frequency'));
+    const sf = sel('ff-f', d.freqs.map(f => [f, fmtHz(f)]), d.freq);
+    sf.onchange = () => { ffState.freq = parseFloat(sf.value); again(); };
+    bar.appendChild(sf);
+  }
+  bar.appendChild(el('label', {}, 'Plot'));
+  const sm = sel('ff-mode', [['polar', 'Polar'], ['rect', 'Rectangular']], ffState.mode);
+  sm.onchange = () => { ffState.mode = sm.value; again(); };
+  bar.appendChild(sm);
+  bar.appendChild(el('label', {}, 'Quantity'));
+  const sc = sel('ff-comp', [['total', 'Gain (total)'], ['theta', 'Gain (θ)'],
+    ['phi_pol', 'Gain (φ)'], ['directivity', 'Directivity']], ffState.comp);
+  sc.onchange = () => { ffState.comp = sc.value; again(); };
+  bar.appendChild(sc);
+  bar.appendChild(el('span', { style: 'flex:1' }));
+  bar.appendChild(el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
+    onclick: () => { selectPage('modeler'); showPattern(true, ffState); } },
+    '3D pattern'));
+
+  for (const w of d.warnings)
+    body.appendChild(el('div', { class: 'hint',
+      style: 'color:var(--err);margin-bottom:10px' }, '⚠ ' + w));
+  const series = d.cuts.map(c => ({ label: `φ = ${c.phi.toFixed(0)}° / ${
+    ((c.phi + 180) % 360).toFixed(0)}°`, y: c[ffState.comp],
+    opp: c.opposite[ffState.comp] }));
+  const ylab = ffState.comp === 'directivity' ? 'Directivity [dBi]' : 'Gain [dBi]';
+  body.appendChild(el('div', { class: 'chart-wrap' },
+    ffState.mode === 'polar' ? polarChart(d.theta, series, ylab)
+      : chart(d.theta, series, 'Theta [deg]', ylab)));
+
+  const m = d.summary;
+  const t = el('table', { class: 'grid', style: 'margin-top:14px' });
+  const row = (k, v) => t.appendChild(el('tr', {}, el('td', {}, k),
+    el('td', { class: 'num' }, v)));
+  t.appendChild(el('tr', {}, el('th', {}, 'Antenna parameter'), el('th', {}, 'Value')));
+  row('Peak directivity', m.peakDirectivityDbi.toFixed(2) + ' dBi');
+  row('Peak gain', m.peakGainDbi.toFixed(2) + ' dBi');
+  if (m.peakRealizedGainDbi != null)
+    row('Peak realized gain (with mismatch)', m.peakRealizedGainDbi.toFixed(2) + ' dBi');
+  row('Direction of peak (θ, φ)', `${m.peakTheta.toFixed(0)}°, ${m.peakPhi.toFixed(0)}°`);
+  row('Radiation efficiency', (100 * m.efficiency).toFixed(1) + ' %');
+  if (m.mismatchEfficiency != null)
+    row('Mismatch efficiency (1 − |S|²)', (100 * m.mismatchEfficiency).toFixed(1) + ' %');
+  row('Front-to-back ratio', m.frontToBackDb.toFixed(2) + ' dB');
+  row('Axial ratio at peak', m.axialRatioAtPeak > 100 ? '> 40 dB (linear)'
+    : (20 * Math.log10(m.axialRatioAtPeak)).toFixed(2) + ' dB');
+  row('Max radiation intensity', m.maxIntensity.toPrecision(4) + ' W/sr per W accepted');
+  if (m.boundaryToFarFieldPower != null)
+    row('Boundary / far-field power (domain check)',
+        m.boundaryToFarFieldPower.toFixed(2) + '  (≈ 1 when the air region is adequate)');
+  body.appendChild(el('div', { style: 'margin-top:12px' }, t));
+}
+
+/* Polar plot of dB values against theta, φ cuts mirrored across the axis the
+   way an antenna engineer reads a pattern: 0° up, a cut drawn as the φ and
+   φ+180° half-planes joined. */
+function polarChart(thetaDeg, series, ylabel, w = 560, h = 560) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width', '100%');
+  svg.style.maxWidth = '640px';
+  svg.style.font = '11px var(--mono, monospace)';
+  const add = (tag, at, txt) => {
+    const n = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(at)) n.setAttribute(k, v);
+    if (txt != null) n.textContent = txt;
+    svg.appendChild(n); return n;
+  };
+  const cx = w / 2, cy = h / 2 + 8, R = Math.min(w, h) / 2 - 56;
+  const all = series.flatMap(s => s.y).filter(Number.isFinite);
+  const top = Math.ceil(Math.max(...all) / 5) * 5, span = 40, floor = top - span;
+  const rad = v => R * Math.max(0, Math.min(1, (v - floor) / span));
+  for (let i = 1; i <= 4; i++) {
+    add('circle', { cx, cy, r: R * i / 4, fill: 'none', stroke: 'var(--border-soft)' });
+    add('text', { x: cx + 4, y: cy - R * i / 4 - 2, fill: 'var(--text-dim)' },
+      (floor + span * i / 4).toFixed(0));
+  }
+  for (let a = 0; a < 360; a += 30) {
+    const t = a * Math.PI / 180;
+    add('line', { x1: cx, y1: cy, x2: cx + R * Math.sin(t), y2: cy - R * Math.cos(t),
+      stroke: 'var(--border-soft)' });
+    add('text', { x: cx + (R + 16) * Math.sin(t), y: cy - (R + 16) * Math.cos(t) + 4,
+      'text-anchor': 'middle', fill: 'var(--text-dim)' }, a + '°');
+  }
+  series.forEach((s, i) => {
+    // right half-plane: the cut at φ; left half-plane: the cut at φ + 180°,
+    // so the two together are the whole great circle through the pole
+    const half = (ys, sign) => thetaDeg.map((td, k) => {
+      const t = td * Math.PI / 180, r = rad(ys[k]);
+      return `${(cx + sign * r * Math.sin(t)).toFixed(1)},${(cy - r * Math.cos(t)).toFixed(1)}`;
+    });
+    const right = half(s.y, 1);
+    const left = s.opp ? half(s.opp, -1).reverse() : [];
+    add('polyline', { points: left.concat(right).join(' '), fill: 'none',
+      stroke: PALETTE[i % PALETTE.length], 'stroke-width': 1.9 });
+    add('rect', { x: 20 + i * 120, y: 14, width: 16, height: 3,
+      fill: PALETTE[i % PALETTE.length] });
+    add('text', { x: 42 + i * 120, y: 20, fill: 'var(--text)' }, s.label);
+  });
+  add('text', { x: w / 2, y: h - 10, 'text-anchor': 'middle', fill: 'var(--text)' },
+    ylabel + ' (θ from +z; right = φ, left = φ+180°)');
+  return svg;
+}
+
+let patternOn = false;
+async function showPattern(on, opts) {
+  if (!on) {
+    patternOn = false;
+    const vb = $('#vt-pattern'); if (vb) vb.classList.remove('on');
+    $('#legend').classList.remove('on'); $('#legend-labels').classList.remove('on');
+    await refreshGeometry(false);
+    return;
+  }
+  await guard(async () => {
+    const f = await rpc('view.pattern', { excitation: (opts || {}).excitation || 0,
+      freq: (opts || {}).freq });
+    f.name = '__pattern__'; f.color = '#888888'; f.transparency = 0;
+    VP.setObjects([f], VP.bbox);
+    patternOn = true;
+    const vb = $('#vt-pattern'); if (vb) vb.classList.add('on');
+    const lg = $('#legend');
+    lg.style.background =
+      'linear-gradient(to top, #30123b, #4145ab, #1ba0d1, #46f884, #d5e11a, #f6883a, #900c00)';
+    lg.classList.add('on');
+    const lab = $('#legend-labels');
+    lab.innerHTML = '';
+    for (let i = 4; i >= 0; i--) {
+      const v = f.range[0] + (f.range[1] - f.range[0]) * i / 4;
+      lab.appendChild(el('span', {}, v.toFixed(1)));
+    }
+    lab.classList.add('on');
+    lab.insertBefore(el('span', { style: 'font-weight:600' }, 'Gain dBi'), lab.firstChild);
+  });
 }
 
 async function reportModes() {
@@ -4524,7 +4698,7 @@ async function loadMaterials() {
 /* Expose the pieces automation and the scripting console may want to reach.
    Top-level `let` bindings are not properties of `window` in a classic
    script, so they are published explicitly. */
-Object.assign(window, { rpc, guard, showMesh, showField, fitView,
+Object.assign(window, { rpc, guard, showMesh, showField, showPattern, fitView,
   refreshGeometry, openReport, setSelection, setViewMode, toggleTheme,
   filePicker, saveProject, saveProjectAs, dlgOpenSave, openProjectFile,
   startInteractiveMove, armBandSelect, applyBandSelection, ensureDesign,

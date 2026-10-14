@@ -2431,6 +2431,129 @@ def _port_modes(s: Session, freq: Optional[float] = None, **_):
             "frequencies": [float(f) for f in sorted(sol.ports)]}
 
 
+def _farfield_for(s: Session, freq, excitation, theta_step, phi_step):
+    """The (cached) power-normalised far field the report and 3-D view share."""
+    from ..post.farfield import antenna_parameters
+    sol = s.solution
+    if sol is None:
+        raise RuntimeError("no solution yet")
+    if sol.modes:
+        raise RuntimeError("far fields belong to driven solutions, not "
+                           "eigenmode ones")
+    nt = max(int(round(180.0 / max(float(theta_step), 0.5))) + 1, 19)
+    npp = max(int(round(360.0 / max(float(phi_step), 1.0))), 12)
+    key = (id(sol), None if freq is None else float(freq), int(excitation),
+           nt, npp)
+    cached = getattr(s, "_ff_cache", None)
+    if cached and cached[0] == key:
+        return cached[1]
+    ff = antenna_parameters(sol, freq, int(excitation), nt, npp)
+    s._ff_cache = (key, ff)
+    return ff
+
+
+@command("results.farField")
+def _far_field(s: Session, freq: Optional[float] = None, excitation: int = 0,
+               cuts: Optional[List[float]] = None, thetaStep: float = 2.0,
+               phiStep: float = 5.0, **_):
+    """Radiation pattern cuts and antenna parameters of a driven solution."""
+    ff = _farfield_for(s, freq, excitation, thetaStep, phiStep)
+    sol = s.solution
+    cuts = [float(c) for c in (cuts if cuts else [0.0, 90.0])]
+    g_tot = ff.gain()
+    g_th = ff.component_gain("theta")
+    g_ph = ff.component_gain("phi")
+
+    def dB(a):
+        return [float(v) for v in 10 * np.log10(np.maximum(a, 1e-30))]
+
+    dirv = ff.directivity()
+
+    def column(c):
+        return int(np.argmin(np.abs((ff.phi - math.radians(c) + math.pi)
+                                    % (2 * math.pi) - math.pi)))
+
+    def arrays(k):
+        return {"total": dB(g_tot[:, k]), "theta": dB(g_th[:, k]),
+                "phi_pol": dB(g_ph[:, k]), "directivity": dB(dirv[:, k])}
+
+    out_cuts = []
+    for c in cuts:
+        k = column(c)
+        # the cut is a full great circle: this half-plane and the opposite one
+        out_cuts.append(dict(phi=float(np.degrees(ff.phi[k])), **arrays(k),
+                             opposite=arrays(column(c + 180.0))))
+    summ = ff.summary()
+    mismatch = None
+    if sol.sparams is not None:
+        j = int(excitation)
+        try:
+            smat = sol.sparams.at(float(ff.freq))
+            mismatch = float(1.0 - abs(smat[j, j]) ** 2)
+        except Exception:
+            mismatch = None
+    if mismatch is not None:
+        summ["mismatchEfficiency"] = mismatch
+        summ["peakRealizedGainDbi"] = float(
+            summ["peakGainDbi"] + 10 * math.log10(max(mismatch, 1e-12)))
+    warns = []
+    if ff.P_radiated > 0:
+        ratio = ff.P_boundary / ff.P_radiated
+        summ["boundaryToFarFieldPower"] = float(ratio)
+        if not 0.7 <= ratio <= 1.4:
+            warns.append(
+                f"The radiation boundary absorbs {ratio:.2f}x the power the far "
+                "field radiates. The air region is probably too small or the "
+                "mesh too coarse for a first-order absorbing boundary: keep the "
+                "boundary at least a quarter wavelength from the radiator and "
+                "refine near it. Directivity is usually still usable; absolute "
+                "gain and efficiency are not.")
+    return {"theta": [float(v) for v in np.degrees(ff.theta)], "cuts": out_cuts,
+            "summary": summ, "freq": float(ff.freq),
+            "freqs": [float(f) for f in sorted({k[0] for k in sol.fields})],
+            "excitations": sol.design.excitation_names(),
+            "excitation": int(excitation), "warnings": warns}
+
+
+@command("view.pattern")
+def _pattern_view(s: Session, freq: Optional[float] = None,
+                  excitation: int = 0, floorDb: float = 30.0, **_):
+    """The 3-D radiation pattern as a surface the viewport can draw."""
+    ff = _farfield_for(s, freq, excitation, 2.0, 5.0)
+    g = ff.gain()
+    gdb = 10 * np.log10(np.maximum(g, 1e-30))
+    top = float(gdb.max())
+    floor = top - float(floorDb)
+    rad = np.clip((gdb - floor) / (top - floor), 0.0, 1.0)      # 0..1
+    d = s.design
+    lo, hi = d.bounding_box()
+    scale = 0.42 * float(np.linalg.norm(hi - lo)) or 1.0
+    centre = 0.5 * (lo + hi)
+    th, ph = ff.theta, np.append(ff.phi, ff.phi[0] + 2 * math.pi)
+    rad = np.concatenate([rad, rad[:, :1]], axis=1)
+    TH, PH = np.meshgrid(th, ph, indexing="ij")
+    R = rad * scale
+    pts = np.stack([R * np.sin(TH) * np.cos(PH), R * np.sin(TH) * np.sin(PH),
+                    R * np.cos(TH)], axis=-1) + centre
+    nt, npp = TH.shape
+    idx = np.arange(nt * npp).reshape(nt, npp)
+    a, b = idx[:-1, :-1].ravel(), idx[:-1, 1:].ravel()
+    c, e = idx[1:, :-1].ravel(), idx[1:, 1:].ravel()
+    tris = np.concatenate([np.stack([a, b, e], 1), np.stack([a, e, c], 1)])
+    from .tessellate import _pack
+    verts = pts.reshape(-1, 3)
+    # the poles collapse a whole row of triangles to a point; drop them here
+    # (the packer would, silently) so the per-corner colours stay aligned
+    tv = verts[tris]
+    area2 = np.linalg.norm(np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0]),
+                           axis=1)
+    tris = tris[area2 > max(float(area2.max()) * 1e-9, 1e-300)]
+    buf = _pack(verts, tris)
+    buf["scalar"] = np.round(rad.reshape(-1)[tris.reshape(-1)], 5).tolist()
+    buf["range"] = [floor, top]
+    return buf
+
+
 @command("results.eigenModes")
 def _eigen_modes(s: Session, **_):
     """Resonances of an eigenmode solution (frequency, Q, convergence)."""

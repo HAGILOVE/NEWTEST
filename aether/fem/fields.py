@@ -32,6 +32,31 @@ class FieldSolution:
         self.mu_of_region = mu_of_region or (lambda r: 1.0 + 0j)
 
     # ------------------------------------------------------------------
+    def eval_at(self, tets: np.ndarray, points: np.ndarray
+                ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        ``(E, H)`` at *points*, each evaluated inside its own element *tets*.
+
+        Unlike :meth:`evaluate` there is no cell search -- the caller says
+        which element a point belongs to, which is exactly what a surface
+        integral over mesh faces knows (the face's owner element).
+        """
+        dm = self.dofmap
+        tets = np.asarray(tets, np.int64)
+        pts = np.asarray(points, float)
+        g = self.mesh.grads[tets]
+        cen = self.mesh.centroids()[tets]
+        lam = 0.25 + np.einsum("eia,ea->ei", g, pts - cen)    # linear in x
+        fp = dm.face_perm[tets] if dm.order >= 2 else None
+        N, C = tet_basis(dm.order, g, lam, fp)
+        c = self.x[dm.elem_dofs[tets]] * dm.elem_signs[tets]
+        E = np.einsum("eia,ei->ea", N, c)
+        cE = np.einsum("eia,ei->ea", C, c)
+        mu = np.array([self.mu_of_region(int(r))
+                       for r in self.mesh.tet_region[tets]])
+        H = -cE / (1j * omega(self.freq) * mu0 * mu[:, None])
+        return E, H
+
     def E_at_centroids(self) -> np.ndarray:
         """(M,3) complex E field at every tetrahedron centroid [V/m]."""
         return self._eval(np.array([0.25, 0.25, 0.25, 0.25]))[0]

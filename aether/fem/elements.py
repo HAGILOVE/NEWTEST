@@ -206,7 +206,8 @@ def tet_basis(order: int, grads: np.ndarray, lam: np.ndarray,
     Parameters
     ----------
     grads : (M,4,3)  gradients of the barycentric coordinates
-    lam   : (4,)     barycentric coordinates of the evaluation point
+    lam   : (4,) one point shared by every element, or (M,4) one point per
+            element (e.g. the centroid of a face on each element's boundary)
     face_perm : (M,4,3) globally sorted face node triples (order >= 2 only)
 
     Returns
@@ -219,8 +220,9 @@ def tet_basis(order: int, grads: np.ndarray, lam: np.ndarray,
     b = LOCAL_EDGES[:, 1]
     ga = grads[:, a, :]                     # (M,6,3)
     gb = grads[:, b, :]
-    la = lam[a][None, :, None]
-    lb = lam[b][None, :, None]
+    per_elem = np.ndim(lam) == 2
+    la = (lam[:, a] if per_elem else lam[a][None, :])[:, :, None]
+    lb = (lam[:, b] if per_elem else lam[b][None, :])[:, :, None]
 
     W = la * gb - lb * ga                   # (M,6,3)
     curlW = 2.0 * np.cross(ga, gb)          # (M,6,3)
@@ -239,9 +241,14 @@ def tet_basis(order: int, grads: np.ndarray, lam: np.ndarray,
     gi = np.take_along_axis(grads, i[:, :, None], axis=1)   # (M,4,3)
     gj = np.take_along_axis(grads, j[:, :, None], axis=1)
     gk = np.take_along_axis(grads, k[:, :, None], axis=1)
-    li = lam[i][:, :, None]
-    lj = lam[j][:, :, None]
-    lk = lam[k][:, :, None]
+    if per_elem:
+        li = np.take_along_axis(lam, i, axis=1)[:, :, None]
+        lj = np.take_along_axis(lam, j, axis=1)[:, :, None]
+        lk = np.take_along_axis(lam, k, axis=1)[:, :, None]
+    else:
+        li = lam[i][:, :, None]
+        lj = lam[j][:, :, None]
+        lk = lam[k][:, :, None]
 
     Wjk = lj * gk - lk * gj
     Wki = lk * gi - li * gk
@@ -278,8 +285,9 @@ def tri_basis(order: int, grads2: np.ndarray, lam: np.ndarray
     b = TRI_EDGES[:, 1]
     ga = grads2[:, a, :]
     gb = grads2[:, b, :]
-    la = lam[a][None, :, None]
-    lb = lam[b][None, :, None]
+    per_elem = np.ndim(lam) == 2
+    la = (lam[:, a] if per_elem else lam[a][None, :])[:, :, None]
+    lb = (lam[:, b] if per_elem else lam[b][None, :])[:, :, None]
     W = la * gb - lb * ga
     curlW = 2.0 * np.cross(ga, gb)
     if order == 1:
