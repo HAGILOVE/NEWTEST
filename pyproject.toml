@@ -35,8 +35,9 @@ dependencies = [
 [project.optional-dependencies]
 mesh = ["gmsh>=4.11"]            # OpenCASCADE geometry + tetrahedral meshing
 plot = ["matplotlib>=3.7"]
+fast = ["pypardiso>=0.4.6"]       # multi-threaded MKL PARDISO: minutes -> seconds on 3-D models
 dev  = ["pytest>=7.4", "pytest-cov"]
-all  = ["gmsh>=4.11", "matplotlib>=3.7", "pytest>=7.4"]
+all  = ["gmsh>=4.11", "matplotlib>=3.7", "pytest>=7.4", "pypardiso>=0.4.6"]
 
 [project.scripts]
 aether = "aether.cli:main"

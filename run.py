@@ -31,6 +31,12 @@ def main():
     if first_run or args.setup:
         print('Installing application and CAD backend. First setup requires Internet access.', flush=True)
         call([PYTHON, '-m', 'pip', 'install', '-e', '.[mesh]'])
+        # Optional accelerator (MKL PARDISO): 3-D models solve in seconds
+        # instead of minutes. Never let a failed download break the setup.
+        try:
+            call([PYTHON, '-m', 'pip', 'install', '-e', '.[fast]'])
+        except RuntimeError:
+            print('Optional PARDISO accelerator not installed; the built-in solver will be used (slower on large models).', flush=True)
     # Fail clearly before opening a partly functional CAD workspace.
     check = 'import numpy, scipy, ezdxf, gmsh; gmsh.initialize(); gmsh.finalize(); import aether; print("Aether", aether.__version__, "- scientific stack and CAD kernel OK")'
     call([PYTHON, '-c', check])

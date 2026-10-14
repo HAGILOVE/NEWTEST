@@ -14,6 +14,7 @@ FEM are solved either
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
@@ -24,6 +25,22 @@ import scipy.sparse.linalg as spla
 from ..core.logging import get_logger
 
 log = get_logger("fem.linalg")
+
+
+def _pardiso():
+    """MKL PARDISO (``pip install pypardiso``) if present and not disabled.
+
+    A 3-D full-wave matrix factorises one to two orders of magnitude faster
+    with a multi-threaded nested-dissection solver than with SuperLU, which is
+    single-threaded with a weak ordering: 35k unknowns take ~2 s instead of
+    minutes. ``AETHER_LINEAR_BACKEND=superlu`` turns it off."""
+    if os.environ.get("AETHER_LINEAR_BACKEND", "").lower() == "superlu":
+        return None
+    try:
+        import pypardiso
+        return pypardiso
+    except Exception:                                   # noqa: BLE001
+        return None
 
 
 class LinearSolver:
@@ -37,6 +54,8 @@ class LinearSolver:
         self.mode = self._choose()
         self._lu = None
         self._M = None
+        self._pd = None
+        self.backend = ""
         self.factor_time = 0.0
         self._prepare()
 
@@ -49,6 +68,22 @@ class LinearSolver:
     def _prepare(self):
         t0 = time.perf_counter()
         if self.mode == "direct":
+            pd = _pardiso() if self.n >= 3000 else None
+            if pd is not None:
+                try:
+                    # PARDISO is real-valued: solve [[Re,-Im],[Im,Re]] [xr;xi]
+                    # = [br;bi], which is exactly the complex system
+                    A = self.A.tocsr()
+                    R = sp.bmat([[A.real, -A.imag], [A.imag, A.real]],
+                                format="csr")
+                    ps = pd.PyPardisoSolver()
+                    ps.factorize(R)
+                    self._pd = (ps, R)
+                    self.backend = "pardiso"
+                except Exception as exc:                 # noqa: BLE001
+                    log.warning("PARDISO unavailable (%s); using SuperLU", exc)
+                    self._pd = None
+        if self.mode == "direct" and self._pd is None:
             try:
                 # The FEM matrix has a symmetric *pattern*, so the column
                 # ordering must come from A + A^T. COLAMD orders for A^T A and
@@ -58,6 +93,7 @@ class LinearSolver:
                                      permc_spec="MMD_AT_PLUS_A",
                                      diag_pivot_thresh=0.1,
                                      options=dict(SymmetricMode=True))
+                self.backend = "superlu"
             except (RuntimeError, MemoryError) as exc:
                 log.warning("direct factorisation failed (%s); "
                             "falling back to GMRES+ILU", exc)
@@ -75,8 +111,9 @@ class LinearSolver:
             elif self.s.preconditioner == "jacobi":
                 self._M = _jacobi(self.A)
         self.factor_time = time.perf_counter() - t0
-        log.debug("linear solver ready [%s, n=%d, %.3fs]",
-                  self.mode, self.n, self.factor_time)
+        log.info("linear solver ready [%s%s, n=%d, %.2fs]", self.mode,
+                 f"/{self.backend}" if self.backend else "", self.n,
+                 self.factor_time)
 
     # ------------------------------------------------------------------
     def solve(self, b: np.ndarray) -> np.ndarray:
@@ -84,7 +121,12 @@ class LinearSolver:
         single = b.ndim == 1
         B = b.reshape(-1, 1) if single else b
         X = np.empty((self.n, B.shape[1]), dtype=complex)
-        if self.mode == "direct":
+        if self.mode == "direct" and self._pd is not None:
+            ps, R = self._pd
+            rhs = np.vstack([B.real, B.imag])
+            x = np.asarray(ps.solve(R, rhs)).reshape(2 * self.n, -1)
+            X = x[:self.n] + 1j * x[self.n:]
+        elif self.mode == "direct":
             for j in range(B.shape[1]):
                 X[:, j] = self._lu.solve(B[:, j])
         else:
