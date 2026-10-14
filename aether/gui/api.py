@@ -129,6 +129,7 @@ def _design_json(s: Session) -> Optional[dict]:
             "transparencyOverridden": o.display_transparency is not None,
             "visible": bool(getattr(o, "visible", True)),
             "isPec": bool(o.material.is_pec),
+            "isMetal": bool(o.material.is_conductor),
         }, **_cad_json(o.shape)) for o in d.solids],
         "sheets": [dict({
             "name": sh.name,
@@ -2707,20 +2708,29 @@ def _field_view(s: Session, freq: Optional[float] = None,
                                 component)
     else:
         faces = None
+        on_names = None
         if where == "objects":
+            from ..geometry.select import UnionSelector
             names = list(objects or s.selection)
             if not names:
-                raise ValueError("select one or more objects to plot on")
+                raise ValueError("choose one or more metals (or select objects "
+                                 "in the viewport) to plot on")
             d = sol.design
-            shape = _entity(d, names[0]).shape if len(names) == 1 else \
-                prim.union(*[_entity(d, n).shape for n in names])
-            sel = ShapeSelector(shape, tol=1e-6)
             mesh = sol.mesh
+            sel = UnionSelector(*[ShapeSelector(_entity(d, n).shape, tol=1e-6)
+                                  for n in names])
             hit = np.nonzero(np.asarray(sel(mesh.surf_centroids,
                                             mesh.surf_normals), bool))[0]
             if quantity == "J":
                 hit = np.intersect1d(hit, conductor_faces(d, mesh))
+            if len(hit) == 0:
+                raise ValueError(
+                    "no solved surface belongs to " + ", ".join(names[:4])
+                    + (" …" if len(names) > 4 else "")
+                    + (" — surface current exists only on conductors that the "
+                       "solution treats as metal" if quantity == "J" else ""))
             faces = hit
+            on_names = names
         patch = surface_patch(sol, fs, quantity, faces, ph, n_arrows,
                               component)
     # a peak plot is scaled to its own maximum; an instantaneous one to the
@@ -2732,6 +2742,7 @@ def _field_view(s: Session, freq: Optional[float] = None,
     buf["peak"] = patch.peak
     buf["arrows"] = np.round(patch.arrows.reshape(-1), 7).tolist()
     buf["freq"] = float(fs.freq)
+    buf["on"] = list(on_names) if where != "cut" and on_names else []
     return buf
 
 

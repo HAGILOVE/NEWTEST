@@ -124,18 +124,46 @@ def _centre(s, sol) -> np.ndarray:
     return 0.5 * (lo + hi)
 
 
-def _surface_sets(sol, fs, k: float) -> Dict[str, Any]:
+def _object_order(design):
+    """Objects in the order faces are attributed to them: metals first, so a
+    face shared with the air box is reported as the metal's."""
+    ents = [(o, False) for o in design.solids] + [(sh, True) for sh in design.sheets]
+    def metal(e):
+        o, sheet = e
+        return sheet or bool(o.material and o.material.is_conductor)
+    return sorted(ents, key=lambda e: (not metal(e)))
+
+
+def _face_owner(sol, faces, order) -> np.ndarray:
+    """Index (into *order*) of the object each mesh face belongs to; -1 = none."""
+    from ..geometry.select import ShapeSelector
+    mesh = sol.mesh
+    cen, nrm = mesh.surf_centroids[faces], mesh.surf_normals[faces]
+    owner = np.full(len(faces), -1, np.int16)
+    for i, (o, _) in enumerate(order):
+        try:
+            m = np.asarray(ShapeSelector(o.shape, tol=1e-6)(cen, nrm), bool)
+        except Exception:                                     # noqa: BLE001
+            continue
+        owner[(owner < 0) & m] = i
+    return owner
+
+
+def _surface_sets(sol, fs, k: float, order=None) -> Dict[str, Any]:
     from ..post.fieldview import surface_vectors
 
     out: Dict[str, Any] = {}
     for q in ("E", "H", "J"):
         try:
-            v, t, F = surface_vectors(sol, fs, q)
+            v, t, F, faces = surface_vectors(sol, fs, q, return_faces=True)
         except ValueError:
             continue
-        out[q] = {"v": _b64(v * k, np.float32), "i": _b64(t.reshape(-1), np.uint32),
-                  "f": _complex_b64(F), "n": int(len(v)),
-                  "peak": float(np.abs(F).max())}
+        item = {"v": _b64(v * k, np.float32), "i": _b64(t.reshape(-1), np.uint32),
+                "f": _complex_b64(F), "n": int(len(v)),
+                "peak": float(np.abs(F).max())}
+        if order:
+            item["to"] = _b64(_face_owner(sol, faces, order), np.int16)
+        out[q] = item
     return out
 
 
@@ -199,6 +227,7 @@ def _results(s, k: float, max_freqs: int, max_exc: int,
     freqs = _pick(all_f, max_freqs)
     exc_names = list(sol.design.excitation_names())[:max_exc]
     centre = _centre(s, sol)
+    order = _object_order(sol.design)
     has_rad = any(b.btype == "radiation" for b in sol.design.boundaries)
     sets = []
     total = len(freqs) * len(exc_names)
@@ -212,7 +241,7 @@ def _results(s, k: float, max_freqs: int, max_exc: int,
                 fs = sol.field(f, ei)
             except ValueError:
                 continue
-            entry = {"fi": fi, "ei": ei, "surface": _surface_sets(sol, fs, k),
+            entry = {"fi": fi, "ei": ei, "surface": _surface_sets(sol, fs, k, order),
                      "cut": _cut_sets(s, sol, fs, k, centre)}
             if has_rad:
                 try:
@@ -220,7 +249,12 @@ def _results(s, k: float, max_freqs: int, max_exc: int,
                 except Exception as exc:                     # noqa: BLE001
                     log.warning("far field skipped at %g Hz: %s", f, exc)
             sets.append(entry)
+    metals = [{"idx": i, "name": o.name, "sheet": bool(sh),
+               "color": getattr(o, "color", "#b87333")}
+              for i, (o, sh) in enumerate(order)
+              if sh or (o.material and o.material.is_conductor)]
     return {"freqs": freqs, "excitations": exc_names, "sets": sets,
+            "metals": metals,
             "sparams": _sparams(sol), "cutAt": (centre * k).tolist(),
             "hasRadiation": has_rad}
 

@@ -223,3 +223,36 @@ def test_model_only_page_opens_without_a_results_panel(browser, solved, tmp_path
     assert pg.locator("#dRes").is_hidden()
     assert not errs
     pg.close()
+
+
+# ------------------------------------------------- results on chosen metals
+def test_the_page_knows_which_metal_each_surface_triangle_belongs_to(page_file):
+    scene, _ = _scene(page_file[0])
+    r = scene["results"]
+    names = {m["name"] for m in r["metals"]}
+    assert {"arm_top", "arm_bot"} <= names and "air" not in names
+    import base64
+    j = r["sets"][0]["surface"]["J"]
+    owner = np.frombuffer(base64.b64decode(j["to"]), np.int16)
+    assert len(owner) == len(base64.b64decode(j["i"])) // 12        # one per triangle
+    by_idx = {m["idx"]: m["name"] for m in r["metals"]}
+    assert {by_idx.get(int(o)) for o in set(owner)} >= {"arm_top", "arm_bot"}
+
+
+def test_ticking_a_metal_in_the_page_limits_the_plot_to_it(viewer):
+    viewer.evaluate("()=>AETHER_VIEWER.play(false)")
+    viewer.select_option("#qQ", "J")
+    viewer.wait_for_timeout(300)
+    assert viewer.locator("#rMetals").is_visible()
+    n_all = viewer.evaluate("()=>AETHER_VIEWER.fieldGroup.children[0].geometry.index.count")
+    viewer.locator("#metalList label", has_text="arm_bot").locator("input").uncheck()
+    viewer.wait_for_timeout(300)
+    n_top = viewer.evaluate("()=>AETHER_VIEWER.fieldGroup.children[0].geometry.index.count")
+    assert 0 < n_top < n_all
+    viewer.click("#mNone")
+    viewer.wait_for_timeout(200)
+    assert viewer.evaluate("()=>AETHER_VIEWER.fieldGroup.children[0].geometry.index.count") == 0
+    viewer.click("#mAll")
+    viewer.wait_for_timeout(200)
+    assert viewer.evaluate("()=>AETHER_VIEWER.fieldGroup.children[0].geometry.index.count") == n_all
+    assert not viewer.errors, viewer.errors

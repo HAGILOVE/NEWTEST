@@ -253,7 +253,8 @@ def cut_plane_patch(solution, fs, axis: str, value: float,
     return patch
 
 
-def surface_vectors(solution, fs, quantity: str = "E", faces=None):
+def surface_vectors(solution, fs, quantity: str = "E", faces=None,
+                    return_faces: bool = False):
     """The complex vector field on boundary / conductor triangles.
 
     Returns ``(verts, tris, F)``: the vertices used (M,3), local triangle
@@ -279,6 +280,8 @@ def surface_vectors(solution, fs, quantity: str = "E", faces=None):
         F[:, k] = (np.bincount(inv, V[:, k].real, len(used))
                    + 1j * np.bincount(inv, V[:, k].imag, len(used)))
     F /= np.maximum(cnt, 1.0)[:, None]
+    if return_faces:
+        return mesh.nodes[used], inv.reshape(-1, 3), F, faces
     return mesh.nodes[used], inv.reshape(-1, 3), F
 
 

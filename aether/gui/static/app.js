@@ -3021,7 +3021,7 @@ let fieldOn = false;
 let FIELD = { quantity: 'E', where: 'surface', axis: 'z', pos: null,
   excitation: 0, freq: null, instant: false, phase: 0, scale: 'linear',
   arrows: false, info: null, timer: null, busy: false, comp: 'mag', speed: 1,
-  modelAlpha: 1, plotAlpha: 1, visible: true };
+  modelAlpha: 1, plotAlpha: 1, visible: true, objects: [], follow: true };
 
 async function showField(on, opts) {
   if (!on) { closeFieldPanel(); return; }
@@ -3059,6 +3059,61 @@ function closeFieldPanel() {
   refreshGeometry(false);
 }
 
+/* Metals a result can be restricted to: every conducting solid and every sheet
+   (a drawn sheet is a zero-thickness conductor). */
+function fieldMetals() {
+  const d = STATE.design; if (!d) return [];
+  return d.objects.filter(o => o.isMetal).map(o => ({ name: o.name, color: o.color, sheet: false }))
+    .concat(d.sheets.map(o => ({ name: o.name, color: o.color, sheet: true })));
+}
+let FIELD_REPLOT = null;
+function replotSoon(ms = 220) { clearTimeout(FIELD_REPLOT); FIELD_REPLOT = setTimeout(() => plotField(), ms); }
+
+/* The list of metals a field / current plot is drawn on. Tick any number of
+   them; with "Follow viewport selection" the ticks track what is selected in
+   the 3-D view or the project tree, so clicking a metal shows its field. */
+function fieldMetalsBox(redraw) {
+  const box = el('div', { id: 'fp-metals', class: 'fp-metals' });
+  const metals = fieldMetals();
+  const list = el('div', { class: 'ml' });
+  const set = new Set(FIELD.objects);
+  const apply = () => { FIELD.objects = metals.map(m => m.name).filter(n => set.has(n)); replotSoon(120); };
+  const sync = () => list.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = set.has(c.dataset.n); });
+  for (const m of metals) {
+    const cb = el('input', { type: 'checkbox', 'data-n': m.name }); cb.checked = set.has(m.name);
+    cb.onchange = () => { cb.checked ? set.add(m.name) : set.delete(m.name); apply(); };
+    list.appendChild(el('label', { title: m.name }, cb,
+      el('span', { class: 'sw', style: `background:${m.color || '#b87333'}` }),
+      el('span', { class: 'nm' }, m.name), m.sheet ? el('span', { class: 'tg' }, 'sheet') : null));
+  }
+  const btn = (t, f, tip) => el('button', { class: 'lnk', title: tip, onclick: f }, t);
+  const fol = el('input', { type: 'checkbox', id: 'fp-follow', style: 'width:auto' });
+  fol.checked = FIELD.follow !== false;
+  fol.onchange = () => { FIELD.follow = fol.checked; };
+  box.append(
+    el('div', { class: 'mh' }, 'Metals',
+      btn('selection', () => { set.clear();
+        (STATE.selection || []).forEach(n => metals.some(m => m.name === n) && set.add(n)); sync(); apply(); },
+        'Take the metals selected in the viewport'),
+      btn('all', () => { metals.forEach(m => set.add(m.name)); sync(); apply(); }, 'Every metal'),
+      btn('none', () => { set.clear(); sync(); FIELD.objects = []; }, 'Untick everything')),
+    list,
+    el('label', { class: 'fl' }, fol, 'Follow viewport selection'));
+  if (!metals.length) list.appendChild(el('div', { class: 'note' }, 'The model has no metal objects.'));
+  box._sync = () => { set.clear(); FIELD.objects.forEach(n => set.add(n)); sync(); };
+  return box;
+}
+/* setSelection() calls this: the plot follows the metals being clicked. */
+function followFieldSelection(names) {
+  if (!fieldOn || FIELD.where !== 'objects' || FIELD.follow === false) return;
+  const metals = new Set(fieldMetals().map(m => m.name));
+  const pick = (names || []).filter(n => metals.has(n));
+  if (!pick.length) return;                        // not a metal: leave the plot alone
+  FIELD.objects = pick;
+  const b = $('#fp-metals'); if (b && b._sync) b._sync();
+  replotSoon();
+}
+
 function buildFieldPanel() {
   let box = $('#vp-field');
   if (box) box.remove();
@@ -3083,9 +3138,19 @@ function buildFieldPanel() {
   const isP = FIELD.quantity === 'P';
   if (!isP) {
     const w = sel('fp-w', [['surface', FIELD.quantity === 'J' ? 'All conductors' : 'All outer surfaces'],
-      ['objects', 'Selected objects']].concat(FIELD.quantity === 'J' ? [] : [['cut', 'Cut plane']]), FIELD.where);
-    w.onchange = () => { FIELD.where = w.value; buildFieldPanel(); redraw(); };
+      ['objects', 'Chosen metals']].concat(FIELD.quantity === 'J' ? [] : [['cut', 'Cut plane']]), FIELD.where);
+    w.onchange = () => {
+      FIELD.where = w.value;
+      if (FIELD.where === 'objects') {
+        // start from what is selected in the viewport, else from every metal
+        const sel0 = (STATE.selection || []).filter(n => fieldMetals().some(m => m.name === n));
+        if (!FIELD.objects.length) FIELD.objects = sel0.length ? sel0 : fieldMetals().map(m => m.name);
+        // the rest of the model stays visible but faint behind the metals
+        if (FIELD.modelAlpha > 0.5) FIELD.modelAlpha = 0.35;
+      }
+      buildFieldPanel(); redraw(); };
     row('Plot on', w);
+    if (FIELD.where === 'objects') box.appendChild(fieldMetalsBox(redraw));
   }
   if (FIELD.quantity === 'E' || FIELD.quantity === 'H') {
     const cs = sel('fp-comp', [['mag', 'Magnitude |V|'], ['x', 'Component X (signed)'],
@@ -3205,6 +3270,7 @@ async function plotField() {
         phase: FIELD.instant ? FIELD.phase : null });
     } else {
       f = await rpc('view.field', { quantity: FIELD.quantity, where: FIELD.where,
+        objects: FIELD.where === 'objects' ? FIELD.objects : null,
         excitation: FIELD.excitation, freq: FIELD.freq, axis: FIELD.axis, value: FIELD.pos,
         phase: FIELD.instant ? FIELD.phase : null, scale: FIELD.scale,
         arrows: FIELD.arrows ? 500 : 0, component: FIELD.comp });
@@ -3213,7 +3279,7 @@ async function plotField() {
     f.transparency = 1 - Math.min(1, Math.max(0.1, FIELD.plotAlpha));
     // surface plots replace the model; cut planes, currents and the far field
     // sit around or inside it
-    const keepModel = FIELD.where === 'cut' || FIELD.quantity === 'J' || FIELD.quantity === 'P';
+    const keepModel = FIELD.where === 'cut' || FIELD.where === 'objects' || FIELD.quantity === 'J' || FIELD.quantity === 'P';
     const m = Math.min(1, Math.max(0.05, FIELD.modelAlpha));
     const base = keepModel ? currentBuffers.filter(o => !o.placeholder).map(o =>
       m >= 0.999 ? o : Object.assign({}, o,
@@ -3234,7 +3300,8 @@ async function plotField() {
     lab.classList.add('on');
     lab.insertBefore(el('span', { style: 'font-weight:600' }, `${f.label} [${f.unit}]`), lab.firstChild);
     const note = $('#fp-note');
-    if (note) note.textContent = `${fmtHz(f.freq)} · peak ${f.peak.toPrecision(4)} ${f.unit.replace(' re peak', '')}`;
+    if (note) note.textContent = `${fmtHz(f.freq)} · peak ${f.peak.toPrecision(4)} ${f.unit.replace(' re peak', '')}`
+      + (f.on && f.on.length ? ` · on ${f.on.slice(0, 3).join(', ')}${f.on.length > 3 ? ' +' + (f.on.length - 3) : ''}` : '');
   } catch (e) {
     stopFieldAnim();
     const note = $('#fp-note'); if (note) { note.textContent = e.message || String(e); note.style.color = 'var(--err)'; }
@@ -4875,6 +4942,7 @@ function setSelection(names) {
   SEL_EPOCH++;
   STATE.selection = names;
   VP && VP.setSelection(names);
+  followFieldSelection(names);
   renderTree();
   if (names.length === 1) showProps('object', names[0]);
   else if (names.length > 1) showProps('multi', '');
@@ -4941,7 +5009,7 @@ const RESULT_BASE = { sparam: 'S Parameter Plot', farfield: 'Radiation Pattern',
   modes: 'Port Modes', convergence: 'Convergence', eigen: 'Eigenmode Data',
   E: 'E Field', H: 'H Field', J: 'Surface Current', P: '3D Radiation Pattern' };
 const FIELD_KEYS = ['quantity', 'where', 'axis', 'pos', 'excitation', 'freq',
-  'instant', 'phase', 'scale', 'arrows', 'comp', 'speed', 'modelAlpha', 'plotAlpha', 'visible'];
+  'instant', 'phase', 'scale', 'arrows', 'comp', 'speed', 'modelAlpha', 'plotAlpha', 'visible', 'objects', 'follow'];
 
 function resultState(kind) {
   if (kind === 'sparam') return { form: reportForm, traces: reportTraces };

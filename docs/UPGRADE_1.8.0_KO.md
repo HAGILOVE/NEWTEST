@@ -78,6 +78,8 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 - **Instantaneous**: RF 주기의 임의 위상에서의 값. `▶ Animate`로 돌리면 전류가 흐르는 것이 보임.
 - **Vector arrows**: 방향 표시. 스케일은 Linear 또는 dB(40 dB 범위).
 
+**선택한 금속에서만 필드/전류 보기** — 필드 패널(`Results ▸ E Field` 등)에서 `Plot on ▸ Chosen metals`를 고르면 도체 객체와 시트가 체크 목록으로 나타남. 체크한 금속에서만 E, H, 표면 전류 |Js|가 그려지고 나머지 모델은 흐리게 뒤에 남음(`Model opacity`로 조절). `selection / all / none` 버튼과 `Follow viewport selection`(3D 뷰나 프로젝트 트리에서 금속을 클릭하면 그 금속의 필드/전류가 바로 표시)이 있음. 색 범위는 선택한 금속의 최댓값 기준임. 내보낸 three.js 뷰어에도 같은 금속 목록이 있음.
+
 **결과 목록·중간 결과·마커** — 
 
 - 왼쪽 프로젝트 트리의 `Results` 아래에 해석 후 `S Parameter Plot 1`, `Port Modes`, `Convergence`, `E Field`, `H Field`, `Surface Current`(방사 경계가 있으면 `Radiation Pattern`, `3D Radiation Pattern`)가 나열됨. 클릭하면 그 결과가 저장된 설정 그대로 열리고, `Results` 메뉴로 새로 만들면 목록에 추가됨. 우클릭: Duplicate / Rename / Delete.
