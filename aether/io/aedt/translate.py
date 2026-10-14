@@ -1208,6 +1208,13 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
                           max_passes=int(props.get("MaximumPasses", 6) or 6),
                           delta_s=float(props.get("MaxDeltaS", 0.02) or 0.02))
     st.min_passes = max(1, int(props.get("MinimumPasses", 1) or 1))
+    try:
+        st.min_converged = max(1, int(props.get("MinimumConvergedPasses", 1) or 1))
+        pr = props.get("PercentRefinement")
+        if pr is not None:
+            st.refinement = min(max(float(pr) / 100.0, 0.01), 1.0)
+    except (TypeError, ValueError):
+        pass
     # HFSS writes 0 for "mixed order" and -1 for "zeroth order"; neither has
     # an Aether equivalent, and both used to import verbatim and then fail
     # validation with "basis order must be 1 or 2" on a setup the user never
@@ -1248,7 +1255,8 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
             step = float(evaluate(sw.get("RangeStep", (b - a) or 1.0), sc,
                                   "frequency"))
             n = int(round((b - a) / step)) + 1 if step else 2
-            st.add_sweep(swname, a, b, n, kind)
+            st.add_sweep(swname, a, b, n, kind, "step" if step else "linear",
+                         step=step or None)
         elif rtype.lower().startswith("singlepoint"):
             st.add_sweep(swname, a, a, 1, kind, "single")
         elif rtype.lower().startswith("log"):

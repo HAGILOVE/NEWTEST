@@ -218,11 +218,20 @@ class FrequencySweep:
     #: most full solves it may spend; ``None`` -> ``Config.sweep`` defaults
     tolerance: Optional[float] = None
     max_points: Optional[int] = None
+    #: spacing == "step": the frequency increment [Hz]
+    step: Optional[float] = None
 
     def frequencies(self) -> np.ndarray:
         if self.points is not None:
             return np.asarray([to_si(p, "frequency") for p in self.points], float)
         a, b, n = self.start, self.stop, max(int(self.count), 1)
+        if self.spacing == "step":
+            # HFSS "Linear Step": start, start+step, ... up to and including stop
+            st = float(self.step or 0.0)
+            if st <= 0:
+                raise ValueError("a linear-step sweep needs a positive step")
+            k = int(math.floor((b - a) / st + 1e-9)) + 1
+            return a + st * np.arange(max(k, 1))
         if self.spacing == "single" or n == 1:
             return np.array([a], float)
         if self.spacing == "log":
@@ -246,14 +255,21 @@ class Setup:
     n_modes: int = 3
     min_frequency: float = 0.0
     delta_f: float = 0.02
+    #: consecutive passes that must meet the target (HFSS "Minimum Converged
+    #: Passes") and the share of tetrahedra refined per pass (default 30 %)
+    min_converged: int = 1
+    refinement: float = 0.30
 
     def add_sweep(self, name="Sweep1", start="1GHz", stop="10GHz", count=101,
                   kind="discrete", spacing="linear", points=None,
                   save_fields=False, tolerance=None,
-                  max_points=None) -> FrequencySweep:
+                  max_points=None, step=None) -> FrequencySweep:
         sw = FrequencySweep(name, kind, to_si(start, "frequency"),
                             to_si(stop, "frequency"), count, spacing,
-                            points, save_fields, tolerance, max_points)
+                            points, save_fields, tolerance, max_points,
+                            to_si(step, "frequency") if step else None)
+        if spacing == "step":
+            sw.count = len(sw.frequencies())
         self.sweeps.append(sw)
         return sw
 

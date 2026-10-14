@@ -94,7 +94,8 @@ def write_pos_field(path: str, mesh, node_h: np.ndarray) -> str:
 
 
 def remesh_from_error(design, mesh, err: np.ndarray, freq: float,
-                      backend: str = "auto", pass_no: int = 1):
+                      backend: str = "auto", pass_no: int = 1,
+                      fraction: Optional[float] = None):
     """
     A fresh mesh whose element size follows the per-element error *err*.
 
@@ -106,7 +107,8 @@ def remesh_from_error(design, mesh, err: np.ndarray, freq: float,
     cfg = design.config.adaptive
     size_file = None
     try:
-        node_h = size_field_from_error(mesh, err, cfg.refinement_fraction)
+        node_h = size_field_from_error(
+            mesh, err, cfg.refinement_fraction if fraction is None else fraction)
         fd, size_file = tempfile.mkstemp(suffix=".pos")
         os.close(fd)
         write_pos_field(size_file, mesh, node_h)
@@ -173,7 +175,7 @@ def adaptive_solve(design, setup, backend: str = "auto",
         S_prev = S
         if dS is not None and dS <= setup.delta_s and p >= setup.min_passes:
             converged += 1
-            if converged >= cfg.min_converged_passes:
+            if converged >= max(int(getattr(setup, 'min_converged', 1)), cfg.min_converged_passes):
                 log.info("adaptive solution converged (dS = %.5f <= %.5f)",
                          dS, setup.delta_s)
                 break
@@ -189,7 +191,8 @@ def adaptive_solve(design, setup, backend: str = "auto",
         eps, mu = _material_maps(design, mesh, f0)
         x = flds[0].x
         err = element_error(mesh, dm, x, f0, lambda r: mu.get(r, 1.0 + 0j))
-        mesh = remesh_from_error(design, mesh, err, f0, backend, p)
+        mesh = remesh_from_error(design, mesh, err, f0, backend, p,
+                                 getattr(setup, 'refinement', None))
         dm = DofMap(mesh, order)
         with timed(log, f"re-assembling pass {p + 1}"):
             ops = assemble_regions(mesh, order, dm)

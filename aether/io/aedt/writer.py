@@ -472,8 +472,8 @@ def _write_setup(parent: AedtBlock, st, eigen: bool = False) -> AedtBlock:
     props.add_prop("MaxDeltaS", float(st.delta_s))
     props.add_prop("MaximumPasses", int(st.max_passes))
     props.add_prop("MinimumPasses", int(st.min_passes))
-    props.add_prop("MinimumConvergedPasses", 1)
-    props.add_prop("PercentRefinement", 30)
+    props.add_prop("MinimumConvergedPasses", int(st.min_converged))
+    props.add_prop("PercentRefinement", float(st.refinement) * 100.0)
     props.add_prop("BasisOrder", int(st.basis_order))
     if eigen:
         props.add_prop("NumModes", int(st.n_modes))
@@ -491,6 +491,11 @@ def _write_setup(parent: AedtBlock, st, eigen: bool = False) -> AedtBlock:
             s.add_prop("RangeStart", _freq(sw.start))
             s.add_prop("RangeEnd", _freq(sw.start))
             s.add_prop("RangeCount", 1)
+        elif sw.spacing == "step":
+            s.add_prop("RangeType", "LinearStep")
+            s.add_prop("RangeStart", _freq(sw.start))
+            s.add_prop("RangeEnd", _freq(sw.stop))
+            s.add_prop("RangeStep", _freq(float(sw.step)))
         elif sw.spacing == "log":
             s.add_prop("RangeType", "LogScale")
             s.add_prop("RangeStart", _freq(sw.start))

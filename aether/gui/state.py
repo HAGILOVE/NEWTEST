@@ -208,6 +208,7 @@ class Session:
         self.cancel_event = threading.Event()
         self.study_results = []
         self.study_spec = {}
+        self.opt_results = {}
         self.solution = None
         self.selection: List[str] = []
         # Face and edge picks, alongside the object selection. A face pick is
@@ -233,7 +234,7 @@ class Session:
     # ------------------------------------------------------------------
     def new_project(self, name: str = "Project1") -> Design:
         with self._lock:
-            self.study_results = []; self.study_spec = {}
+            self.study_results = []; self.study_spec = {}; self.opt_results = {}
             self.project = Project(name)
             self._undo.clear()
             self._redo.clear()

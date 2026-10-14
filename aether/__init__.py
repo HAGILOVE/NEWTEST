@@ -82,6 +82,9 @@ if ENV_ERROR is None:
 
     # post-processing
     from .post.sparam import SParameters
+
+    # optimisation (Optimetrics)
+    from .optimize import Goal, OptimizationResult, optimize
 else:                                    # degraded: only the doctor is usable
     def __getattr__(name):               # PEP 562
         if name.startswith("__"):
@@ -121,6 +124,8 @@ __all__ = [
     "LumpedPort", "Setup", "FrequencySweep",
     # results
     "TetMesh", "Solution", "SParameters",
+    # optimisation
+    "optimize", "Goal", "OptimizationResult",
     # helpers
     "open_hfss", "save_hfss", "read_touchstone", "write_touchstone",
     "import_cad",

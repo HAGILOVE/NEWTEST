@@ -183,6 +183,7 @@ FIELDS = {
     "cone": {"center": 3, "r1": 1, "r2": 1, "height": 1, "axis": 0},
     "torus": {"center": 3, "rMajor": 1, "rMinor": 1, "axis": 0},
     "rectangle": {"position": 3, "size": 2, "plane": 0},
+    "circle": {"center": 3, "radius": 1, "axis": 0},
 }
 DEFAULTS = {
     "box": {"position": [0, 0, 0], "size": [0.01, 0.005, 0.001]},
@@ -202,13 +203,14 @@ DEFAULTS = {
     },
     "torus": {"center": [0, 0, 0], "rMajor": 0.008, "rMinor": 0.002, "axis": [0, 0, 1]},
     "rectangle": {"position": [0, 0, 0], "size": [0.01, 0.005], "plane": "xy"},
+    "circle": {"center": [0, 0, 0], "radius": 0.002, "axis": [0, 0, 1]},
 }
 
 
 def make_primitive(kind, params, name, variables=None, units="mm"):
     if kind not in FIELDS:
         raise ValueError(
-            "Primitive editing supports box, cylinder, sphere, cone, torus and rectangle"
+            "Primitive editing supports box, cylinder, sphere, cone, torus, rectangle and circle"
         )
     scope = Scope(variables)
     raw = copy.deepcopy(DEFAULTS[kind])
@@ -271,6 +273,8 @@ def make_primitive(kind, params, name, variables=None, units="mm"):
         shape = prim.Torus(
             values["center"], values["rMajor"], values["rMinor"], values["axis"], name
         )
+    elif kind == "circle":
+        shape = prim.Circle(values["center"], values["radius"], values["axis"], name)
     else:
         shape = prim.Rectangle(
             values["position"], values["size"], values["plane"], name

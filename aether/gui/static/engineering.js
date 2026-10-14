@@ -66,7 +66,7 @@ async function dlgDiagnostics() {
     for(const x of r.errors)body.appendChild(el('p',{class:'eng-error'},'✕ '+x));
     for(const x of r.warnings)body.appendChild(el('p',{class:'eng-warning'},'△ '+x));
     if(r.estimate)body.appendChild(el('p',{},'Target element size: '+fmtLen(r.estimate.targetSize,U())+'; bounding-grid estimate: '+r.estimate.uniformGridTets.toLocaleString()+' tetrahedra. '+r.estimate.note));
-    body.appendChild(el('div',{class:'hint'},'Implemented: Driven Modal FEM, first/second-order basis, adaptive refinement and discrete solves. Eigenmode, PML and periodic/Floquet solve are not implemented. Diagnostics do not certify physical accuracy.'));
+    body.appendChild(el('div',{class:'hint'},'Implemented: Driven Modal FEM and Eigenmode, first/second-order basis, adaptive refinement, discrete / interpolating / fast sweeps, far fields and optimization. PML, periodic/Floquet and terminal solutions are not implemented. Diagnostics do not certify physical accuracy.'));
     dialog({title:'Engineering Diagnostics',body,ok:null,cancel:'Close',width:'wide'});
   });
 }
@@ -170,4 +170,138 @@ function dlgAirRegion() {
   dialog({title:'Surrounding Air Region',body,ok:'Create region',onOk:async()=>{
     await rpc('modeler.airRegion',{name:gv('eng-air-name'),padding:gv('eng-air-gap')});await refreshGeometry(true);
   }});
+}
+
+
+/* ----------------------------------------------------------- optimization */
+const GOAL_LABELS = [
+  ['s_max', 'max dB(S) in band ≤ target'],
+  ['s_min', 'min dB(S) in band ≥ target'],
+  ['s_at', 'dB(S) at frequency = target'],
+  ['resonance', 'S11 notch frequency = target'],
+  ['eigenfreq', 'Eigenmode frequency = target'],
+  ['peak_gain', 'Peak gain ≥ target (dBi)']];
+
+async function dlgOptimize() {
+  await guard(async () => {
+    const r = await rpc('parameters.list');
+    const vars = r.rows.filter(x => !x.error);
+    if (!vars.length) throw Error('Define a design variable, then bind it to a primitive dimension first.');
+    const eigen = STATE.design?.solutionType === 'eigenmode';
+    const body = el('div');
+    const vt = el('table', { class: 'eng-table' });
+    vt.appendChild(el('thead', {}, el('tr', {}, ...['Use', 'Variable', 'Current', 'Minimum', 'Maximum']
+      .map(h => el('th', {}, h)))));
+    const vb = el('tbody');
+    vars.forEach((v, i) => {
+      const dim = v.dimension && v.dimension[0] === 1 ? 'm' : '';
+      const cb = el('input', { type: 'checkbox', id: 'op-use-' + i });
+      if (i === 0) cb.checked = true;
+      const lo = inp('op-lo-' + i, v.si ? (v.si * 0.5) + dim : '');
+      const hi = inp('op-hi-' + i, v.si ? (v.si * 1.5) + dim : '');
+      vb.appendChild(el('tr', {}, el('td', {}, cb), el('td', {}, v.name),
+        el('td', {}, v.expression), el('td', {}, lo), el('td', {}, hi)));
+    });
+    vt.appendChild(vb);
+    body.appendChild(el('div', { class: 'hint', style: 'margin-top:0' }, 'Variables to tune and their allowed range'));
+    body.appendChild(vt);
+
+    const goals = el('div', { id: 'op-goals' });
+    const addGoal = (kind) => {
+      const row = el('div', { class: 'row3', style: 'align-items:center;margin:4px 0' });
+      const k = sel('', eigen ? GOAL_LABELS.filter(g => g[0] === 'eigenfreq')
+        : GOAL_LABELS.filter(g => g[0] !== 'eigenfreq'), kind ||
+        (eigen ? 'eigenfreq' : 's_max'));
+      const t = inp('', eigen ? '10GHz' : '-10');
+      const f1 = inp('', ''); f1.placeholder = 'f start / freq';
+      const f2 = inp('', ''); f2.placeholder = 'f stop';
+      const w = inp('', '1', 'number', { step: 'any', min: 0 });
+      const rm = el('button', { onclick: () => row.remove() }, '✕');
+      row.append(k, t, f1, f2, w, rm);
+      row._get = () => ({ kind: k.value, target: t.value, fStart: f1.value,
+        fStop: f2.value, weight: w.value, port: 1, port2: 1, mode: 1 });
+      goals.appendChild(row);
+    };
+    addGoal();
+    body.appendChild(el('div', { class: 'hint' }, 'Goals — type · target (dB / Hz / dBi) · band start · band stop · weight'));
+    body.appendChild(goals);
+    body.appendChild(el('button', { onclick: () => addGoal() }, '+ Add goal'));
+    body.appendChild(field('Optimizer', sel('op-method', [
+      ['nelder-mead', 'Nelder–Mead (local, few solves)'],
+      ['pattern', 'Pattern search (local, robust)'],
+      ['quasi-newton', 'Quasi-Newton L-BFGS-B (smooth responses)'],
+      ['differential-evolution', 'Genetic / differential evolution (global)']], 'nelder-mead')));
+    body.appendChild(field('Maximum solves', inp('op-max', '30', 'number', { min: 2, max: 1000 })));
+    body.appendChild(field('Solution setup', sel('op-setup', (STATE.design?.setups || []).map(x => x.name),
+      (STATE.design?.setups || [])[0]?.name)));
+    body.appendChild(el('div', { class: 'check' }, el('input', { id: 'op-adaptive', type: 'checkbox' }),
+      el('label', { for: 'op-adaptive' }, 'Adaptive mesh for every solve')));
+    body.appendChild(el('div', { class: 'hint' },
+      'Each trial is a real FEM solve on a copy of the design; yours is untouched until you press Apply best. ' +
+      'Goals that are already met cost nothing, and the search stops once all are met. ' +
+      'A local optimizer needs a starting point near the answer — use the global one for narrow notches.'));
+    dialog({ title: 'Optimization', body, width: 'wide', ok: 'Start', onOk: async () => {
+      const variables = {};
+      vars.forEach((v, i) => { if ($('#op-use-' + i).checked) variables[v.name] = [gv('op-lo-' + i), gv('op-hi-' + i)]; });
+      await rpc('analysis.optimize', { variables, goals: [...goals.children].map(g => g._get()),
+        method: gv('op-method'), maxEvals: gn('op-max'), setup: gv('op-setup'),
+        adaptive: $('#op-adaptive').checked });
+      setTimeout(dlgOptimizeResults, 0);
+    } });
+  });
+}
+
+async function dlgOptimizeResults() {
+  const body = el('div'), status = el('p');
+  const plot = el('canvas', { width: 720, height: 220, style: 'width:100%;height:220px;background:#fff;border:1px solid #ccd3df' });
+  const table = el('table', { class: 'eng-table' });
+  const apply = el('button', { class: 'pri', disabled: 'disabled', onclick: () => guard(async () => {
+    const r = await rpc('analysis.optimizeApply');
+    await refreshGeometry(false);
+    setStatus('Applied: ' + Object.entries(r.variables).map(([k, v]) => k + ' = ' + v).join(', '), '');
+  }) }, 'Apply best values');
+  body.append(status, plot, table, el('div', { class: 'dim-actions' },
+    el('button', { onclick: () => guard(() => rpc('analysis.cancel')) }, 'Request cancel'), apply));
+  const dlg = dialog({ title: 'Optimization Results', body, width: 'wide', ok: null, cancel: 'Close' });
+  let busy = false, timer = null;
+  const refresh = async () => {
+    if (!dlg.node.isConnected) { clearInterval(timer); return; }
+    if (busy) return; busy = true;
+    try {
+      const r = await rpc('analysis.optimizeResults');
+      const rows = r.rows || [];
+      const best = r.best;
+      status.textContent = (r.spec ? r.spec.method + ' · ' : '') + (r.status || 'no optimization yet') +
+        ' · ' + rows.length + ' solve(s)' + (best ? ' · best cost ' + best.cost.toPrecision(4) : '') +
+        (r.error ? ' · ' + r.error : '');
+      const names = r.spec ? Object.keys(r.spec.variables) : [];
+      table.replaceChildren(
+        el('thead', {}, el('tr', {}, ...['#', ...names, 'Cost', ...(r.spec ? r.spec.goals : [])]
+          .map(h => el('th', {}, h)))),
+        el('tbody', {}, ...rows.map(x => el('tr', { style: best && x.eval === best.eval ? 'font-weight:600' : '' },
+          el('td', {}, x.eval),
+          ...names.map(n => el('td', {}, (x.values[n] * 1e3).toPrecision(5) + ' mm')),
+          el('td', {}, x.cost.toPrecision(4)),
+          ...x.goals.map(g => el('td', {}, g.value.toPrecision(5)))))));
+      drawCostPlot(plot, rows);
+      apply.disabled = !(r.expressions && r.status !== 'running');
+      if (!r.job.running) clearInterval(timer);
+    } catch (e) { status.textContent = e.message; clearInterval(timer); } finally { busy = false; }
+  };
+  timer = setInterval(refresh, 1200); await refresh();
+}
+
+function drawCostPlot(canvas, rows) {
+  const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#24314b'; ctx.font = '12px sans-serif';
+  ctx.fillText('Cost per solve (lower is better; 0 = every goal met)', 45, 16);
+  if (!rows.length) { ctx.fillText('Waiting for the first solve…', 45, 55); return; }
+  const cs = rows.map(r => r.cost), top = Math.max(...cs) || 1;
+  const x = i => 50 + i / Math.max(rows.length - 1, 1) * 620, y = v => 190 - v / top * 150;
+  ctx.strokeStyle = '#d7dce5'; ctx.beginPath(); ctx.moveTo(50, 190); ctx.lineTo(670, 190); ctx.moveTo(50, 40); ctx.lineTo(50, 190); ctx.stroke();
+  ctx.fillText(top.toPrecision(3), 4, 44); ctx.fillText('0', 36, 194);
+  ctx.strokeStyle = '#999'; ctx.beginPath(); cs.forEach((c, i) => i ? ctx.lineTo(x(i), y(c)) : ctx.moveTo(x(i), y(c))); ctx.stroke();
+  let bestSoFar = Infinity; ctx.strokeStyle = '#2b6cb0'; ctx.lineWidth = 2; ctx.beginPath();
+  cs.forEach((c, i) => { bestSoFar = Math.min(bestSoFar, c); i ? ctx.lineTo(x(i), y(bestSoFar)) : ctx.moveTo(x(i), y(bestSoFar)); });
+  ctx.stroke(); ctx.lineWidth = 1;
 }

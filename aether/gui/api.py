@@ -164,12 +164,15 @@ def _design_json(s: Session) -> Optional[dict]:
             "maxPasses": st.max_passes, "deltaS": st.delta_s,
             "basisOrder": st.basis_order,
             "nModes": st.n_modes, "minFrequency": st.min_frequency,
-            "deltaF": st.delta_f,
+            "deltaF": st.delta_f, "minPasses": st.min_passes,
+            "minConverged": st.min_converged,
+            "refinement": st.refinement * 100.0,
             "sweeps": [{"name": sw.name, "kind": sw.kind,
                         "start": sw.start, "stop": sw.stop,
                         "count": sw.count, "spacing": sw.spacing,
                         "points": int(len(sw.frequencies())),
-                        "tolerance": sw.tolerance, "maxPoints": sw.max_points}
+                        "tolerance": sw.tolerance, "maxPoints": sw.max_points,
+                        "step": sw.step, "saveFields": bool(sw.save_fields)}
                        for sw in st.sweeps],
         } for st in d.setups],
         "meshed": d.mesh is not None,
@@ -492,7 +495,7 @@ def _draw(s: Session, shape: str = "box", name: str = "", material: str = "vacuu
           else naming.suggest_shape(d, shape))
     from ..parametric import make_primitive
     sh = make_primitive(shape, p, nm, d.variables, d.units)
-    if shape == "rectangle":
+    if shape in ("rectangle", "circle"):
         d.add_sheet(nm, sh, d.materials.get(material))
     else:
         d.add_solid(nm, sh, material, bool(p.get("solveInside", True)))
@@ -1038,7 +1041,21 @@ def _history(s: Session, **_):
 
 
 @command("modeler.setProperty")
-def _setprop(s: Session, name: str = "", prop: str = "", value: Any = None, **_):
+def _setprop(s: Session, name: str = "", prop: str = "", value: Any = None,
+             names: Optional[List[str]] = None, **_):
+    """Set one property on one object, or on every object in *names*.
+
+    A multi-object edit is a single command, hence a single undo step; if any
+    object refuses the value, none of them change (the dispatcher restores the
+    snapshot it took before the command)."""
+    if names:
+        if prop == "name":
+            raise ValueError("objects need distinct names; rename one at a time")
+        for nm in names:
+            _setprop(s, name=nm, prop=prop, value=value)
+        s.messages.add(f"Set {prop} on {len(names)} object(s).", "info",
+                       "modeler")
+        return {"ok": True, "count": len(names)}
     d = s.require_design()
     o = _entity(d, name)
     if prop == "material":
@@ -1529,7 +1546,8 @@ def _make_selector(d, spec: dict):
     if kind == "object":
         names = spec.get("objects") or ([spec["object"]] if spec.get("object")
                                         else [])
-        shapes = [d.get_solid(n).shape for n in names]
+        # solids and sheets alike: a port or boundary is often a drawn face
+        shapes = [_entity(d, n).shape for n in names]
         if not shapes:
             raise ValueError("no object selected for this assignment")
         sh = shapes[0] if len(shapes) == 1 else prim.union(*shapes)
@@ -1741,26 +1759,61 @@ def _del_port(s: Session, name: str = "", **_):
 # ==========================================================================
 
 
+def _apply_setup_options(st, kw) -> None:
+    """The HFSS solution-setup fields, validated; shared by add and edit."""
+    if "frequency" in kw:
+        st.frequency = to_si(kw["frequency"], "frequency")
+    if "maxPasses" in kw:
+        st.max_passes = int(kw["maxPasses"])
+    if "minPasses" in kw:
+        st.min_passes = int(kw["minPasses"])
+    if "minConverged" in kw:
+        st.min_converged = int(kw["minConverged"])
+    if "deltaS" in kw:
+        st.delta_s = float(kw["deltaS"])
+    if "refinement" in kw and kw["refinement"] not in (None, ""):
+        pct = float(kw["refinement"])
+        if not 1.0 <= pct <= 100.0:
+            raise ValueError("refinement per pass must be 1..100 %")
+        st.refinement = pct / 100.0
+    if "basisOrder" in kw:
+        st.basis_order = int(kw["basisOrder"])
+    if "nModes" in kw and kw["nModes"] not in (None, ""):
+        st.n_modes = int(kw["nModes"])
+    if "minFrequency" in kw and kw["minFrequency"] not in (None, ""):
+        st.min_frequency = to_si(kw["minFrequency"], "frequency")
+    if "deltaF" in kw and kw["deltaF"] not in (None, ""):
+        st.delta_f = float(kw["deltaF"])
+    if not st.min_passes <= st.max_passes:
+        raise ValueError("minimum passes cannot exceed maximum passes")
+    if st.min_converged < 1:
+        raise ValueError("minimum converged passes must be at least 1")
+
+
 @command("analysis.addSetup")
 def _add_setup(s: Session, name: str = "", frequency: Any = "10GHz",
                maxPasses: int = 6, deltaS: float = 0.02,
-               basisOrder: int = 1, nModes: Any = None,
-               minFrequency: Any = None, deltaF: Any = None, **_):
+               basisOrder: int = 1, **kw):
     d = s.require_design()
     nm = (naming.unique_name([x.name for x in d.setups], name) if name
           else naming.suggest_setup(d))
     st = d.add_setup(nm, frequency,
                      max_passes=int(maxPasses), delta_s=float(deltaS),
                      basis_order=int(basisOrder))
-    if nModes not in (None, ""):
-        st.n_modes = int(nModes)
-    if minFrequency not in (None, ""):
-        st.min_frequency = to_si(minFrequency, "frequency")
-    if deltaF not in (None, ""):
-        st.delta_f = float(deltaF)
+    try:
+        _apply_setup_options(st, {k: v for k, v in kw.items() if k not in
+                                  ("frequency", "maxPasses", "deltaS",
+                                   "basisOrder")})
+    except Exception:
+        d.setups.remove(st)
+        raise
     s.dirty = True
-    s.messages.add(f"Added solution setup {st.name!r} at "
-                   f"{st.frequency/1e9:g} GHz.", "info", "analysis")
+    if d.solution_type == "eigenmode":
+        s.messages.add(f"Added eigenmode setup {st.name!r}: {st.n_modes} "
+                       "mode(s).", "info", "analysis")
+    else:
+        s.messages.add(f"Added solution setup {st.name!r} at "
+                       f"{st.frequency/1e9:g} GHz.", "info", "analysis")
     return {"ok": True, "name": st.name}
 
 
@@ -1768,47 +1821,81 @@ def _add_setup(s: Session, name: str = "", frequency: Any = "10GHz",
 def _edit_setup(s: Session, name: str = "", **kw):
     d = s.require_design()
     st = d.get_setup(name)
-    if "frequency" in kw:
-        st.frequency = to_si(kw["frequency"], "frequency")
-    if "maxPasses" in kw:
-        st.max_passes = int(kw["maxPasses"])
-    if "deltaS" in kw:
-        st.delta_s = float(kw["deltaS"])
-    if "basisOrder" in kw:
-        st.basis_order = int(kw["basisOrder"])
-    if "nModes" in kw:
-        st.n_modes = int(kw["nModes"])
-    if "minFrequency" in kw:
-        st.min_frequency = to_si(kw["minFrequency"], "frequency")
-    if "deltaF" in kw:
-        st.delta_f = float(kw["deltaF"])
+    _apply_setup_options(st, kw)
+    if "newName" in kw and kw["newName"] and kw["newName"] != st.name:
+        st.name = naming.unique_name([x.name for x in d.setups if x is not st],
+                                     str(kw["newName"]))
+    d.mesh = None
     s.dirty = True
-    return {"ok": True}
+    return {"ok": True, "name": st.name}
 
 
-@command("analysis.addSweep")
-def _add_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discrete",
-               start: Any = "1GHz", stop: Any = "10GHz", count: int = 101,
-               spacing: str = "linear", tolerance: Any = None,
-               maxPoints: Any = None, **_):
-    d = s.require_design()
-    st = d.get_setup(setup or None)
-    swn = (naming.unique_name([x.name for x in st.sweeps], name) if name
-           else naming.suggest_sweep(st))
+def _sweep_args(kind, spacing, tolerance, maxPoints, step):
     if kind not in ("discrete", "interpolating", "fast"):
         raise ValueError(f"unknown sweep type {kind!r}")
+    if spacing not in ("linear", "step", "log", "single"):
+        raise ValueError(f"unknown frequency setup {spacing!r}")
     tol = float(tolerance) if tolerance not in (None, "") else None
     if tol is not None and not 0 < tol < 1:
         raise ValueError("error tolerance must be between 0 and 1 (|dS|)")
     mp = int(maxPoints) if maxPoints not in (None, "") else None
     if mp is not None and mp < 4:
         raise ValueError("an adaptive sweep needs at least 4 solutions")
+    if spacing == "step":
+        if step in (None, ""):
+            raise ValueError("a linear-step sweep needs a step")
+        if to_si(step, "frequency") <= 0:
+            raise ValueError("the frequency step must be positive")
+    return tol, mp
+
+
+@command("analysis.addSweep")
+def _add_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discrete",
+               start: Any = "1GHz", stop: Any = "10GHz", count: int = 101,
+               spacing: str = "linear", tolerance: Any = None,
+               maxPoints: Any = None, step: Any = None,
+               saveFields: bool = False, **_):
+    d = s.require_design()
+    st = d.get_setup(setup or None)
+    swn = (naming.unique_name([x.name for x in st.sweeps], name) if name
+           else naming.suggest_sweep(st))
+    tol, mp = _sweep_args(kind, spacing, tolerance, maxPoints, step)
     sw = st.add_sweep(swn, start, stop, int(count), kind, spacing,
-                      tolerance=tol, max_points=mp)
+                      tolerance=tol, max_points=mp, step=step or None,
+                      save_fields=bool(saveFields))
+    if len(sw.frequencies()) > 20001:
+        st.sweeps.remove(sw)
+        raise ValueError("maximum 20001 frequency points per sweep")
     s.dirty = True
     s.messages.add(f"Added sweep {sw.name!r}: {sw.start/1e9:g}–"
-                   f"{sw.stop/1e9:g} GHz, {sw.count} points.", "info",
-                   "analysis")
+                   f"{sw.stop/1e9:g} GHz, {len(sw.frequencies())} points.",
+                   "info", "analysis")
+    return {"ok": True, "name": sw.name}
+
+
+@command("analysis.editSweep")
+def _edit_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discrete",
+                start: Any = "1GHz", stop: Any = "10GHz", count: int = 101,
+                spacing: str = "linear", tolerance: Any = None,
+                maxPoints: Any = None, step: Any = None,
+                saveFields: bool = False, **_):
+    d = s.require_design()
+    st = d.get_setup(setup or None)
+    sw = next((x for x in st.sweeps if x.name == name), None)
+    if sw is None:
+        raise KeyError(f"no sweep named {name!r}")
+    tol, mp = _sweep_args(kind, spacing, tolerance, maxPoints, step)
+    sw.kind, sw.spacing = kind, spacing
+    sw.start, sw.stop = to_si(start, "frequency"), to_si(stop, "frequency")
+    sw.count = int(count)
+    sw.tolerance, sw.max_points = tol, mp
+    sw.step = to_si(step, "frequency") if step else None
+    sw.save_fields = bool(saveFields)
+    sw.points = None
+    if spacing == "step":
+        sw.count = len(sw.frequencies())
+    d.mesh = None
+    s.dirty = True
     return {"ok": True, "name": sw.name}
 
 
@@ -2798,6 +2885,9 @@ MUTATING = {
     "analysis.addSetup": "Add setup",
     "analysis.editSetup": "Edit setup",
     "analysis.addSweep": "Add sweep",
+    "analysis.editSweep": "Edit sweep",
+    "analysis.editSetup": "Edit setup",
+    "analysis.optimizeApply": "Apply optimized variables",
     "analysis.deleteSetup": "Delete setup",
     "analysis.deleteSweep": "Delete sweep",
     "materials.add": "Add material",
@@ -2834,6 +2924,7 @@ def _relink_unchanged(d, live_entities) -> None:
                         and getattr(obj, "material", None) is not None
                         and prev.material.name == obj.material.name
                         and getattr(prev, "visible", True) == getattr(obj, "visible", True)
+                        and getattr(prev, "solve_inside", None) == getattr(obj, "solve_inside", None)
                         and prev.display_color == obj.display_color
                         and prev.display_transparency == obj.display_transparency)
             except Exception:                                # pragma: no cover

@@ -378,8 +378,10 @@ class Circle(Shape):
         return {"center": self.center, "axis": self.axis, "radius": self.radius}
 
     def _local_bounds(self):
+        # a disc is flat along its axis: half-extent r*sqrt(1 - a_i^2) per axis
         c, r = np.array(self.center), self.radius
-        return tuple(c - r), tuple(c + r)  # type: ignore
+        half = r * np.sqrt(np.maximum(0.0, 1.0 - np.asarray(self.axis) ** 2))
+        return tuple(c - half), tuple(c + half)  # type: ignore
 
 
 @dataclass

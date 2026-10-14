@@ -523,7 +523,9 @@ function pickedGeometry(kind, pick, u) {
 }
 
 function dlgBoolean() {
-  const objs = (STATE.design?.objects || []).map(o => o.name);
+  // drawn faces (sheets) are objects too: a port is very often one
+  const objs = (STATE.design?.objects || []).concat(STATE.design?.sheets || [])
+    .map(o => o.name);
   if (objs.length < 2) return toastError('Two or more objects are required');
   const body = el('div');
   body.appendChild(field('Operation', sel('b-op',
@@ -754,17 +756,21 @@ function selectorFields(prefix, opts = {}) {
                  ['plane', 'Plane (X/Y/Z = value)'],
                  ['bboxface', 'Bounding-box face'],
                  ['box', 'Box region'],
-                 ['object', 'Faces of an object'],
+                 ['object', 'Selected object / drawn face'],
                  ['outer', 'All outer faces'],
                  ['outerExceptPorts', 'All outer faces except ports']];
   // Faces picked in the viewport are the natural target when there are any,
   // which is how an assignment normally starts: pick, then assign.
   wrap.appendChild(field('Assign to', sel(prefix + 'kind',
     opts.only ? kinds.filter(k => opts.only.includes(k[0])) : kinds,
-    FACE_PICKS.length ? 'faces' : (opts.default || 'plane'))));
+    FACE_PICKS.length ? 'faces'
+      : ((STATE.selection || []).length && kinds.some(k => k[0] === 'object')
+          && !opts.default ? 'object' : (opts.default || 'plane')))));
   const dyn = el('div', { id: prefix + 'dyn' });
   wrap.appendChild(dyn);
-  const objs = (STATE.design?.objects || []).map(o => o.name);
+  // drawn faces (sheets) are objects too: a port is very often one
+  const objs = (STATE.design?.objects || []).concat(STATE.design?.sheets || [])
+    .map(o => o.name);
   const build = () => {
     dyn.innerHTML = '';
     const k = gv(prefix + 'kind');
@@ -800,7 +806,11 @@ function selectorFields(prefix, opts = {}) {
     if (k === 'plane') return { kind: 'plane', axis: gv(prefix + 'axis'), value: gv(prefix + 'val') };
     if (k === 'bboxface') return { kind: 'bboxface', face: gv(prefix + 'face') };
     if (k === 'box') return { kind: 'box', lo: g3(prefix + 'lo'), hi: g3(prefix + 'hi') };
-    if (k === 'object') return { kind: 'object', objects: [gv(prefix + 'obj')] };
+    if (k === 'object') {
+      const chosen = gv(prefix + 'obj');
+      const sel_ = (STATE.selection || []).includes(chosen) ? STATE.selection : [chosen];
+      return { kind: 'object', objects: sel_.slice() };
+    }
     if (k === 'faces') {
       if (!FACE_PICKS.length)
         throw new Error('pick a face first: press F, then click one');
@@ -877,7 +887,7 @@ function dlgExcitation(kind) {
   body.appendChild(field('Name', inp('ex-name', '', 'text',
     { placeholder: 'auto' })));
   autoName('ex-name', 'port', kind);
-  const s = selectorFields('xs-', { default: 'plane' });
+  const s = selectorFields('xs-', {});
   body.appendChild(s);
   if (kind === 'wave') {
     body.appendChild(field('Number of modes', inp('ex-modes', '1', 'number',
@@ -923,87 +933,126 @@ function dlgExcitation(kind) {
     }});
 }
 
-function dlgSetup() {
+/* Solution setup and frequency sweep, with the fields HFSS puts on its
+   Solution Setup / Edit Frequency Sweep dialogs, so a setup written down for
+   one can be entered in the other without translation. */
+function dlgSetup(existing) {
   const eigen = STATE.design?.solutionType === 'eigenmode';
+  const cur = existing ? (STATE.design.setups || []).find(x => x.name === existing) : null;
   const body = el('div');
-  body.appendChild(field('Name', inp('su-name', '', 'text',
+  body.appendChild(field('Name', inp('su-name', cur ? cur.name : '', 'text',
     { placeholder: 'auto' })));
-  autoName('su-name', 'setup');
+  if (!cur) autoName('su-name', 'setup');
+  const v = (a, d) => cur ? cur[a] : d;
   if (eigen) {
     body.appendChild(el('fieldset', {}, el('legend', {}, 'Eigenmode search'),
-      field('Number of modes', inp('su-nm', '3', 'number', { min: 1, max: 50 })),
-      field('Minimum frequency', inp('su-fmin', '0Hz')),
-      field('Maximum Δf per pass', inp('su-df', '0.02', 'number',
+      field('Number of modes', inp('su-nm', v('nModes', 3), 'number', { min: 1, max: 50 })),
+      field('Minimum frequency', inp('su-fmin', cur ? fmtHz(cur.minFrequency) : '0Hz')),
+      field('Max delta frequency per pass', inp('su-df', v('deltaF', 0.02), 'number',
         { step: '0.001' }))));
-    body.appendChild(field('Mesh seed frequency', inp('su-f', '10GHz')));
-    body.appendChild(el('fieldset', {}, el('legend', {}, 'Adaptive solutions'),
-      field('Maximum passes', inp('su-mp', '6', 'number', { min: 1, max: 30 })),
-      field('Basis order', sel('su-bo', [[1, '1st order (Whitney, 6 DOF/tet)'],
-        [2, '2nd order (20 DOF/tet)']], 2))));
-    body.appendChild(el('div', { class: 'hint' },
-      'Finds the lowest resonances above the minimum frequency (0 = from the ' +
-      'bottom) and their Q. Passes refine the mesh until no mode moves by more ' +
-      'than Δf. Open (radiation) boundaries are not supported here.'));
-    return dialog({ title: 'Add Eigenmode Setup', body, ok: 'OK', onOk: () =>
-      guard(() => rpc('analysis.addSetup', { name: gv('su-name'),
-        frequency: gv('su-f'), maxPasses: gn('su-mp'), deltaS: 0.02,
-        basisOrder: parseInt(gv('su-bo')), nModes: gn('su-nm'),
-        minFrequency: gv('su-fmin'), deltaF: gn('su-df') })) });
   }
-  body.appendChild(field('Solution frequency', inp('su-f', '10GHz')));
-  body.appendChild(el('fieldset', {}, el('legend', {}, 'Adaptive solutions'),
-    field('Maximum passes', inp('su-mp', '6', 'number', { min: 1, max: 30 })),
-    field('Maximum ΔS', inp('su-ds', '0.02', 'number', { step: '0.001' })),
-    field('Basis order', sel('su-bo', [[1, '1st order (Whitney, 6 DOF/tet)'],
-      [2, '2nd order (20 DOF/tet)']], 1))));
-  body.appendChild(el('div', { class: 'hint' },
-    'Adaptive passes refine where the tangential-H jump is largest and stop when max|ΔS| between passes falls below the target.'));
-  dialog({ title: 'Add Solution Setup', body, ok: 'OK', onOk: () =>
-    guard(() => rpc('analysis.addSetup', { name: gv('su-name'),
-      frequency: gv('su-f'), maxPasses: gn('su-mp'), deltaS: gn('su-ds'),
-      basisOrder: parseInt(gv('su-bo')) })) });
+  body.appendChild(field(eigen ? 'Mesh seed frequency' : 'Solution frequency',
+    inp('su-f', cur ? fmtHz(cur.frequency) : '10GHz')));
+  const adaptive = el('fieldset', {}, el('legend', {}, 'Adaptive solutions'),
+    field('Maximum number of passes', inp('su-mp', v('maxPasses', 6), 'number', { min: 1, max: 100 })),
+    field('Minimum number of passes', inp('su-minp', v('minPasses', 1), 'number', { min: 1, max: 100 })),
+    field('Minimum converged passes', inp('su-minc', v('minConverged', 1), 'number', { min: 1, max: 20 })));
+  if (!eigen)
+    adaptive.appendChild(field('Maximum delta S', inp('su-ds', v('deltaS', 0.02), 'number',
+      { step: '0.001' })));
+  adaptive.appendChild(field('Refinement per pass [%]', inp('su-ref', cur ? cur.refinement : 30,
+    'number', { min: 1, max: 100, step: '1' })));
+  adaptive.appendChild(field('Basis function order', sel('su-bo',
+    [[1, 'First order (Whitney, 6 DOF/tet)'], [2, 'Second order (20 DOF/tet)']],
+    cur ? cur.basisOrder : (eigen ? 2 : 1))));
+  body.appendChild(adaptive);
+  body.appendChild(el('div', { class: 'hint' }, eigen
+    ? 'Finds the lowest resonances above the minimum frequency (0 = from the bottom) and their Q. ' +
+      'Passes refine the mesh until no mode moves by more than the delta frequency. ' +
+      'Open (radiation) boundaries are not supported by the eigenmode solver.'
+    : 'The mesh is refined at the solution frequency until max|ΔS| between consecutive passes ' +
+      'stays below the target for the required number of passes. Sweeps are added under the setup.'));
+  const collect = () => ({
+    name: gv('su-name'), frequency: gv('su-f'), maxPasses: gn('su-mp'),
+    minPasses: gn('su-minp'), minConverged: gn('su-minc'), refinement: gn('su-ref'),
+    basisOrder: parseInt(gv('su-bo')),
+    ...(eigen ? { nModes: gn('su-nm'), minFrequency: gv('su-fmin'), deltaF: gn('su-df'),
+                  deltaS: 0.02 } : { deltaS: gn('su-ds') }) });
+  dialog({ title: (cur ? 'Edit Setup — ' + cur.name : (eigen ? 'Add Eigenmode Setup' : 'Add Solution Setup')),
+    body, width: 'wide', ok: 'OK', onOk: () => guard(async () => {
+      const a = collect();
+      if (cur) { a.newName = a.name; a.name = cur.name; await rpc('analysis.editSetup', a); }
+      else await rpc('analysis.addSetup', a);
+      await refreshGeometry(false);
+    }) });
 }
 
-function dlgSweep(setupName) {
+function dlgSweep(setupName, sweepName) {
   if (STATE.design?.solutionType === 'eigenmode')
     return toastError('An eigenmode setup has no frequency sweep — it solves for the resonances');
   const setups = (STATE.design?.setups || []).map(s => s.name);
   if (!setups.length) return toastError('Add a solution setup first');
+  const stName = setupName || setups[0];
+  const cur = sweepName ? ((STATE.design.setups.find(x => x.name === stName) || {}).sweeps || [])
+    .find(x => x.name === sweepName) : null;
   const body = el('div');
-  body.appendChild(field('Setup', sel('sw-setup', setups, setupName || setups[0])));
-  body.appendChild(field('Name', inp('sw-name', '', 'text',
-    { placeholder: 'auto' })));
-  const reName = () => suggestName('sweep', '', gv('sw-setup')).then(n => {
-    const f = $('#sw-name'); if (f) { f.value = n; f.placeholder = n; }
-  });
-  setTimeout(() => { reName(); $('#sw-setup').onchange = reName; }, 0);
+  body.appendChild(field('Setup', sel('sw-setup', setups, stName)));
+  body.appendChild(field('Name', inp('sw-name', cur ? cur.name : '', 'text', { placeholder: 'auto' })));
+  if (!cur) {
+    const reName = () => suggestName('sweep', '', gv('sw-setup')).then(n => {
+      const f = $('#sw-name'); if (f) { f.value = n; f.placeholder = n; }
+    });
+    setTimeout(() => { reName(); $('#sw-setup').onchange = reName; }, 0);
+  }
   body.appendChild(field('Sweep type', sel('sw-kind',
     [['discrete', 'Discrete'], ['interpolating', 'Interpolating'], ['fast', 'Fast']],
-    'discrete')));
-  body.appendChild(field('Start', inp('sw-a', '8GHz')));
-  body.appendChild(field('Stop', inp('sw-b', '12GHz')));
-  body.appendChild(field('Spacing', sel('sw-sp',
-    [['linear', 'Linear count'], ['log', 'Logarithmic'], ['single', 'Single point']], 'linear')));
-  body.appendChild(field('Points', inp('sw-n', '41', 'number', { min: 1 })));
-  // Interpolating / Fast solve only some frequencies and reconstruct the rest;
-  // these two say how closely and how many full solves that may take.
-  const adv = el('div', { id: 'sw-adv' });
-  adv.appendChild(field('Error tolerance (|ΔS|)', inp('sw-tol', '0.001', 'number',
-    { min: 0, max: 1, step: 'any' })));
-  adv.appendChild(field('Max solutions', inp('sw-max', '100', 'number', { min: 4 })));
-  adv.appendChild(el('div', { class: 'hint' },
-    'Interpolating fits a rational model through adaptively chosen solves; ' +
-    'Fast projects the full operator onto a reduced basis. Sweeps shorter ' +
-    'than 7 points are always solved point by point.'));
+    cur ? cur.kind : 'discrete')));
+  const spacing0 = cur ? (cur.spacing === 'linear' ? 'linear' : cur.spacing) : 'linear';
+  body.appendChild(field('Frequency setup', sel('sw-sp',
+    [['linear', 'Linear count'], ['step', 'Linear step'], ['log', 'Log scale'],
+     ['single', 'Single point']], spacing0)));
+  body.appendChild(field('Start', inp('sw-a', cur ? fmtHz(cur.start) : '8GHz')));
+  const stopF = field('Stop', inp('sw-b', cur ? fmtHz(cur.stop) : '12GHz'));
+  const countF = field('Count', inp('sw-n', cur ? cur.count : '41', 'number', { min: 1 }));
+  const stepF = field('Step size', inp('sw-step', cur && cur.step ? fmtHz(cur.step) : '0.1GHz'));
+  body.append(stopF, countF, stepF);
+  const adv = el('fieldset', { id: 'sw-adv' }, el('legend', {}, 'Interpolating / Fast'),
+    field('Error tolerance (|ΔS|)', inp('sw-tol', cur && cur.tolerance != null ? cur.tolerance : '0.001',
+      'number', { min: 0, max: 1, step: 'any' })),
+    field('Max solutions', inp('sw-max', cur && cur.maxPoints != null ? cur.maxPoints : '100',
+      'number', { min: 4 })),
+    el('div', { class: 'hint' },
+      'Interpolating fits a rational model through adaptively chosen solves; Fast projects ' +
+      'the full operator onto a reduced basis. Sweeps shorter than 7 points are solved point by point.'));
   body.appendChild(adv);
-  const showAdv = () => { adv.style.display = gv('sw-kind') === 'discrete' ? 'none' : ''; };
-  setTimeout(() => { showAdv(); $('#sw-kind').onchange = showAdv; }, 0);
-  dialog({ title: 'Add Frequency Sweep', body, ok: 'OK', onOk: () =>
-    guard(() => rpc('analysis.addSweep', { setup: gv('sw-setup'),
-      name: gv('sw-name'), kind: gv('sw-kind'), start: gv('sw-a'),
-      stop: gv('sw-b'), count: gn('sw-n'), spacing: gv('sw-sp'),
-      tolerance: gv('sw-kind') === 'discrete' ? null : gv('sw-tol'),
-      maxPoints: gv('sw-kind') === 'discrete' ? null : gv('sw-max') })) });
+  body.appendChild(el('div', { class: 'check' },
+    el('input', { type: 'checkbox', id: 'sw-fields' }),
+    el('label', { for: 'sw-fields' }, 'Save fields in this sweep')));
+  const sync = () => {
+    const sp = gv('sw-sp');
+    stopF.style.display = sp === 'single' ? 'none' : '';
+    countF.style.display = (sp === 'linear' || sp === 'log') ? '' : 'none';
+    stepF.style.display = sp === 'step' ? '' : 'none';
+    adv.style.display = gv('sw-kind') === 'discrete' ? 'none' : '';
+  };
+  setTimeout(() => {
+    sync(); $('#sw-sp').onchange = sync; $('#sw-kind').onchange = sync;
+    if (cur && $('#sw-fields')) $('#sw-fields').checked = !!cur.saveFields;
+  }, 0);
+  dialog({ title: cur ? 'Edit Frequency Sweep — ' + cur.name : 'Add Frequency Sweep', body,
+    ok: 'OK', onOk: () => guard(async () => {
+      const kind = gv('sw-kind');
+      const args = { setup: gv('sw-setup'), name: gv('sw-name'), kind,
+        start: gv('sw-a'), stop: gv('sw-sp') === 'single' ? gv('sw-a') : gv('sw-b'),
+        count: gn('sw-n'), spacing: gv('sw-sp'),
+        step: gv('sw-sp') === 'step' ? gv('sw-step') : null,
+        tolerance: kind === 'discrete' ? null : gv('sw-tol'),
+        maxPoints: kind === 'discrete' ? null : gv('sw-max'),
+        saveFields: $('#sw-fields').checked };
+      await rpc(cur ? 'analysis.editSweep' : 'analysis.addSweep',
+        cur ? { ...args, name: cur.name } : args);
+      await refreshGeometry(false);
+    }) });
 }
 
 async function dlgValidate() {
@@ -1453,6 +1502,9 @@ const MENUS = [
     ['Draw Box by Points', () => startPointDraw('box')],
     ['Draw Rectangle by Points', () => startPointDraw('rectangle')],
     ['Draw Cylinder by Points', () => startPointDraw('cylinder')],
+    ['Draw Circle by Points', () => startPointDraw('circle')],
+    ['Draw Sphere by Points', () => startPointDraw('sphere')],
+    ['Draw Cone by Points', () => startPointDraw('cone')],
     null, ['Import CAD…', dlgImportCad]]],
   ['Modeler', [
     ['Boolean\u2026', dlgBoolean],
@@ -1494,6 +1546,8 @@ const MENUS = [
     ['Engineering Diagnostics…', dlgDiagnostics],
     ['Parameter Study…', dlgStudy],
     ['Parameter Study Results…', dlgStudyResults],
+    ['Optimization…', dlgOptimize],
+    ['Optimization Results…', dlgOptimizeResults],
     ['Cancel Running Analysis', () => guard(() => rpc('analysis.cancel'))],
     ['Scripting Console', () => selectBottom('console')],
     ['Clear Messages', clearMessages]]],
@@ -1528,7 +1582,10 @@ const RIBBON = {
       ['i-rect', 'Rectangle', () => dlgDraw('rectangle')]]],
     ['By points', [['i-box', 'Box by points', () => startPointDraw('box')],
       ['i-rect', 'Rect by points', () => startPointDraw('rectangle')],
-      ['i-cyl', 'Cyl by points', () => startPointDraw('cylinder')]]],
+      ['i-cyl', 'Cyl by points', () => startPointDraw('cylinder')],
+      ['i-cyl', 'Circle by points', () => startPointDraw('circle')],
+      ['i-sph', 'Sphere by points', () => startPointDraw('sphere')],
+      ['i-cone', 'Cone by points', () => startPointDraw('cone')]]],
     ['CAD', [['i-import', 'Import', dlgImportCad],
       ['i-import', 'Repair Bodies', dlgRepairBodies]]]
   ],
@@ -1550,7 +1607,7 @@ const RIBBON = {
   ],
   Simulation: [
     ['Engineering', [['i-check','Diagnostics',dlgDiagnostics],['i-setup','Controls',dlgControls],['i-box','Air Region',dlgAirRegion]]],
-    ['Studies', [['i-sweep','Parameter Study',dlgStudy],['i-report','Study Results',dlgStudyResults],['i-run','Cancel',()=>guard(()=>rpc('analysis.cancel'))]]],
+    ['Studies', [['i-run','Optimize',dlgOptimize],['i-sweep','Parameter Study',dlgStudy],['i-report','Study Results',dlgStudyResults],['i-run','Cancel',()=>guard(()=>rpc('analysis.cancel'))]]],
     ['Boundaries', [['i-bnd', 'Assign', dlgBoundary]]],
     ['Excitations', [['i-port', 'Lumped Port (pick)', () => startPortPick('lumped')],
       ['i-port', 'Wave Port (pick)', () => startPortPick('wave')],
@@ -2003,16 +2060,12 @@ function displayProps(row, o) {
     await refreshGeometry(false);
   });
 
-  const sw = el('input', { type: 'color', value: o.color,
-    style: 'width:44px;height:19px;padding:0;border:1px solid var(--border);'
-      + 'background:none;cursor:pointer' });
-  sw.onchange = () => set('color', sw.value);
-  const reset = el('button', { class: 'lnk', title: 'Use the material colour',
-    onclick: () => set('color', '') }, 'reset');
-  row('Colour', el('div', { style: 'display:flex;gap:8px;align-items:center' },
-    sw, o.colorOverridden ? reset : null,
-    el('span', { class: 'hint', style: 'margin:0' },
-      o.colorOverridden ? '' : 'from material')));
+  row('Colour', el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
+    colorControl(o.color, c => set('color', c)),
+    o.colorOverridden ? el('button', { class: 'lnk', title: 'Use the material colour',
+      onclick: () => set('color', '') }, 'reset') : null,
+    o.colorOverridden ? null
+      : el('span', { class: 'hint', style: 'margin:0' }, 'from material')));
 
   const tr = el('input', { type: 'range', min: '0', max: '1', step: '0.05',
     value: String(o.transparency), style: 'width:110px' });
@@ -2060,6 +2113,90 @@ function cadProps(row, o) {
       }) }) }, c.exists ? 'Replace source…' : 'Locate file…'));
 }
 
+/* A small, ordinary palette first; the full colour dialog only on request.
+   Dozens of swatches make choosing slower, not faster -- an engineer wants
+   "copper", "FR4 green", "air blue" and then to be done. */
+const BASIC_COLORS = [
+  ['#b87333', 'Copper'], ['#d4af37', 'Gold'], ['#c0c0c0', 'Silver'],
+  ['#808080', 'Gray'], ['#d64545', 'Red'], ['#e8913a', 'Orange'],
+  ['#e6c229', 'Yellow'], ['#3f9d55', 'Green'], ['#2b79c2', 'Blue'],
+  ['#7b52b9', 'Purple'], ['#f2f2f2', 'White'], ['#2d2d2d', 'Black']];
+
+function colorControl(current, onPick) {
+  const wrap = el('div', { class: 'palette' });
+  const mark = c => (c || '').toLowerCase();
+  for (const [hex, name] of BASIC_COLORS) {
+    const b = el('button', { type: 'button', title: name, class: 'swatch'
+      + (mark(current) === hex ? ' on' : ''),
+      style: 'background:' + hex, onclick: () => onPick(hex) });
+    wrap.appendChild(b);
+  }
+  const custom = el('input', { type: 'color', value: current && /^#[0-9a-f]{6}$/i.test(current)
+    ? current : '#808080', style: 'position:absolute;opacity:0;width:0;height:0;pointer-events:none' });
+  custom.onchange = () => onPick(custom.value);
+  const more = el('button', { type: 'button', class: 'swatch more', title: 'More colours…',
+    onclick: () => custom.click() }, '…');
+  wrap.append(custom, more);
+  return wrap;
+}
+
+/* Several objects selected: one panel that edits them all.
+   Each control applies to every selected object in a single command, so one
+   Undo takes the whole change back. A control shows "mixed" when the objects
+   disagree, rather than pretending they share a value. */
+function multiProps(row) {
+  const d = STATE.design;
+  const names = STATE.selection || [];
+  const objs = names.map(n => d.objects.find(o => o.name === n)
+    || d.sheets.find(o => o.name === n)).filter(Boolean);
+  const solids = objs.filter(o => d.objects.includes(o));
+  const apply = (prop, value) => guard(async () => {
+    await rpc('modeler.setProperty', { names: objs.map(o => o.name), prop, value });
+    await refreshGeometry(false);
+  });
+  row('Selected', el('span', {}, objs.length + ' objects'));
+  row('', el('div', { class: 'hint', style: 'margin:0;max-width:210px;word-break:break-all' },
+    objs.map(o => o.name).join(', ')));
+
+  const mats = (window.MATERIALS || []).map(m => m.name);
+  const same = (f) => objs.every(o => f(o) === f(objs[0]));
+  const mixedMat = !same(o => o.material);
+  const none = !mixedMat && !objs[0].material;     // sheets with no material
+  const ms = sel('pm-multi', ((mixedMat || none) ? [mixedMat ? '— mixed —' : '— none —'] : [])
+    .concat(mats), mixedMat ? '— mixed —' : (none ? '— none —' : objs[0].material));
+  ms.onchange = () => { if (!ms.value.startsWith('—')) apply('material', ms.value); };
+  row('Material', ms);
+
+  row('Colour', el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' },
+    colorControl(same(o => o.color) ? objs[0].color : '', c => apply('color', c)),
+    el('button', { class: 'lnk', title: 'Use each material\'s own colour',
+      onclick: () => apply('color', '') }, 'reset all')));
+
+  const t0 = objs[0].transparency;
+  const tr = el('input', { type: 'range', min: '0', max: '1', step: '0.05',
+    value: String(t0), style: 'width:110px' });
+  const trv = el('span', {}, same(o => o.transparency) ? t0.toFixed(2) : 'mixed');
+  tr.oninput = () => { trv.textContent = Number(tr.value).toFixed(2); };
+  tr.onchange = () => apply('transparency', parseFloat(tr.value));
+  row('Transparency', el('div', { style: 'display:flex;gap:8px;align-items:center' },
+    tr, trv, el('button', { class: 'lnk', onclick: () => apply('transparency', '') },
+      'reset all')));
+
+  const vis = el('input', { type: 'checkbox' });
+  vis.checked = objs.every(o => o.visible !== false);
+  vis.indeterminate = !vis.checked && objs.some(o => o.visible !== false);
+  vis.onchange = () => apply('visible', vis.checked);
+  row('Visible', vis);
+
+  if (solids.length === objs.length) {
+    const si = el('input', { type: 'checkbox' });
+    si.checked = solids.every(o => o.solveInside);
+    si.indeterminate = !si.checked && solids.some(o => o.solveInside);
+    si.onchange = () => apply('solveInside', si.checked);
+    row('Solve inside', si);
+  }
+}
+
 function renderProps() {
   const p = $('#props-body');
   p.innerHTML = '';
@@ -2070,7 +2207,9 @@ function renderProps() {
       typeof v === 'string' || typeof v === 'number' ? String(v) : v)));
 
   const t = propTarget.type;
-  if (t === 'object' && d) {
+  if (t === 'multi' && d) {
+    multiProps(row);
+  } else if (t === 'object' && d) {
     const o = d.objects.find(x => x.name === propTarget.name);
     if (o) {
       const ni = inp('', o.name);
@@ -2183,6 +2322,9 @@ function renderProps() {
         { name: st.name, basisOrder: bo.value }));
       row('Basis order', bo);
       row('Sweeps', st.sweeps.length);
+      tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
+        el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
+          onclick: () => dlgSetup(st.name) }, 'Edit setup…'))));
       tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
         el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
           onclick: () => dlgSweep(st.name) }, 'Add frequency sweep…'),
@@ -2590,31 +2732,55 @@ function updateOverlay() {
 
 /* ------------------------------------------------------- drawing by point */
 /* Draw with the mouse; correct with the keyboard.
-   The old flow clicked two points and then threw a modal dialog over the
-   viewport — over the very thing being drawn — and asked for the numbers
-   again. The numbers now live in a panel beside the model: they follow the
-   cursor while you drag, every one of them is editable, and typing an exact
-   value and pressing Enter is the same action as clicking. Nothing is
-   committed until Create, and Esc backs out of one step at a time. */
+   Click to place a point, press Tab to type exact numbers, Enter to accept --
+   the same rhythm as HFSS. The numbers live in a panel beside the model, never
+   in a modal over it. Nothing is created until the last point is accepted, and
+   Esc backs out one step at a time.
+
+   Everything is drawn on a *work plane* -- XY, YZ or ZX -- at an offset along
+   its normal. "Height" is always the distance along that normal, so a box on
+   the YZ plane grows along X, a cylinder's axis is the plane normal, and a
+   rectangle lies in the plane. Hovering a flat face while the first point is
+   still to be placed adopts that face's plane (draw the patch on the
+   substrate's top). */
 
 let DRAW = null;
-/* {
-     kind, stage: 'p1'|'p2'|'h'|'ready',
-     p1, p2, height,        // metres, world coordinates
-     plane, snap, name, material
-   } */
+/* { kind, stage: 'p1'|'p2'|'h'|'ready', p1, p2, height, topRadius,
+     plane: 'xy'|'yz'|'zx', offset, faceSnap, typing, snap, name, material } */
 
+const PLANES = {
+  xy: { n: 2, u: 0, v: 1, label: 'XY', rect: 'xy' },
+  yz: { n: 0, u: 1, v: 2, label: 'YZ', rect: 'yz' },
+  zx: { n: 1, u: 2, v: 0, label: 'ZX', rect: 'xz' }
+};
 const SNAP_DIVISIONS = 20;
 const DRAW_TITLE = { box: 'Box by points', rectangle: 'Rectangle by points',
-                     cylinder: 'Cylinder by points' };
+                     cylinder: 'Cylinder by points', sphere: 'Sphere by points',
+                     cone: 'Cone by points', circle: 'Circle by points' };
+const DRAW_STAGES = { box: ['p1', 'p2', 'h'], rectangle: ['p1', 'p2'],
+  circle: ['p1', 'p2'], cylinder: ['p1', 'p2', 'h'], sphere: ['p1', 'p2'],
+  cone: ['p1', 'p2', 'h'] };
+const RADIAL = new Set(['cylinder', 'sphere', 'cone', 'circle']);
+const HAS_HEIGHT = new Set(['box', 'cylinder', 'cone']);
 const DRAW_STEP = {
-  box: { p1: 'click the first base corner', p2: 'click the opposite corner',
-         h: 'move to set the height, click to place', ready: 'ready — Create' },
-  rectangle: { p1: 'click the first corner', p2: 'click the opposite corner',
-               ready: 'ready — Create' },
-  cylinder: { p1: 'click the centre', p2: 'click to set the radius',
-              h: 'move to set the height, click to place',
-              ready: 'ready — Create' }
+  box: { p1: 'click the first base corner · Tab to type',
+         p2: 'click the opposite corner · Tab to type',
+         h: 'move to set the height, click to place · Tab to type',
+         ready: 'ready — Create' },
+  rectangle: { p1: 'click the first corner · Tab to type',
+               p2: 'click the opposite corner · Tab to type', ready: 'ready — Create' },
+  circle: { p1: 'click the centre · Tab to type',
+            p2: 'click to set the radius · Tab to type', ready: 'ready — Create' },
+  sphere: { p1: 'click the centre · Tab to type',
+            p2: 'click to set the radius · Tab to type', ready: 'ready — Create' },
+  cylinder: { p1: 'click the centre · Tab to type',
+              p2: 'click to set the radius · Tab to type',
+              h: 'move to set the height, click to place · Tab to type',
+              ready: 'ready — Create' },
+  cone: { p1: 'click the base centre · Tab to type',
+          p2: 'click to set the base radius · Tab to type',
+          h: 'move to set the height, click to place · Tab to type',
+          ready: 'ready — Create' }
 };
 
 function snapStep() {
@@ -2644,6 +2810,29 @@ function niceSnapStep(x) {
 const toU = m => Number((m / (UNIT_SCALE[U()] || 1e-3)).toPrecision(9));
 const fromU = v => parseFloat(v) * (UNIT_SCALE[U()] || 1e-3);
 
+const planeOf = () => PLANES[DRAW.plane];
+/* A world point from (u, v, n) coordinates on the work plane. */
+function planeXYZ(u, v, n) {
+  const P = planeOf(), out = [0, 0, 0];
+  out[P.u] = u; out[P.v] = v; out[P.n] = n;
+  return out;
+}
+function planeNormalVec(sign = 1) {
+  const n = [0, 0, 0]; n[planeOf().n] = sign; return n;
+}
+/* The picking plane: through the first point once it exists, else at the
+   plane's offset. */
+function drawPlaneObj() {
+  const P = planeOf();
+  const point = (DRAW.p1 && DRAW.stage !== 'p1') ? DRAW.p1.slice()
+    : (() => { const q = [0, 0, 0]; q[P.n] = DRAW.offset; return q; })();
+  return { normal: planeNormalVec(1), point };
+}
+/* Snap a picked point onto the work plane (the normal coordinate is fixed). */
+function onPlane(p, nval) {
+  const q = p.slice(); q[planeOf().n] = nval; return q;
+}
+
 async function startPointDraw(kind) {
   if (!VP) return toastError('3-D viewport is unavailable.');
   if (!await ensureDesign()) return;
@@ -2652,11 +2841,11 @@ async function startPointDraw(kind) {
   clearPicks();
   const z = (VP.bbox && VP.bbox[0]) ? VP.bbox[0][2] : 0;
   DRAW = {
-    kind, stage: 'p1',
-    p1: null, p2: null, height: 0,
-    plane: { normal: [0, 0, 1], point: [0, 0, z] },
-    snap: true, name: '', material: 'vacuum'
+    kind, stage: 'p1', p1: null, p2: null, height: 0, topRadius: 0,
+    plane: (DRAW && DRAW.plane) || 'xy', offset: 0, faceSnap: true,
+    typing: false, snap: true, name: '', material: 'vacuum'
   };
+  if (DRAW.plane === 'xy') DRAW.offset = z;
   buildDrawPanel();
   suggestName('shape', kind).then(n => {
     const f = $('#dw-name');
@@ -2665,7 +2854,7 @@ async function startPointDraw(kind) {
   updateDrawPanel();
   setStatus(`${DRAW_TITLE[kind] || kind}: ${DRAW_STEP[kind].p1}`, 'busy');
   $('#vp-hint').textContent =
-    'click to place · type a value and press Enter · S snap · Esc back';
+    'click to place · Tab to type values · Enter accept · S snap · P plane · Esc back';
 }
 
 function cancelPointDraw() {
@@ -2681,9 +2870,11 @@ function cancelPointDraw() {
 }
 
 /* Esc steps back through the draw rather than abandoning it: one mis-clicked
-   corner should not cost the whole operation. */
+   corner should not cost the whole operation. While typing, the first Esc only
+   hands the numbers back to the mouse. */
 function drawStepBack() {
   if (!DRAW) return;
+  DRAW.typing = false;
   if (DRAW.stage === 'ready' || DRAW.stage === 'h') {
     DRAW.stage = 'p2'; DRAW.p2 = null; DRAW.height = 0;
   } else if (DRAW.stage === 'p2') {
@@ -2692,6 +2883,16 @@ function drawStepBack() {
     cancelPointDraw();
     return;
   }
+  updateDrawPanel();
+}
+
+function setDrawPlane(name) {
+  if (!DRAW || !PLANES[name]) return;
+  DRAW.plane = name;
+  DRAW.p1 = DRAW.p2 = null; DRAW.height = 0; DRAW.stage = 'p1';
+  DRAW.offset = 0;
+  DRAW.faceSnap = false;                       // an explicit choice stays put
+  const cb = $('#dw-facesnap'); if (cb) cb.checked = false;
   updateDrawPanel();
 }
 
@@ -2705,6 +2906,28 @@ function buildDrawPanel() {
   box.appendChild(el('h4', {}, DRAW_TITLE[kind] || kind,
     el('span', { class: 'step', id: 'dw-step' }, '')));
 
+  // work plane: three buttons and an offset along the plane's normal
+  const planeRow = el('div', { class: 'row', id: 'dw-planes' },
+    el('label', {}, 'Plane'));
+  for (const k of ['xy', 'yz', 'zx'])
+    planeRow.appendChild(el('button', { type: 'button', id: 'dw-pl-' + k,
+      class: 'pbtn' + (DRAW.plane === k ? ' on' : ''),
+      onclick: () => setDrawPlane(k) }, PLANES[k].label));
+  box.appendChild(planeRow);
+  const off = el('input', { id: 'dw-off', type: 'text', spellcheck: 'false' });
+  off.addEventListener('input', () => {
+    const v = fromU(off.value);
+    if (Number.isFinite(v) && DRAW && DRAW.stage === 'p1') { DRAW.offset = v; DRAW.typing = true; }
+  });
+  box.appendChild(el('div', { class: 'row' },
+    el('label', { id: 'dw-offlab' }, 'Offset'), off));
+  const fsn = el('input', { type: 'checkbox', id: 'dw-facesnap', style: 'width:auto' });
+  fsn.checked = DRAW.faceSnap;
+  fsn.onchange = () => { DRAW.faceSnap = fsn.checked; };
+  box.appendChild(el('div', { class: 'row' },
+    el('label', { for: 'dw-facesnap' }, 'Plane from face'), fsn,
+    el('span', { class: 'note', style: 'margin:0' }, 'hover a flat face')));
+
   const grid = el('div', { class: 'dgrid' });
   grid.appendChild(el('span', {}));
   for (const a of ['X', 'Y', 'Z']) grid.appendChild(el('span', { class: 'hd' }, a));
@@ -2717,7 +2940,7 @@ function buildDrawPanel() {
       else {
         // 'input', not 'change': the preview should follow the keystrokes,
         // not wait for the field to lose focus.
-        i.addEventListener('input', () => drawFieldEdited(prefix, k));
+        i.addEventListener('input', () => { DRAW.typing = true; drawFieldEdited(prefix, k); });
         i.addEventListener('keydown', e => {
           if (e.key === 'Enter') { e.preventDefault(); drawFieldEdited(prefix, k, true); }
         });
@@ -2726,33 +2949,35 @@ function buildDrawPanel() {
     }
   };
   row('Cursor', 'dw-c', true);
-  row(kind === 'cylinder' ? 'Centre' : 'Corner 1', 'dw-a', false);
-  row(kind === 'cylinder' ? 'Rim' : 'Corner 2', 'dw-b', false);
-  if (kind !== 'cylinder') row('Size', 'dw-s', false);
+  row(RADIAL.has(kind) ? 'Centre' : 'Corner 1', 'dw-a', false);
+  row(RADIAL.has(kind) ? 'Rim' : 'Corner 2', 'dw-b', false);
+  if (!RADIAL.has(kind)) row('Size', 'dw-s', false);
   box.appendChild(grid);
 
-  if (kind === 'cylinder') {
-    const r = el('div', { class: 'row' }, el('label', {}, 'Radius'),
-      el('input', { id: 'dw-r', type: 'text', spellcheck: 'false' }));
-    r.querySelector('input').addEventListener('input', () => drawRadiusEdited());
-    r.querySelector('input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); drawRadiusEdited(true); } });
-    box.appendChild(r);
-  }
-  if (kind !== 'rectangle') {
-    const h = el('div', { class: 'row' }, el('label', {}, 'Height'),
-      el('input', { id: 'dw-h', type: 'text', spellcheck: 'false' }));
-    h.querySelector('input').addEventListener('input', () => drawHeightEdited());
-    h.querySelector('input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); drawHeightEdited(true); } });
-    box.appendChild(h);
-  }
+  const numRow = (label, id, onInput, onEnter) => {
+    const i = el('input', { id, type: 'text', spellcheck: 'false' });
+    i.addEventListener('input', () => { DRAW.typing = true; onInput(); });
+    i.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); onEnter(); } });
+    box.appendChild(el('div', { class: 'row' }, el('label', {}, label), i));
+  };
+  if (RADIAL.has(kind))
+    numRow('Radius', 'dw-r', () => drawRadiusEdited(), () => drawRadiusEdited(true));
+  if (HAS_HEIGHT.has(kind))
+    numRow('Height', 'dw-h', () => drawHeightEdited(), () => drawHeightEdited(true));
+  if (kind === 'cone')
+    numRow('Top radius', 'dw-r2', () => {
+      const v = fromU($('#dw-r2').value);
+      if (Number.isFinite(v) && v >= 0) { DRAW.topRadius = v; updateDrawPanel(); }
+    }, () => { if (drawIsComplete()) commitDraw(); });
 
   box.appendChild(el('div', { class: 'row' }, el('label', {}, 'Name'),
     inp('dw-name', '', 'text', { placeholder: 'auto', spellcheck: 'false' })));
   const mats = (window.MATERIALS || []).map(m => m.name);
+  const isSheet = kind === 'rectangle' || kind === 'circle';
   box.appendChild(el('div', { class: 'row' }, el('label', {}, 'Material'),
-    sel('dw-mat', mats.length ? mats : ['vacuum'], DRAW.material)));
+    sel('dw-mat', isSheet ? ['(none)'].concat(mats) : (mats.length ? mats : ['vacuum']),
+      isSheet ? '(none)' : DRAW.material)));
 
   const snap = el('input', { type: 'checkbox', id: 'dw-snap',
     style: 'width:auto' });
@@ -2764,8 +2989,8 @@ function buildDrawPanel() {
 
   box.appendChild(el('div', { class: 'note', id: 'dw-warn' }, ''));
   box.appendChild(el('div', { class: 'note' },
-    `Values are in ${u}. Click to place a point, or type the numbers and press `
-    + 'Enter. Esc steps back one point.'));
+    `Values are in ${u}. Click to place a point, or press Tab and type the `
+    + 'numbers; Enter accepts. Esc steps back one point.'));
   const create = el('button', { class: 'pri', id: 'dw-create',
     onclick: () => commitDraw() }, 'Create');
   box.appendChild(el('div', { class: 'acts' },
@@ -2785,14 +3010,28 @@ function setXYZ(prefix, p) {
 function updateDrawPanel(cursor) {
   if (!DRAW) return;
   const kind = DRAW.kind;
+  const P = planeOf();
   const step = $('#dw-step');
   if (step) step.textContent = (DRAW_STEP[kind] || {})[DRAW.stage] || '';
+  for (const k of Object.keys(PLANES)) {
+    const b = $('#dw-pl-' + k); if (b) b.classList.toggle('on', DRAW.plane === k);
+  }
+  const offf = $('#dw-off');
+  if (offf && document.activeElement !== offf)
+    offf.value = String(toU(DRAW.p1 ? DRAW.p1[P.n] : DRAW.offset));
+  const offl = $('#dw-offlab');
+  if (offl) offl.textContent = 'Offset ' + 'XYZ'[P.n];
+  if (offf) offf.disabled = DRAW.stage !== 'p1';
   if (cursor) setXYZ('dw-c', cursor);
   setXYZ('dw-a', DRAW.p1);
   setXYZ('dw-b', DRAW.p2);
-  if (kind !== 'cylinder') {
-    const size = (DRAW.p1 && DRAW.p2)
-      ? [0, 1, 2].map(k => DRAW.p2[k] - DRAW.p1[k]) : null;
+  if (!RADIAL.has(kind)) {
+    // Size per world axis; along the plane normal it is the height
+    let size = null;
+    if (DRAW.p1 && DRAW.p2) {
+      size = [0, 1, 2].map(k => DRAW.p2[k] - DRAW.p1[k]);
+      if (HAS_HEIGHT.has(kind)) size[P.n] = DRAW.height;
+    }
     setXYZ('dw-s', size);
   }
   const rf = $('#dw-r');
@@ -2801,6 +3040,8 @@ function updateDrawPanel(cursor) {
   const hf = $('#dw-h');
   if (hf && document.activeElement !== hf)
     hf.value = DRAW.height ? String(toU(DRAW.height)) : (hf.value || '');
+  const r2 = $('#dw-r2');
+  if (r2 && document.activeElement !== r2) r2.value = String(toU(DRAW.topRadius));
   const ss = $('#dw-snapstep');
   if (ss) ss.textContent = DRAW.snap ? fmtLen(snapStep(), U()) : 'off';
   const create = $('#dw-create');
@@ -2821,28 +3062,31 @@ const drawRadius = () => DRAW && DRAW.p1 && DRAW.p2
   ? Math.hypot(DRAW.p2[0] - DRAW.p1[0], DRAW.p2[1] - DRAW.p1[1],
                DRAW.p2[2] - DRAW.p1[2]) : 0;
 
-/* Why Create is greyed out, in the words of the thing that is wrong.
-   A box drawn edge-on to the camera, or two clicks that snap to the same
-   grid line, gives a zero-width body — which cannot be made, and previously
-   just left a dead button with no explanation. Every one of these is fixable
-   by typing the missing number into the panel. */
+/* In-plane extent of the two corners (u, v). */
+function planeExtent() {
+  const P = planeOf();
+  return [Math.abs(DRAW.p2[P.u] - DRAW.p1[P.u]), Math.abs(DRAW.p2[P.v] - DRAW.p1[P.v])];
+}
+
+/* Why Create is greyed out, in the words of the thing that is wrong. */
 function drawBlocker() {
   if (!DRAW) return '';
   if (!DRAW.p1) return 'Place the first point.';
-  if (!DRAW.p2) return DRAW.kind === 'cylinder'
+  if (!DRAW.p2) return RADIAL.has(DRAW.kind)
     ? 'Set the radius.' : 'Place the opposite corner.';
-  const d = [0, 1, 2].map(k => Math.abs(DRAW.p2[k] - DRAW.p1[k]));
-  if (DRAW.kind === 'cylinder') {
+  const P = planeOf();
+  if (RADIAL.has(DRAW.kind)) {
     if (drawRadius() <= 1e-12) return 'The radius is zero.';
-    if (Math.abs(DRAW.height) <= 1e-12) return 'The height is zero.';
+    if (HAS_HEIGHT.has(DRAW.kind) && Math.abs(DRAW.height) <= 1e-12)
+      return 'The height is zero.';
     return '';
   }
+  const ext = planeExtent();
+  const zero = [0, 1].filter(i => ext[i] <= 1e-12)
+    .map(i => 'XYZ'[[P.u, P.v][i]]);
   if (DRAW.kind === 'rectangle') {
-    if (d.filter(v => v > 1e-12).length < 2)
-      return 'The rectangle is a line — give it width and height.';
-    return '';
+    return zero.length ? `${zero.join(' and ')} size is zero — drag further, or type it above.` : '';
   }
-  const zero = ['X', 'Y'].filter((_, k) => d[k] <= 1e-12);
   if (zero.length)
     return `${zero.join(' and ')} size is zero — drag further, or type it above.`;
   if (Math.abs(DRAW.height) <= 1e-12) return 'The height is zero.';
@@ -2851,13 +3095,20 @@ function drawBlocker() {
 
 function drawIsComplete() {
   if (!DRAW || !DRAW.p1 || !DRAW.p2) return false;
-  if (DRAW.kind === 'rectangle') {
-    const d = [0, 1, 2].map(k => Math.abs(DRAW.p2[k] - DRAW.p1[k]));
-    return d.filter(v => v > 1e-12).length >= 2;
+  if (RADIAL.has(DRAW.kind)) {
+    return drawRadius() > 1e-12
+      && (!HAS_HEIGHT.has(DRAW.kind) || Math.abs(DRAW.height) > 1e-12);
   }
-  if (DRAW.kind === 'cylinder') return drawRadius() > 1e-12 && Math.abs(DRAW.height) > 1e-12;
-  const d = [0, 1, 2].map(k => Math.abs(DRAW.p2[k] - DRAW.p1[k]));
-  return d[0] > 1e-12 && d[1] > 1e-12 && Math.abs(DRAW.height) > 1e-12;
+  const ext = planeExtent();
+  if (DRAW.kind === 'rectangle') return ext[0] > 1e-12 && ext[1] > 1e-12;
+  return ext[0] > 1e-12 && ext[1] > 1e-12 && Math.abs(DRAW.height) > 1e-12;
+}
+
+/* Which stage a given prefix completes, and where it leads. */
+function drawNextStage() {
+  const st = DRAW_STAGES[DRAW.kind];
+  const i = st.indexOf(DRAW.stage);
+  return i >= 0 && i + 1 < st.length ? st[i + 1] : 'ready';
 }
 
 /* A field edited by hand is as good as a click: it fills the value in and,
@@ -2866,25 +3117,30 @@ function drawFieldEdited(prefix, k, advance) {
   if (!DRAW) return;
   const v = fromU($('#' + prefix + k).value);
   if (!Number.isFinite(v)) return updateDrawPanel();
-  const base = DRAW.plane.point;
+  const P = planeOf();
+  const base = (() => { const q = [0, 0, 0]; q[P.n] = DRAW.offset; return q; })();
   if (prefix === 'dw-a') {
     DRAW.p1 = (DRAW.p1 || base.slice()).slice();
     DRAW.p1[k] = v;
-    if (DRAW.stage === 'p1' && advance) {
-      DRAW.stage = 'p2';
-      DRAW.plane = { normal: [0, 0, 1], point: DRAW.p1.slice() };
-    }
+    if (DRAW.stage === 'p1' && advance) DRAW.stage = drawNextStage();
+    if (DRAW.p2) DRAW.p2[P.n] = DRAW.p1[P.n];
   } else if (prefix === 'dw-b') {
     DRAW.p2 = (DRAW.p2 || (DRAW.p1 || base).slice()).slice();
     DRAW.p2[k] = v;
-    if (DRAW.stage === 'p2' && advance)
-      DRAW.stage = DRAW.kind === 'rectangle' ? 'ready' : 'h';
+    DRAW.p2[P.n] = (DRAW.p1 || base)[P.n];        // the second point stays on the plane
+    if (DRAW.stage === 'p2' && advance) DRAW.stage = drawNextStage();
   } else if (prefix === 'dw-s') {
     if (!DRAW.p1) DRAW.p1 = base.slice();
-    DRAW.p2 = (DRAW.p2 || DRAW.p1).slice();
-    DRAW.p2[k] = DRAW.p1[k] + v;
-    if (DRAW.stage === 'p2' && advance)
-      DRAW.stage = DRAW.kind === 'rectangle' ? 'ready' : 'h';
+    if (k === P.n && HAS_HEIGHT.has(DRAW.kind)) {
+      DRAW.height = v;                           // the normal axis is the height
+      if (!DRAW.p2) DRAW.p2 = DRAW.p1.slice();
+      if (DRAW.stage === 'h' && advance) DRAW.stage = 'ready';
+    } else {
+      DRAW.p2 = (DRAW.p2 || DRAW.p1).slice();
+      DRAW.p2[k] = DRAW.p1[k] + v;
+      DRAW.p2[P.n] = DRAW.p1[P.n];
+      if (DRAW.stage === 'p2' && advance) DRAW.stage = drawNextStage();
+    }
   }
   updateDrawPanel();
   if (advance && DRAW.stage === 'ready' && drawIsComplete()) commitDraw();
@@ -2895,10 +3151,12 @@ function drawRadiusEdited(advance) {
   const r = fromU($('#dw-r').value);
   if (!Number.isFinite(r) || r <= 0) return;
   const cur = drawRadius();
-  const dir = cur > 1e-12
-    ? [0, 1, 2].map(k => (DRAW.p2[k] - DRAW.p1[k]) / cur) : [1, 0, 0];
+  const P = planeOf();
+  let dir = cur > 1e-12
+    ? [0, 1, 2].map(k => (DRAW.p2[k] - DRAW.p1[k]) / cur) : null;
+  if (!dir) { dir = [0, 0, 0]; dir[P.u] = 1; }
   DRAW.p2 = [0, 1, 2].map(k => DRAW.p1[k] + dir[k] * r);
-  if (DRAW.stage === 'p2' && advance) DRAW.stage = 'h';
+  if (DRAW.stage === 'p2' && advance) DRAW.stage = drawNextStage();
   updateDrawPanel();
   if (advance && DRAW.stage === 'ready' && drawIsComplete()) commitDraw();
 }
@@ -2913,18 +3171,75 @@ function drawHeightEdited(advance) {
   if (advance && drawIsComplete()) commitDraw();
 }
 
+/* -------------------------------------------------------------- Tab typing */
+/* The fields that make sense for the step being drawn, in order. Tab walks
+   them; the mouse is paused while you type, and a click accepts what you typed. */
+function drawFieldOrder() {
+  const P = planeOf(), k = DRAW.kind, ids = [];
+  const axisIds = (prefix, axes) => axes.map(a => `${prefix}${a}`);
+  if (DRAW.stage === 'p1') ids.push(...axisIds('#dw-a', [P.u, P.v, P.n]));
+  else if (DRAW.stage === 'p2') {
+    if (RADIAL.has(k)) ids.push('#dw-r');
+    else ids.push(...axisIds('#dw-s', [P.u, P.v]));
+    if (HAS_HEIGHT.has(k)) ids.push(k === 'box' ? `#dw-s${P.n}` : '#dw-h');
+    if (k === 'cone') ids.push('#dw-r2');
+  } else {                                     // 'h' or 'ready'
+    if (HAS_HEIGHT.has(k)) ids.push(k === 'box' ? `#dw-s${P.n}` : '#dw-h');
+    if (k === 'cone') ids.push('#dw-r2');
+    if (!ids.length) ids.push(RADIAL.has(k) ? '#dw-r' : `#dw-s${P.u}`);
+  }
+  return ids.filter(id => $(id));
+}
+function drawTab(backwards) {
+  if (!DRAW) return;
+  DRAW.typing = true;
+  const ids = drawFieldOrder();
+  if (!ids.length) return;
+  const cur = ids.findIndex(id => $(id) === document.activeElement);
+  const next = cur < 0 ? (backwards ? ids.length - 1 : 0)
+    : (cur + (backwards ? ids.length - 1 : 1)) % ids.length;
+  const f = $(ids[next]);
+  if (f) { f.focus(); f.select(); }
+}
+
 /* ------------------------------------------------------------- the picks */
+/* A hovered or clicked point: on the work plane, or -- before the first
+   point -- on a flat face under the cursor, which then becomes the plane. */
+function drawResolvePoint(px, py) {
+  const P = planeOf();
+  if (DRAW.stage === 'p1' && DRAW.faceSnap) {
+    const hit = VP.pick(px, py);
+    const nrm = hit && hit.meta && hit.meta.normal;
+    if (nrm) {
+      const ax = [0, 1, 2].find(k => Math.abs(nrm[k]) > 0.999);
+      if (ax !== undefined) {
+        const key = ['yz', 'zx', 'xy'][ax];
+        DRAW.plane = key;
+        DRAW.offset = hit.point[ax];
+        return onPlane(hit.point, hit.point[ax]);
+      }
+    }
+  }
+  const pl = drawPlaneObj();
+  const h = VP.planePoint(px, py, pl);
+  if (!h) return null;
+  const nval = DRAW.p1 && DRAW.stage !== 'p1' ? DRAW.p1[P.n] : DRAW.offset;
+  return onPlane(h.point, nval);
+}
+
 function drawPickHover(px, py) {
   if (!DRAW) return;
   updateCursorReadout(px, py);
+  if (DRAW.typing) return;                     // the keyboard owns the numbers
   if (DRAW.stage === 'h') {
     const h = heightFromCursor(px, py);
     if (h !== null) { DRAW.height = snapScalar(h); updateDrawPanel(); }
     return;
   }
-  const hit = VP.planePoint(px, py, DRAW.plane);
-  if (!hit) return;
-  const p = snapPoint(hit.point);
+  if (DRAW.stage === 'ready') return;
+  const raw = drawResolvePoint(px, py);
+  if (!raw) return;
+  const p = snapPoint(raw);
   if (DRAW.stage === 'p1') DRAW.p1 = p;
   else if (DRAW.stage === 'p2') DRAW.p2 = p;
   updateDrawPanel(p);
@@ -2932,6 +3247,15 @@ function drawPickHover(px, py) {
 
 function drawPickClick(px, py) {
   if (!DRAW) return false;
+  if (DRAW.typing) {                           // a click accepts what was typed
+    const stageBefore = DRAW.stage;
+    if (stageBefore === 'p1' && !DRAW.p1) return true;
+    if (stageBefore !== 'ready') DRAW.stage = drawNextStage();
+    DRAW.typing = false;
+    updateDrawPanel();
+    if (DRAW.stage === 'ready' && drawIsComplete()) commitDraw();
+    return true;
+  }
   if (DRAW.stage === 'h') {
     const h = heightFromCursor(px, py);
     if (h !== null) DRAW.height = snapScalar(h);
@@ -2940,24 +3264,22 @@ function drawPickClick(px, py) {
     if (drawIsComplete()) commitDraw();
     return true;
   }
-  const hit = VP.planePoint(px, py, DRAW.plane);
-  if (!hit) return true;
-  const p = snapPoint(hit.point);
+  const raw = drawResolvePoint(px, py);
+  if (!raw) return true;
+  const p = snapPoint(raw);
   if (DRAW.stage === 'p1') {
     DRAW.p1 = p;
-    // the plane the first point landed on carries the rest of the draw
-    DRAW.plane = { normal: [0, 0, 1], point: p.slice() };
-    DRAW.stage = 'p2';
+    DRAW.offset = p[planeOf().n];
+    DRAW.stage = drawNextStage();
   } else if (DRAW.stage === 'p2') {
     DRAW.p2 = p;
-    if (DRAW.kind === 'rectangle') {
-      DRAW.stage = 'ready';
+    DRAW.stage = drawNextStage();
+    if (DRAW.stage === 'h' && !DRAW.height) DRAW.height = snapStep();
+    if (DRAW.stage === 'ready') {
       updateDrawPanel();
       if (drawIsComplete()) commitDraw();
       return true;
     }
-    DRAW.stage = 'h';
-    if (!DRAW.height) DRAW.height = snapStep();
   }
   setStatus(`${DRAW_TITLE[DRAW.kind]}: ${DRAW_STEP[DRAW.kind][DRAW.stage]}`,
     'busy');
@@ -2966,18 +3288,15 @@ function drawPickClick(px, py) {
 }
 
 /* The height step. The cursor is off the base plane by then, so the ray is
-   closed against the vertical line through the second corner — the point on
-   that line nearest the ray is the height the cursor is pointing at.
-
-   With the line P(t) = a + t n and the ray Q(s) = o + s d, minimising
-   |P - Q|^2 gives t = (n·w0 - (d·n)(d·w0)) / (1 - (d·n)^2), where w0 = o - a.
-   The sign of that had been inverted, so the box grew downwards when the
-   cursor went up and the preview ran away from the mouse. */
+   closed against the line through the second corner along the plane normal —
+   the point on that line nearest the ray is the height the cursor is pointing
+   at. With the line P(t) = a + t n and the ray Q(s) = o + s d, minimising
+   |P - Q|^2 gives t = (n·w0 - (d·n)(d·w0)) / (1 - (d·n)^2), w0 = o - a. */
 function heightFromCursor(px, py) {
-  if (!DRAW || !DRAW.p2 || !VP.ray) return null;
+  if (!DRAW || !DRAW.p1 || !VP.ray) return null;
   const r = VP.ray(px, py);
   if (!r) return null;
-  const o = r.origin, d = r.dir, a = DRAW.p2, n = [0, 0, 1];
+  const o = r.origin, d = r.dir, a = DRAW.p2 || DRAW.p1, n = planeNormalVec(1);
   const w0 = [o[0] - a[0], o[1] - a[1], o[2] - a[2]];
   const b = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
   const dw = d[0] * w0[0] + d[1] * w0[1] + d[2] * w0[2];
@@ -2992,26 +3311,59 @@ function updateDrawPreview() {
   if (!DRAW || !VP) return;
   const lab = $('#vp-dim');
   const a = DRAW.p1, b = DRAW.p2;
-  if (!a) { VP.setDraft(null); if (lab) lab.style.display = 'none'; return; }
-  if (!b) { VP.setDraft(null); if (lab) lab.style.display = 'none'; return; }
-
-  let strip;
-  let text;
-  if (DRAW.kind === 'cylinder') {
-    strip = circleStrip(a, drawRadius(), DRAW.height);
-    text = `r ${fmtLen(drawRadius(), U())}`
-      + (DRAW.height ? ` × h ${fmtLen(Math.abs(DRAW.height), U())}` : '');
-  } else if (DRAW.kind === 'rectangle' || !DRAW.height) {
-    strip = [a, [b[0], a[1], a[2]], b, [a[0], b[1], b[2]], a];
-    text = [0, 1].map(k => fmtLen(Math.abs(b[k] - a[k]), U())).join(' × ');
-  } else {
-    strip = boxStrip(a, b, DRAW.height);
-    text = [0, 1].map(k => fmtLen(Math.abs(b[k] - a[k]), U())).join(' × ')
-      + ' × ' + fmtLen(Math.abs(DRAW.height), U());
+  const hide = () => { VP.setDraft(null); if (lab) lab.style.display = 'none'; };
+  if (!a || !b) return hide();
+  const P = planeOf();
+  const nval = a[P.n];
+  const uv = p => [p[P.u], p[P.v]];
+  const [au, av] = uv(a), [bu, bv] = uv(b);
+  const h = DRAW.height || 0;
+  let strip, text;
+  const rect = (z) => [planeXYZ(au, av, z), planeXYZ(bu, av, z),
+                       planeXYZ(bu, bv, z), planeXYZ(au, bv, z), planeXYZ(au, av, z)];
+  const ring = (c, r, z, n = 48) => {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = 2 * Math.PI * i / n;
+      pts.push(planeXYZ(c[0] + r * Math.cos(t), c[1] + r * Math.sin(t), z));
+    }
+    return pts;
+  };
+  const r = drawRadius();
+  const fl = v => fmtLen(Math.abs(v), U());
+  if (DRAW.kind === 'rectangle' || (DRAW.kind === 'box' && !h)) {
+    strip = rect(nval);
+    text = planeExtent().map(fl).join(' × ');
+  } else if (DRAW.kind === 'box') {
+    const lo = rect(nval), hi = rect(nval + h);
+    strip = [lo[0], lo[1], lo[2], lo[3], lo[0], hi[0], hi[1], lo[1], hi[1],
+             hi[2], lo[2], hi[2], hi[3], lo[3], hi[3], hi[0]];
+    text = planeExtent().map(fl).join(' × ') + ' × ' + fl(h);
+  } else if (DRAW.kind === 'circle') {
+    strip = ring([au, av], r, nval);
+    text = `r ${fl(r)}`;
+  } else if (DRAW.kind === 'sphere') {
+    const c = [au, av];
+    const circ = ring(c, r, nval);
+    const P2 = [];                              // a meridian pair, to read as a ball
+    for (let i = 0; i <= 48; i++) {
+      const t = 2 * Math.PI * i / 48;
+      P2.push(planeXYZ(c[0] + r * Math.cos(t), c[1], nval + r * Math.sin(t)));
+    }
+    strip = circ.concat(P2);
+    text = `r ${fl(r)}`;
+  } else {                                      // cylinder / cone
+    const lo = ring([au, av], r, nval);
+    if (!h) strip = lo;
+    else {
+      const rt = DRAW.kind === 'cone' ? DRAW.topRadius : r;
+      const hi = ring([au, av], rt, nval + h);
+      strip = lo.concat([hi[0]], hi, [lo[lo.length - 1]]);
+    }
+    text = `r ${fl(r)}` + (h ? ` × h ${fl(h)}` : '');
   }
   VP.setDraft(strip);
-  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2,
-               (a[2] + b[2]) / 2 + DRAW.height / 2];
+  const mid = planeXYZ((au + bu) / 2, (av + bv) / 2, nval + h / 2);
   const s = VP.project(mid);
   if (lab && s) {
     lab.textContent = text;
@@ -3021,60 +3373,44 @@ function updateDrawPreview() {
   }
 }
 
-/* All twelve edges of a box as one line strip (the viewport draws the draft
-   as a single strip, so the path revisits corners rather than lifting). */
-function boxStrip(a, b, h) {
-  const z0 = a[2], z1 = a[2] + h;
-  const c = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
-  const lo = c.map(p => [p[0], p[1], z0]);
-  const hi = c.map(p => [p[0], p[1], z1]);
-  return [lo[0], lo[1], lo[2], lo[3], lo[0],
-          hi[0], hi[1], lo[1], hi[1], hi[2], lo[2], hi[2], hi[3], lo[3],
-          hi[3], hi[0]];
-}
-
-function circleStrip(centre, r, h, n = 48) {
-  const ring = z => {
-    const pts = [];
-    for (let i = 0; i <= n; i++) {
-      const t = 2 * Math.PI * i / n;
-      pts.push([centre[0] + r * Math.cos(t), centre[1] + r * Math.sin(t), z]);
-    }
-    return pts;
-  };
-  const lo = ring(centre[2]);
-  if (!h) return lo;
-  const hi = ring(centre[2] + h);
-  return lo.concat([hi[0]], hi, [lo[n]]);
-}
-
 /* -------------------------------------------------------------- commit */
 async function commitDraw() {
   if (!DRAW || !drawIsComplete()) return;
-  const d = DRAW;
+  const d = DRAW, P = planeOf();
   const name = ($('#dw-name') && $('#dw-name').value) || '';
-  const material = ($('#dw-mat') && $('#dw-mat').value) || 'vacuum';
+  let material = ($('#dw-mat') && $('#dw-mat').value) || 'vacuum';
+  if (material === '(none)') material = 'vacuum';
   const m = v => String(v) + 'm';
-  const lo = [0, 1, 2].map(k => Math.min(d.p1[k], d.p2[k]));
+  const ext = [0, 1, 2].map(k => Math.abs(d.p2[k] - d.p1[k]));
+  const nvec = sign => { const v = [0, 0, 0]; v[P.n] = sign; return v; };
   const p = {};
-  let shape = d.kind;
+  const shape = d.kind;
   if (d.kind === 'rectangle') {
-    const size = [0, 1, 2].map(k => Math.abs(d.p2[k] - d.p1[k]));
-    const flat = size.map(v => v <= 1e-12);
+    const lo = [0, 1, 2].map(k => Math.min(d.p1[k], d.p2[k]));
+    lo[P.n] = d.p1[P.n];
     p.position = lo.map(m);
-    p.plane = flat[2] ? 'xy' : flat[0] ? 'yz' : 'xz';
+    p.plane = P.rect;
     const axes = { xy: [0, 1], yz: [1, 2], xz: [0, 2] }[p.plane];
-    p.size = [m(size[axes[0]]), m(size[axes[1]])];
-  } else if (d.kind === 'cylinder') {
+    p.size = [m(ext[axes[0]]), m(ext[axes[1]])];
+  } else if (d.kind === 'circle') {
     p.center = d.p1.map(m);
     p.radius = m(drawRadius());
+    p.axis = nvec(1);
+  } else if (d.kind === 'sphere') {
+    p.center = d.p1.map(m);
+    p.radius = m(drawRadius());
+  } else if (d.kind === 'cylinder' || d.kind === 'cone') {
+    p.center = d.p1.map(m);
     p.height = m(Math.abs(d.height));
-    p.axis = [0, 0, d.height < 0 ? -1 : 1];
-    if (d.height < 0) p.center = [d.p1[0], d.p1[1], d.p1[2]].map(m);
-  } else {
-    const size = [Math.abs(d.p2[0] - d.p1[0]), Math.abs(d.p2[1] - d.p1[1]),
-                  Math.abs(d.height)];
-    p.position = [lo[0], lo[1], Math.min(d.p1[2], d.p1[2] + d.height)].map(m);
+    p.axis = nvec(d.height < 0 ? -1 : 1);
+    if (d.kind === 'cylinder') p.radius = m(drawRadius());
+    else { p.r1 = m(drawRadius()); p.r2 = m(Math.min(d.topRadius, drawRadius() * 0.999999)); }
+  } else {                                      // box
+    const lo = [0, 1, 2].map(k => Math.min(d.p1[k], d.p2[k]));
+    lo[P.n] = Math.min(d.p1[P.n], d.p1[P.n] + d.height);
+    const size = ext.slice();
+    size[P.n] = Math.abs(d.height);
+    p.position = lo.map(m);
     p.size = size.map(m);
   }
   cancelPointDraw();
@@ -3613,6 +3949,8 @@ function treeContext(ev, type, name, extra) {
       ['Boolean…', dlgBoolean],
       null,
       ['Assign Boundary…', dlgBoundary],
+      ['Assign Wave Port…', () => dlgExcitation('wave')],
+      ['Assign Lumped Port…', () => dlgExcitation('lumped')],
       ['Add Mesh Operation…', dlgMeshOp],
       null,
       ['Hide', () => guard(async () => {
@@ -3638,8 +3976,13 @@ function treeContext(ev, type, name, extra) {
     items.push(['Properties…', () => showProps('port', name)],
       ['Delete', () => guard(() => rpc('excitation.delete', { name })
         .then(refreshAssignments))]);
+  } else if (type === 'sweep') {
+    const stn = (STATE.design.setups.find(x => x.sweeps.some(w => w.name === name)) || {}).name;
+    items.push(['Edit Sweep…', () => dlgSweep(stn, name)],
+      ['Delete', () => guard(() => rpc('analysis.deleteSweep', { setup: stn, name }))]);
   } else if (type === 'setup') {
-    items.push(['Properties…', () => showProps('setup', name)],
+    items.push(['Edit Setup…', () => dlgSetup(name)],
+      ['Properties…', () => showProps('setup', name)],
       ['Add Frequency Sweep…', () => dlgSweep(name)],
       ['Analyze', dlgAnalyze],
       null,
@@ -3904,6 +4247,7 @@ function setSelection(names) {
   VP && VP.setSelection(names);
   renderTree();
   if (names.length === 1) showProps('object', names[0]);
+  else if (names.length > 1) showProps('multi', '');
   refreshStatus();
   rpc('modeler.select', { names }).then(refreshMeasure).catch(() => {});
 }
@@ -4716,6 +5060,21 @@ async function boot() {
   $$('#bottomtabs button[data-b]').forEach(b =>
     b.onclick = () => selectBottom(b.dataset.b));
   $('#btn-clear-msgs').onclick = clearMessages;
+  // While a draw is running, Tab and Esc belong to it even from inside a field.
+  document.addEventListener('keydown', e => {
+    if (!DRAW || DIALOG_STACK.length) return;
+    const inField = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
+    if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); drawTab(e.shiftKey); }
+    else if (e.key === 'Escape' && inField) {
+      // from inside a field Esc only hands the numbers back to the mouse;
+      // the next Esc steps back a point
+      e.preventDefault(); e.stopPropagation();
+      document.activeElement.blur(); DRAW.typing = false; updateDrawPanel(); }
+    else if (!inField && (e.key === 'p' || e.key === 'P')) {
+      const order = ['xy', 'yz', 'zx'];
+      setDrawPlane(order[(order.indexOf(DRAW.plane) + 1) % 3]);
+    }
+  }, true);
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable || DIALOG_STACK.length) return;
     if (MEASURE_PICK && e.key === 'Escape') { cancelMeasurePick(); return; }

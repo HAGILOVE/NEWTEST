@@ -385,7 +385,7 @@ def solve_eigenmode(design, setup: Optional[str] = None, backend: str = "auto",
         prev = fr
         if df is not None and df <= st.delta_f and p >= st.min_passes:
             converged += 1
-            if converged >= design.config.adaptive.min_converged_passes:
+            if converged >= max(int(st.min_converged), design.config.adaptive.min_converged_passes):
                 break
         else:
             converged = 0
@@ -404,7 +404,8 @@ def solve_eigenmode(design, setup: Optional[str] = None, backend: str = "auto",
         if not good:
             raise RuntimeError("eigenmode refinement stopped: no mode "
                                "converged on this mesh")
-        mesh = remesh_from_error(design, mesh, err, max(good), backend, p)
+        mesh = remesh_from_error(design, mesh, err, max(good), backend, p,
+                                 st.refinement)
 
     sol = Solution(design, mesh, dm, np.array([m.f for m in modes]),
                    convergence=history)

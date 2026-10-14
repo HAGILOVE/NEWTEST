@@ -79,6 +79,21 @@ def metrics(sp, port=1, threshold=-10.0, freq=None):
     }
 
 
+def _num_or_text(v):
+    """A goal target is a number, or text with units such as ``2.45GHz``."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    t = str(v).strip()
+    try:
+        return float(t)
+    except ValueError:
+        return t
+
+
+def _opt_text(v):
+    return None if v in (None, "") else _num_or_text(v)
+
+
 def _clone(d):
     from ..model import Design
 
@@ -131,6 +146,58 @@ def study_worker(s, base, variable, values, setup, backend, adaptive):
             "warning" if isinstance(exc, SolveCancelled) else "error",
             "study",
         )
+    finally:
+        with s._lock:
+            s.job.running = False
+            s.job.done = True
+            s.job.finished = time.time()
+
+
+def optimize_worker(s, base, spec, goals):
+    """Run an optimisation on a copy of the design; progress goes to ``s``."""
+    from ..fem.control import SolveCancelled
+    from ..optimize import optimize
+
+    def on_point(rec):
+        with s._lock:
+            s.opt_results["rows"].append(rec)
+            best = min(s.opt_results["rows"], key=lambda r: r["cost"])
+            s.opt_results["best"] = {"eval": best["eval"], "cost": best["cost"],
+                                     "values": best["values"]}
+            s.job.freq_done = len(s.opt_results["rows"])
+            s.job.stage = (f"solve {len(s.opt_results['rows'])}/"
+                           f"{spec['maxEvals']}: best cost {best['cost']:.4g}")
+
+    try:
+        res = optimize(
+            base,
+            {k: tuple(v) for k, v in spec["variables"].items()},
+            goals,
+            setup=spec["setup"] or None,
+            method=spec["method"],
+            max_evals=spec["maxEvals"],
+            adaptive=spec["adaptive"],
+            backend=spec["backend"],
+            callback=on_point,
+            cancel=s.cancel_event,
+        )
+        with s._lock:
+            s.opt_results["status"] = res.stopped
+            s.opt_results["satisfied"] = res.satisfied
+            if res.history:
+                s.opt_results["expressions"] = res.expressions()
+                s.opt_results["best"] = {
+                    "eval": min(res.history, key=lambda r: r["cost"])["eval"],
+                    "cost": res.best_cost, "values": res.best}
+            s.job.stage = "cancelled" if res.stopped == "cancelled" else "complete"
+        s.messages.add(res.summary().replace("\n", "; "), "info", "optimize")
+    except Exception as exc:
+        with s._lock:
+            s.opt_results["status"] = "failed"
+            s.opt_results["error"] = str(exc)
+            s.job.error = str(exc)
+            s.job.stage = "cancelled" if isinstance(exc, SolveCancelled) else "failed"
+        s.messages.add(f"Optimization: {exc}", "error", "optimize")
     finally:
         with s._lock:
             s.job.running = False
@@ -326,6 +393,82 @@ def register(command):
             daemon=True,
         ).start()
         return {"ok": True, "cases": len(values)}
+
+
+    @command("analysis.optimize")
+    def optimize_start(
+        s, variables=None, goals=None, method="nelder-mead", maxEvals=30,
+        setup="", backend="auto", adaptive=False, **_
+    ):
+        """Start an Optimetrics-style search on a copy of the design."""
+        from ..optimize import Goal, METHODS, _parse_variables
+
+        if s.job.running:
+            raise ValueError("An analysis or study is already running")
+        d = s.require_design()
+        if method not in METHODS:
+            raise ValueError("Unknown optimizer: " + str(method))
+        if not isinstance(variables, dict) or not variables:
+            raise ValueError("Choose at least one variable to optimize")
+        if not isinstance(goals, list) or not goals:
+            raise ValueError("Define at least one goal")
+        if backend not in ("auto", "builtin", "occ"):
+            raise ValueError("Unknown mesh backend")
+        parsed = {}
+        for name, rng in variables.items():
+            if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+                raise ValueError(f"{name}: give a lower and an upper limit")
+            parsed[name] = (str(rng[0]), str(rng[1]))
+        _parse_variables(d, parsed)                      # validates names/limits
+        built = []
+        for g in goals:
+            built.append(Goal(
+                g.get("kind", ""), target=_num_or_text(g.get("target", 0)),
+                port=int(g.get("port", 1)), port2=int(g.get("port2", 1)),
+                f_start=_opt_text(g.get("fStart")), f_stop=_opt_text(g.get("fStop")),
+                mode=int(g.get("mode", 1)), weight=float(g.get("weight", 1.0) or 1.0)))
+        maxEvals = int(maxEvals)
+        if not 2 <= maxEvals <= 1000:
+            raise ValueError("Maximum solves must be between 2 and 1000")
+        d.get_setup(setup or None)
+        from .state import SolveJob
+
+        spec = {"variables": {k: list(v) for k, v in parsed.items()},
+                "goals": [g.describe() for g in built], "method": method,
+                "maxEvals": maxEvals, "setup": setup, "backend": backend,
+                "adaptive": bool(adaptive)}
+        with s._lock:
+            s.opt_results = {"spec": spec, "rows": [], "best": None,
+                             "status": "running"}
+            s.cancel_event.clear()
+            s.job = SolveJob(setup="Optimization", running=True,
+                             started=time.time(), freq_total=maxEvals,
+                             stage="starting")
+        threading.Thread(target=optimize_worker,
+                         args=(s, _clone(d), spec, built), daemon=True).start()
+        return {"ok": True, "maxEvals": maxEvals}
+
+    @command("analysis.optimizeResults")
+    def optimize_results(s, **_):
+        with s._lock:
+            r = copy.deepcopy(getattr(s, "opt_results", None) or {})
+        r["job"] = s.job.to_json()
+        return r
+
+    @command("analysis.optimizeApply")
+    def optimize_apply(s, **_):
+        """Adopt the optimum: set the variables and rebuild (undoable)."""
+        res = getattr(s, "opt_results", None) or {}
+        exprs = res.get("expressions")
+        if not exprs:
+            raise ValueError("No finished optimization with a result to apply")
+        d = s.require_design()
+        new = dict(d.variables)
+        new.update(exprs)
+        n = rebuild(d, new)
+        s.messages.add("Applied optimized variables: " + ", ".join(
+            f"{k} = {v}" for k, v in exprs.items()), "info", "optimize")
+        return {"ok": True, "rebuilt": n, "variables": exprs}
 
     @command("analysis.studyResults")
     def study_results(s, **_):
