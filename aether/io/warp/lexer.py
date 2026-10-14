@@ -1,14 +1,14 @@
 """
-Lexer for the Ansys ``.aedt`` project-tree text format.
+Lexer for the ``.warp`` project-tree text format.
 
-An ``.aedt`` file is a nested, tab-indented block tree::
+An ``.warp`` file is a nested, tab-indented block tree::
 
-    $begin 'AnsoftProject'
+    $begin 'WarpsProject'
         Created='Tue Sep 02 09:11:04 2025'
         $begin 'Desktop'
             Version(2024, 2)
         $end 'Desktop'
-    $end 'AnsoftProject'
+    $end 'WarpsProject'
 
 Two rules drive this implementation:
 
@@ -20,7 +20,7 @@ Two rules drive this implementation:
   is what makes an untouched round trip byte-for-byte identical.
 
 Logical lines may span several physical lines when brackets, parentheses or
-quotes are still open -- HFSS wraps long dataset and expression entries this
+quotes are still open -- Warps wraps long dataset and expression entries this
 way -- so the lexer joins them before handing anything to the parser.
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ from typing import Iterator, List, Optional, Tuple
 BEGIN_RE = re.compile(r"^\s*\$begin\s+'((?:[^'\\]|\\.)*)'\s*$")
 END_RE = re.compile(r"^\s*\$end\s+'((?:[^'\\]|\\.)*)'\s*$")
 # A length-prefixed binary payload: "BIN" then a fixed-width byte count, then
-# exactly that many bytes of raw data on the following lines. HFSS uses it to
+# exactly that many bytes of raw data on the following lines. Warps uses it to
 # carry Parasolid (.x_b) bodies, thumbnails and other attachments inside the
 # text tree, and the bytes contain quotes, brackets and even literal "$end"
 # sequences -- so they must be consumed by length, never scanned as lines.
@@ -74,14 +74,14 @@ def _unescape(s: str) -> str:
 
 def read_text(path: str) -> Tuple[str, str, str]:
     """
-    Read an ``.aedt`` (or ``.aedtz``) file.
+    Read an ``.warp`` (or ``.warpz``) file.
 
     Returns ``(text, encoding, newline)`` so the writer can reproduce the exact
     original byte conventions.
     """
-    if path.lower().endswith(".aedtz"):
-        from .archive import read_aedtz
-        return read_aedtz(path)
+    if path.lower().endswith(".warpz"):
+        from .archive import read_warpz
+        return read_warpz(path)
     with open(path, "rb") as fh:
         data = fh.read()
     return decode_bytes(data)
@@ -91,7 +91,7 @@ def decode_bytes(data: bytes) -> Tuple[str, str, str]:
     """Decode project bytes, preserving BOM presence and newline style."""
     import codecs
     # UTF-16 projects otherwise decode as Latin-1 with embedded NULs and
-    # silently appear to contain zero HFSS designs.
+    # silently appear to contain zero Warps designs.
     if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
         text=data.decode("utf-16")
         return text,"utf-16","\r\n" if "\r\n" in text[:65536] else "\n"
@@ -115,7 +115,7 @@ def split_logical(text: str) -> List[LogicalLine]:
     header is followed by exactly *count* bytes of binary payload that must be
     taken verbatim. Walking into such a payload line by line is what used to
     end in ``unterminated block 'x_b'`` on any project saved with native
-    (Parasolid) bodies -- which is most projects built in the HFSS modeller.
+    (Parasolid) bodies -- which is most projects built in the Warps modeller.
     """
     lines = text.split("\n")
     out: List[LogicalLine] = []
@@ -156,7 +156,7 @@ def split_logical(text: str) -> List[LogicalLine]:
         buf = [first]
         depth, in_str = _scan(first, 0, False)
         # A quoted value continues onto the next line only when the line ends
-        # with a backslash -- the continuation HFSS actually writes, in the
+        # with a backslash -- the continuation Warps actually writes, in the
         # base64 blocks. Without that rule one stray apostrophe swallows the
         # entire rest of the file, and the parse dies at the far end with
         # "unterminated string near offset 0": the damage is one character

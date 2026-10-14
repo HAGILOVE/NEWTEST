@@ -66,7 +66,7 @@ aether gui
 
 ```bash
 aether gui --template waveguide     # 템플릿으로 바로 시작
-aether gui --project my.aedt        # 기존 HFSS 프로젝트 열기
+aether gui --project my.warp        # 기존 Warps 프로젝트 열기
 aether gui --port 8800 --no-browser # 포트 고정, 브라우저 자동실행 끄기
 ```
 
@@ -162,13 +162,13 @@ Hide, Show All 등, 경계·포트·setup·메쉬 오퍼레이션은 Properties/
 받아서 Windows 에서 실패하던 문제). 읽을 수 없는 파일은 어떤 파일이고 무엇을
 시도하면 되는지 알려줌.
 
-HFSS 데스크탑에서 저장한 `.aedt` 파일도 열림. 파일이 손상되어 있어도
+Warps 데스크탑에서 저장한 `.warp` 파일도 열림. 파일이 손상되어 있어도
 **읽을 수 있는 부분은 그대로 열림** — 파싱 안 되는 구문은 원문 그대로 보존하고,
 따옴표가 안 닫힌 값은 그 줄에서 끝나며(예전엔 파일 끝까지 삼켜서
 `unterminated string near offset 0` 이 났음), 안 닫힌 블록은 복구하고 기록함. 모델러로 만든 프로젝트는 형상이
 Parasolid(`.x_b`) 바디로 파일 안에 바이너리로 들어 있는데, 이 바디들은
 `<프로젝트이름>.cad` 폴더로 추출되고 객체·재질·경계·포트·해석 설정은 정상적으로
-불러와짐. Parasolid 자체는 OpenCASCADE가 읽지 못하므로, HFSS에서
+불러와짐. Parasolid 자체는 OpenCASCADE가 읽지 못하므로, Warps에서
 Modeler ▸ Export ▸ .step 으로 내보낸 뒤 `Modeler ▸ Replace CAD Source…` 로
 연결하면 형상까지 완성됨.
 
@@ -180,8 +180,8 @@ Modeler ▸ Export ▸ .step 으로 내보낸 뒤 `Modeler ▸ Replace CAD Sourc
 ```bash
 mkdir run && cd run
 
-aether new demo.aedt --template microstrip   # 예제 프로젝트 생성
-aether solve demo.aedt                       # 해석 (~1초)
+aether new demo.warp --template microstrip   # 예제 프로젝트 생성
+aether solve demo.warp                       # 해석 (~1초)
 ```
 
 출력물이 옆에 같이 떨어짐:
@@ -202,7 +202,7 @@ demo_report.html      브라우저로 여는 리포트 (그래프 포함)
 | `waveguide` | WR-90 도파관, 적응 메시 3패스 | ~16 초 | TE10 `fc = 6.557 GHz`, S11 < −38 dB |
 
 ```bash
-aether new wg.aedt --template waveguide && aether solve wg.aedt
+aether new wg.warp --template waveguide && aether solve wg.warp
 ```
 
 ---
@@ -211,11 +211,11 @@ aether new wg.aedt --template waveguide && aether solve wg.aedt
 
 ```bash
 aether gui                                        # 그래픽 작업 공간 실행
-aether new       proj.aedt --template waveguide   # 시작용 프로젝트 생성
-aether info      proj.aedt                        # .aedt / .sNp / CAD 파일 들여다보기
-aether validate  proj.aedt                        # 파싱→쓰기 바이트 무결성 증명
-aether mesh      proj.aedt --size 0.003 --out m.vtu
-aether solve     proj.aedt --order 2 --passes 6 --fields
+aether new       proj.warp --template waveguide   # 시작용 프로젝트 생성
+aether info      proj.warp                        # .warp / .sNp / CAD 파일 들여다보기
+aether validate  proj.warp                        # 파싱→쓰기 바이트 무결성 증명
+aether mesh      proj.warp --size 0.003 --out m.vtu
+aether solve     proj.warp --order 2 --passes 6 --fields
 aether convert   meas.s2p out.ts --format MA      # 포맷 변환
 aether materials rogers                           # 재질 라이브러리 검색
 ```
@@ -283,17 +283,17 @@ d.assign_lumped_rlc("R1", sel, R=50.0)
 
 ---
 
-## 6. HFSS 프로젝트 열고 되쓰기
+## 6. Warps 프로젝트 열고 되쓰기
 
 ```python
 import aether as ae
 
-design, report = ae.open_hfss("project.aedt")
+design, report = ae.open_warps("project.warp")
 print(report)                 # 매핑 안 된 항목이 전부 여기 나옴
 print(design.summary())
 
 design.get_setup("Setup1").frequency = 12e9
-ae.save_hfss(design, "project_v2.aedt", mode="update")
+ae.save_warps(design, "project_v2.warp", mode="update")
 ```
 
 `mode="update"`는 원본 트리를 그 자리에서 고침 — **바꾼 문장만** 다시 렌더링하므로
@@ -303,7 +303,7 @@ mesh operation·optimetrics·report 정의·field overlay가 사라질 수 없�
 파일이 안 깨지는지 직접 확인:
 
 ```bash
-aether validate project.aedt
+aether validate project.warp
 # → round-trip byte-identical : YES
 ```
 
@@ -316,7 +316,7 @@ python examples/01_rectangular_waveguide.py   # WR-90, 해석해와 위상 비�
 python examples/02_coaxial_line.py            # TEM, 적분선, Zpv 추출
 python examples/03_lumped_port_line.py        # 평행판 선로, 정합/부정합       ~2초
 python examples/04_iris_coupled_cavity.py     # 내부 PEC 시트, 1극 대역통과
-python examples/05_hfss_roundtrip.py          # .aedt 읽기/수정/쓰기           ~1초
+python examples/05_warps_roundtrip.py          # .warp 읽기/수정/쓰기           ~1초
 python examples/06_cad_import.py              # STEP 내보내기→가져오기→해석
 ```
 

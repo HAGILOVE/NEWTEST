@@ -9,7 +9,7 @@ from the CAD kernel.  Two things fall out of that choice:
 1. The same tree can be replayed into any kernel (OpenCASCADE via gmsh today,
    something else tomorrow) -- see :mod:`aether.geometry.kernel`.
 2. The tree can be **serialised losslessly**, which is what lets Aether write
-   real HFSS ``.aedt`` primitive commands on export instead of dumping a
+   real Warps ``.warp`` primitive commands on export instead of dumping a
    faceted mesh.  A round-tripped project keeps its parametric history.
 
 All lengths are SI metres internally; constructors accept unit strings.

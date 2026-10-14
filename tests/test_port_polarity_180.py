@@ -75,7 +75,7 @@ def test_assign_with_ground_and_signal_points(session):
 
 def test_a_reversed_port_is_saved_and_reloaded(session, tmp_path):
     call(session, "excitation.setPolarity", name="P1", flip=True)
-    path = str(tmp_path / "p.aedt")
+    path = str(tmp_path / "p.warp")
     call(session, "project.save", path=path, withResults=False)
     from aether.gui.state import Session
     s2 = Session()

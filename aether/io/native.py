@@ -98,7 +98,7 @@ def decode(data):
 
 
 def _shapes(snapshot):
-    from .aedt.writer import _walk_shapes
+    from .warp.writer import _walk_shapes
     from ..geometry.primitives import ImportedShape
     for obj in snapshot['solids'] + snapshot['sheets']:
         for shape in _walk_shapes(obj.shape):

@@ -333,7 +333,7 @@ def test_an_imported_body_survives_save_and_reopen(sess, step_20mm, tmp_path):
     dispatch(sess, "modeler.importCad", {"path": step_20mm, "name": "Part"})
     dispatch(sess, "modeler.transform",
              {"names": ["Part"], "op": "move", "params": {"dz": "3mm"}})
-    proj = str(tmp_path / "saved.aedt")
+    proj = str(tmp_path / "saved.warp")
     dispatch(sess, "project.save", {"path": proj})
     assert list((tmp_path / "saved.cad").glob("*.step"))
 
@@ -352,7 +352,7 @@ def test_an_imported_body_survives_save_and_reopen(sess, step_20mm, tmp_path):
 def test_a_reopened_project_keeps_the_import_unit(sess, step_20mm, tmp_path):
     dispatch(sess, "modeler.importCad",
              {"path": step_20mm, "name": "Part", "unit": "in"})
-    proj = str(tmp_path / "inches.aedt")
+    proj = str(tmp_path / "inches.warp")
     dispatch(sess, "project.save", {"path": proj})
     s2 = Session()
     dispatch(s2, "project.open", {"path": proj})
@@ -368,7 +368,7 @@ def test_a_missing_cad_source_is_reported_not_dropped(sess, step_20mm, tmp_path)
     dispatch(sess, "boundary.assign",
              {"name": "PerfE1", "type": "pec",
               "selector": {"kind": "object", "object": "Part"}})
-    proj = str(tmp_path / "orphan.aedt")
+    proj = str(tmp_path / "orphan.warp")
     dispatch(sess, "project.save", {"path": proj})
     import shutil
     shutil.rmtree(tmp_path / "orphan.cad")

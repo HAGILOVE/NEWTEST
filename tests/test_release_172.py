@@ -58,7 +58,7 @@ def test_missing_geometry_and_material_block_import():
 def test_import_flags_survive_save_reopen_and_material_repair(tmp_path):
     s=new_session();s.design.solids[0].import_material='unknown alloy'
     s.design.import_issues=["part 'LostPart': unsupported creation"]
-    p=str(tmp_path/'flags.aedtz')
+    p=str(tmp_path/'flags.warpz')
     dispatch(s,'project.save',{'path':p});dispatch(s,'project.open',{'path':p})
     assert any('material' in e for e in import_errors(s.design))
     assert any('LostPart' in e for e in import_errors(s.design))

@@ -101,7 +101,7 @@ def test_edit_variable_transform_and_undo():
     assert s.design.bounding_box()[1][0] == pytest.approx(0.01643)
 
 
-@pytest.mark.parametrize("ext", ["aedt", "aedtz"])
+@pytest.mark.parametrize("ext", ["warp", "warpz"])
 def test_parameters_and_solver_controls_survive_repeated_save(tmp_path, ext):
     s = session()
     path = str(tmp_path / ("변수 모델." + ext))
@@ -144,7 +144,7 @@ def test_all_parametric_primitives_roundtrip_and_rebuild(tmp_path, kind, params)
     s.new_project("Primitives")
     dispatch(s, "parameters.set", {"variables": {"W": "5mm"}})
     dispatch(s, "modeler.draw", {"shape": kind, "name": "part", "params": params})
-    p = str(tmp_path / "p.aedt")
+    p = str(tmp_path / "p.warp")
     dispatch(s, "project.save", {"path": p})
     dispatch(s, "project.open", {"path": p})
     dispatch(s, "parameters.set", {"variables": {"W": "8mm"}})
@@ -160,7 +160,7 @@ def test_boolean_children_rebuild_after_save(tmp_path):
     d.solids[0].shape = d.solids[0].shape - ae.Box(
         (0.001, 0.001, 0.001), (0.001, 0.001, 0.001)
     )
-    p = str(tmp_path / "csg.aedt")
+    p = str(tmp_path / "csg.warp")
     dispatch(s, "project.save", {"path": p})
     dispatch(s, "project.open", {"path": p})
     dispatch(s, "parameters.set", {"variables": {"W": "30mm"}})
@@ -390,7 +390,7 @@ def test_http_project_edit_save_reopen_and_static_ui(tmp_path):
             "modeler.draw",
             {"shape": "box", "name": "part", "params": {"size": ["W", "2mm", "3mm"]}},
         )
-        path = str(tmp_path / "http.aedtz")
+        path = str(tmp_path / "http.warpz")
         rpc("project.save", {"path": path})
         rpc("parameters.set", {"variables": {"W": "8mm"}})
         rpc("project.save")

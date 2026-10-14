@@ -3,12 +3,12 @@ Command-line interface: ``aether <command> ...``
 
     aether doctor                       check the Python environment
     aether gui                          open the Aether Desktop workspace
-    aether new        <file.aedt>       write a small, ready-to-solve project
-    aether info       <file>            inspect an .aedt / .sNp / CAD file
-    aether convert    <in> <out>        .aedt <-> .aedtz, .sNp <-> .ts, CAD
-    aether validate   <file.aedt>       parse + round-trip integrity check
-    aether mesh       <file.aedt>       generate and report the mesh
-    aether solve      <file.aedt>       run the analysis, write results
+    aether new        <file.warp>       write a small, ready-to-solve project
+    aether info       <file>            inspect an .warp / .sNp / CAD file
+    aether convert    <in> <out>        .warp <-> .warpz, .sNp <-> .ts, CAD
+    aether validate   <file.warp>       parse + round-trip integrity check
+    aether mesh       <file.warp>       generate and report the mesh
+    aether solve      <file.warp>       run the analysis, write results
     aether materials  [pattern]         list the material library
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _p_gui(args) -> int:
 
 def _p_new(args) -> int:
     """Write a small, fast, physically meaningful starter project."""
-    from .io.aedt.writer import write_project
+    from .io.warp.writer import write_project
     from .model import Design
     import math
     from .core.constants import c0, eta0
@@ -91,7 +91,7 @@ def _p_new(args) -> int:
 
     path = args.path
     if not os.path.splitext(path)[1]:
-        path += ".aedt"
+        path += ".warp"
     write_project(path, d, mode="create")
     print(f"wrote {path}  [{t}]")
     print(d.summary())
@@ -102,16 +102,16 @@ def _p_new(args) -> int:
 def _p_info(args) -> int:
     path = args.path
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".aedt", ".aedtz"):
-        from .io.aedt.tree import AedtDocument
-        doc = AedtDocument.parse(path)
+    if ext in (".warp", ".warpz"):
+        from .io.warp.tree import WarpDocument
+        doc = WarpDocument.parse(path)
         print(f"{path}\n  encoding : {doc.encoding}\n  designs  : "
               f"{len(doc.designs())}")
-        for i, d in enumerate(doc.hfss_designs() or doc.designs()):
+        for i, d in enumerate(doc.warps_designs() or doc.designs()):
             print(f"  [{i}] {str(d.get('Name','?')):<24} "
                   f"type={d.get('DesignType')} solution={d.get('SolutionType')}")
-        from .io.aedt.translate import read_design
-        for i in range(len(doc.hfss_designs() or doc.designs())):
+        from .io.warp.translate import read_design
+        for i in range(len(doc.warps_designs() or doc.designs())):
             des, rep = read_design(doc, i)
             print(rep)
             print(des.summary())
@@ -130,9 +130,9 @@ def _p_info(args) -> int:
 def _p_convert(args) -> int:
     src, dst = args.src, args.dst
     se, de = (os.path.splitext(x)[1].lower() for x in (src, dst))
-    if se in (".aedt", ".aedtz") and de in (".aedt", ".aedtz"):
-        from .io.aedt.tree import AedtDocument
-        AedtDocument.parse(src).write(dst)
+    if se in (".warp", ".warpz") and de in (".warp", ".warpz"):
+        from .io.warp.tree import WarpDocument
+        WarpDocument.parse(src).write(dst)
     elif se in (".ts",) or se.startswith(".s"):
         from .io.touchstone import read_touchstone, write_touchstone
         sp = read_touchstone(src)
@@ -149,10 +149,10 @@ def _p_convert(args) -> int:
 
 
 def _p_validate(args) -> int:
-    from .io.aedt.tree import AedtDocument
+    from .io.warp.tree import WarpDocument
     with open(args.path, "rb") as fh:
         original = fh.read()
-    doc = AedtDocument.parse(args.path)
+    doc = WarpDocument.parse(args.path)
     text = doc.to_text().encode(doc.encoding or "utf-8")
     ok = text == original
     print(f"parsed {len(doc.designs())} design block(s)")
@@ -169,16 +169,16 @@ def _p_validate(args) -> int:
                     break
         if len(a) != len(b):
             print(f"  line count {len(a)} -> {len(b)}")
-    from .io.aedt.translate import read_design
-    for i in range(len(doc.hfss_designs() or doc.designs())):
+    from .io.warp.translate import read_design
+    for i in range(len(doc.warps_designs() or doc.designs())):
         _, rep = read_design(doc, i)
         print(rep)
     return 0 if ok else 1
 
 
 def _load_design(path: str, index):
-    from . import open_hfss
-    d, rep = open_hfss(path, index)
+    from . import open_warps
+    d, rep = open_warps(path, index)
     if rep.unresolved:
         log.warning("%d unresolved item(s) -- see the import report",
                     len(rep.unresolved))
@@ -262,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-token", action="store_true",
                    help="disable the API token (only for automated testing)")
-    s.add_argument("--project", default=None, help="open this .aedt on start")
+    s.add_argument("--project", default=None, help="open this .warp on start")
     s.add_argument("--template", default=None, choices=TEMPLATES,
                    help="start from a template")
     s.set_defaults(func=_p_gui)
@@ -283,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--unit", default="GHz")
     s.set_defaults(func=_p_convert)
 
-    s = sub.add_parser("validate", help="check .aedt parse/write integrity")
+    s = sub.add_parser("validate", help="check .warp parse/write integrity")
     s.add_argument("path")
     s.set_defaults(func=_p_validate)
 

@@ -1,7 +1,7 @@
 """
 Optimisation: tune a dielectric slab until it stops reflecting.
 
-``slab_matching_parametric.aedt`` has the slab thickness bound to the design
+``slab_matching_parametric.warp`` has the slab thickness bound to the design
 variable ``T``.  A slab in a waveguide reflects nothing at the frequency where
 it is half a guide wavelength thick, so the optimiser should land on
 T = pi / sqrt(k0^2 eps_r - kc^2) = 11.96 mm for 10 GHz (the coarse first-order
@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def main():
     ae.set_log_level("WARNING")
-    design, _ = ae.open_hfss(os.path.join(HERE, "slab_matching_parametric.aedt"))
+    design, _ = ae.open_warps(os.path.join(HERE, "slab_matching_parametric.warp"))
     k0 = 2 * math.pi * 10e9 / ae.c0
     want = math.pi / math.sqrt(k0 ** 2 * 2.0 - (math.pi / 22.86e-3) ** 2)
 

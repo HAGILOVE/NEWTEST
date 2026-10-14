@@ -78,7 +78,7 @@ def run():
         )
     with tempfile.TemporaryDirectory() as folder:
         s = waveguide()
-        path = str(Path(folder) / "roundtrip.aedtz")
+        path = str(Path(folder) / "roundtrip.warpz")
         dispatch(s, "project.save", {"path": path})
         dispatch(s, "project.open", {"path": path})
         dispatch(s, "parameters.set", {"variables": {"W": "24mm"}})
@@ -95,7 +95,7 @@ def run():
         numpy=np.__version__,
         scipy=scipy.__version__,
         case="PEC WR90, vacuum, 20mm long, 10GHz, TE10, builtin mesh, no adaptivity",
-        limits="This benchmark does not validate arbitrary CAD, radiation, PML or HFSS equivalence.",
+        limits="This benchmark does not validate arbitrary CAD, radiation, PML or Warps equivalence.",
         benchmarks=rows,
         parametricSaveReopenPassed=roundtrip,
         passed=all(r["passed"] for r in rows) and roundtrip,
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="validation-local.json")
     parser.add_argument(
-        "--example", help="Also save a parametric WR90 .aedtz project at this path"
+        "--example", help="Also save a parametric WR90 .warpz project at this path"
     )
     args = parser.parse_args()
     report = run()

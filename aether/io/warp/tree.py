@@ -1,8 +1,8 @@
 """
-The ``.aedt`` document object model.
+The ``.warp`` document object model.
 
-``AedtDocument`` owns an ordered tree of :class:`AedtBlock` and
-:class:`AedtProp` nodes.  Every node caches the exact source text it was
+``WarpDocument`` owns an ordered tree of :class:`WarpBlock` and
+:class:`WarpProp` nodes.  Every node caches the exact source text it was
 parsed from; serialising a node that has not been modified re-emits that text
 untouched, so
 
@@ -10,7 +10,7 @@ untouched, so
 
 Editing a property flips a dirty flag and only that one statement is
 re-rendered.  Blocks can be created, moved and deleted; new nodes are rendered
-with HFSS's own conventions (tab indentation, single-quoted strings).
+with the usual own conventions (tab indentation, single-quoted strings).
 """
 from __future__ import annotations
 
@@ -23,29 +23,29 @@ from ...core.logging import get_logger
 from .lexer import LogicalLine, read_text, split_logical
 from .values import Call, Counted, format_statement, parse_statement
 
-log = get_logger("io.aedt.tree")
+log = get_logger("io.warp.tree")
 
 INDENT = "\t"
 
 
-class AedtNode:
-    parent: Optional["AedtBlock"] = None
+class WarpNode:
+    parent: Optional["WarpBlock"] = None
 
     def render(self, depth: int) -> List[str]:  # pragma: no cover
         raise NotImplementedError
 
 
 @dataclass
-class AedtProp(AedtNode):
+class WarpProp(WarpNode):
     """A single ``Key=value`` (or ``Key(...)``) statement."""
     key: Optional[str]
     value: Any = None
     raw: Optional[str] = None
     dirty: bool = False
     blank: bool = False
-    parent: Optional["AedtBlock"] = field(default=None, repr=False, compare=False)
+    parent: Optional["WarpBlock"] = field(default=None, repr=False, compare=False)
 
-    def set(self, value: Any) -> "AedtProp":
+    def set(self, value: Any) -> "WarpProp":
         self.value = value
         self.dirty = True
         return self
@@ -64,22 +64,22 @@ class AedtProp(AedtNode):
 
 
 @dataclass
-class AedtBinary(AedtNode):
+class WarpBinary(WarpNode):
     """
     A ``BIN<count>`` header and the raw bytes that follow it.
 
-    HFSS carries Parasolid bodies, thumbnails and other attachments this way,
+    Warps carries Parasolid bodies, thumbnails and other attachments this way,
     inside the otherwise textual tree. The payload is opaque: it is never
     re-indented, re-quoted or line-split, and it renders as one unit so the
     bytes come back exactly as they went in.
     """
     header: str                       # e.g. "BIN000000006179"
     payload: str                      # exactly <count> characters, verbatim
-    # HFSS writes the closing "$end" immediately after the last payload byte,
+    # Warps writes the closing "$end" immediately after the last payload byte,
     # with no newline between them. That is part of the framing, so it has to
     # be reproduced: the statement after the payload is merged onto its line.
     merge_next: bool = True
-    parent: Optional["AedtBlock"] = field(default=None, repr=False, compare=False)
+    parent: Optional["WarpBlock"] = field(default=None, repr=False, compare=False)
 
     @property
     def size(self) -> int:
@@ -99,16 +99,16 @@ class AedtBinary(AedtNode):
 
 
 @dataclass
-class AedtBlock(AedtNode):
+class WarpBlock(WarpNode):
     """``$begin 'Name' ... $end 'Name'``."""
     name: str
-    children: List[AedtNode] = field(default_factory=list)
+    children: List[WarpNode] = field(default_factory=list)
     raw_begin: Optional[str] = None
     raw_end: Optional[str] = None
-    parent: Optional["AedtBlock"] = field(default=None, repr=False, compare=False)
+    parent: Optional["WarpBlock"] = field(default=None, repr=False, compare=False)
 
     # ---- construction ----------------------------------------------------
-    def add(self, node: AedtNode, index: Optional[int] = None) -> AedtNode:
+    def add(self, node: WarpNode, index: Optional[int] = None) -> WarpNode:
         node.parent = self
         if index is None:
             self.children.append(node)
@@ -116,57 +116,57 @@ class AedtBlock(AedtNode):
             self.children.insert(index, node)
         return node
 
-    def add_block(self, name: str, index: Optional[int] = None) -> "AedtBlock":
-        return self.add(AedtBlock(name), index)          # type: ignore
+    def add_block(self, name: str, index: Optional[int] = None) -> "WarpBlock":
+        return self.add(WarpBlock(name), index)          # type: ignore
 
     def add_prop(self, key: str, value: Any,
-                 index: Optional[int] = None) -> AedtProp:
-        return self.add(AedtProp(key, value, dirty=True), index)  # type: ignore
+                 index: Optional[int] = None) -> WarpProp:
+        return self.add(WarpProp(key, value, dirty=True), index)  # type: ignore
 
-    def remove(self, node: AedtNode) -> None:
+    def remove(self, node: WarpNode) -> None:
         self.children.remove(node)
 
     # ---- queries ---------------------------------------------------------
     @property
-    def blocks(self) -> List["AedtBlock"]:
-        return [c for c in self.children if isinstance(c, AedtBlock)]
+    def blocks(self) -> List["WarpBlock"]:
+        return [c for c in self.children if isinstance(c, WarpBlock)]
 
     @property
-    def props(self) -> List[AedtProp]:
-        return [c for c in self.children if isinstance(c, AedtProp)
+    def props(self) -> List[WarpProp]:
+        return [c for c in self.children if isinstance(c, WarpProp)
                 and not c.blank]
 
-    def block(self, name: str) -> Optional["AedtBlock"]:
+    def block(self, name: str) -> Optional["WarpBlock"]:
         for c in self.children:
-            if isinstance(c, AedtBlock) and c.name == name:
+            if isinstance(c, WarpBlock) and c.name == name:
                 return c
         return None
 
-    def all_blocks(self, name: str) -> List["AedtBlock"]:
+    def all_blocks(self, name: str) -> List["WarpBlock"]:
         return [c for c in self.children
-                if isinstance(c, AedtBlock) and c.name == name]
+                if isinstance(c, WarpBlock) and c.name == name]
 
-    def find(self, name: str, recursive: bool = True) -> List["AedtBlock"]:
-        out: List["AedtBlock"] = []
+    def find(self, name: str, recursive: bool = True) -> List["WarpBlock"]:
+        out: List["WarpBlock"] = []
         for c in self.children:
-            if isinstance(c, AedtBlock):
+            if isinstance(c, WarpBlock):
                 if c.name == name:
                     out.append(c)
                 if recursive:
                     out.extend(c.find(name, True))
         return out
 
-    def path(self, *names: str) -> Optional["AedtBlock"]:
-        node: Optional[AedtBlock] = self
+    def path(self, *names: str) -> Optional["WarpBlock"]:
+        node: Optional[WarpBlock] = self
         for n in names:
             if node is None:
                 return None
             node = node.block(n)
         return node
 
-    def prop(self, key: str) -> Optional[AedtProp]:
+    def prop(self, key: str) -> Optional[WarpProp]:
         for c in self.children:
-            if isinstance(c, AedtProp) and c.key == key:
+            if isinstance(c, WarpProp) and c.key == key:
                 return c
         return None
 
@@ -174,7 +174,7 @@ class AedtBlock(AedtNode):
         p = self.prop(key)
         return default if p is None else p.value
 
-    def set(self, key: str, value: Any) -> AedtProp:
+    def set(self, key: str, value: Any) -> WarpProp:
         p = self.prop(key)
         if p is None:
             return self.add_prop(key, value)
@@ -194,10 +194,10 @@ class AedtBlock(AedtNode):
     def __contains__(self, key: str) -> bool:
         return self.block(key) is not None or self.prop(key) is not None
 
-    def walk(self) -> Iterator["AedtBlock"]:
+    def walk(self) -> Iterator["WarpBlock"]:
         yield self
         for c in self.children:
-            if isinstance(c, AedtBlock):
+            if isinstance(c, WarpBlock):
                 yield from c.walk()
 
     # ---- rendering -------------------------------------------------------
@@ -216,7 +216,7 @@ class AedtBlock(AedtNode):
                     merge = False
                 else:
                     out.append(line)
-            merge = isinstance(c, AedtBinary) and c.merge_next
+            merge = isinstance(c, WarpBinary) and c.merge_next
         if merge:
             out[-1] += end
         else:
@@ -232,10 +232,10 @@ def _esc(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
-class AedtDocument:
-    """A parsed ``.aedt`` project file."""
+class WarpDocument:
+    """A parsed ``.warp`` project file."""
 
-    def __init__(self, roots: List[AedtNode], encoding: str = "utf-8",
+    def __init__(self, roots: List[WarpNode], encoding: str = "utf-8",
                  newline: str = "\n", source: Optional[str] = None):
         self.roots = roots
         self.encoding = encoding
@@ -246,7 +246,7 @@ class AedtDocument:
 
     # ---- IO --------------------------------------------------------------
     @classmethod
-    def parse(cls, path: str) -> "AedtDocument":
+    def parse(cls, path: str) -> "WarpDocument":
         text, enc, nl = read_text(path)
         doc = cls.parse_text(text)
         doc.encoding, doc.newline, doc.source = enc, nl, path
@@ -255,7 +255,7 @@ class AedtDocument:
         return doc
 
     @classmethod
-    def parse_text(cls, text: str, strict: bool = False) -> "AedtDocument":
+    def parse_text(cls, text: str, strict: bool = False) -> "WarpDocument":
         """
         Parse a project document.
 
@@ -267,13 +267,13 @@ class AedtDocument:
         which is what the round-trip tests want.
         """
         lines = split_logical(text)
-        roots: List[AedtNode] = []
-        stack: List[AedtBlock] = []
+        roots: List[WarpNode] = []
+        stack: List[WarpBlock] = []
         issues: List[str] = []
         for ll in lines:
             target = stack[-1].children if stack else roots
             if ll.kind == "begin":
-                blk = AedtBlock(ll.block_name or "", raw_begin=ll.raw)
+                blk = WarpBlock(ll.block_name or "", raw_begin=ll.raw)
                 blk.parent = stack[-1] if stack else None
                 target.append(blk)
                 stack.append(blk)
@@ -284,7 +284,7 @@ class AedtDocument:
                     if strict:
                         raise ValueError(msg)
                     issues.append(msg)
-                    node = AedtProp(None, ll.text, raw=ll.raw)
+                    node = WarpProp(None, ll.text, raw=ll.raw)
                     (stack[-1].children if stack else roots).append(node)
                     continue
                 if stack[-1].name != ll.block_name:
@@ -299,7 +299,7 @@ class AedtDocument:
                         if strict:
                             raise ValueError(msg)
                         issues.append(msg + " (kept as text)")
-                        node = AedtProp(None, ll.text, raw=ll.raw)
+                        node = WarpProp(None, ll.text, raw=ll.raw)
                         stack[-1].children.append(node)
                         continue
                     issues.append(msg + "; unwound to it")
@@ -308,15 +308,15 @@ class AedtDocument:
                 blk.raw_end = ll.raw
             elif ll.kind == "binary":
                 head, _, payload = ll.raw.partition("\n")
-                node = AedtBinary(head, payload)
+                node = WarpBinary(head, payload)
                 node.parent = stack[-1] if stack else None
                 target.append(node)
             else:
                 if not ll.text:
-                    node = AedtProp(None, "", raw=ll.raw, blank=True)
+                    node = WarpProp(None, "", raw=ll.raw, blank=True)
                 else:
                     key, val = parse_statement(ll.text)
-                    node = AedtProp(key, val, raw=ll.raw)
+                    node = WarpProp(key, val, raw=ll.raw)
                 node.parent = stack[-1] if stack else None
                 target.append(node)
         if stack:
@@ -345,10 +345,10 @@ class AedtDocument:
                                     dir=os.path.dirname(target))
         os.close(fd)
         try:
-            if target.lower().endswith(".aedtz"):
-                from .archive import write_aedtz
-                write_aedtz(temp, text, encoding or self.encoding or "utf-8",
-                            member=os.path.splitext(os.path.basename(target))[0] + ".aedt",
+            if target.lower().endswith(".warpz"):
+                from .archive import write_warpz
+                write_warpz(temp, text, encoding or self.encoding or "utf-8",
+                            member=os.path.splitext(os.path.basename(target))[0] + ".warp",
                             cad_folder=os.path.splitext(target)[0] + ".cad")
             else:
                 with open(temp, "wb") as fh:
@@ -365,31 +365,31 @@ class AedtDocument:
 
     # ---- navigation ------------------------------------------------------
     @property
-    def root(self) -> AedtBlock:
+    def root(self) -> WarpBlock:
         for r in self.roots:
-            if isinstance(r, AedtBlock):
+            if isinstance(r, WarpBlock):
                 return r
         raise ValueError("document contains no block")
 
-    def find(self, name: str) -> List[AedtBlock]:
-        out: List[AedtBlock] = []
+    def find(self, name: str) -> List[WarpBlock]:
+        out: List[WarpBlock] = []
         for r in self.roots:
-            if isinstance(r, AedtBlock):
+            if isinstance(r, WarpBlock):
                 if r.name == name:
                     out.append(r)
                 out.extend(r.find(name))
         return out
 
-    # AEDT names the design block after the solver that owns it. Projects
-    # written by the desktop use 'HFSSModel'; a design exported or scripted on
+    # Warps names the design block after the solver that owns it. Projects
+    # written by the desktop use 'WarpsModel'; a design exported or scripted on
     # its own uses the generic 'Design'. Both appear in the wild, and a reader
     # that knows only one of them finds no designs at all in half the files it
     # is given.
-    DESIGN_BLOCKS = ("Design", "HFSSModel", "HFSSDesign")
+    DESIGN_BLOCKS = ("Design", "WarpsModel", "WarpsDesign")
 
-    def designs(self) -> List[AedtBlock]:
+    def designs(self) -> List[WarpBlock]:
         """Every design block, whatever the writing version called it."""
-        out: List[AedtBlock] = []
+        out: List[WarpBlock] = []
         seen = set()
         for nm in self.DESIGN_BLOCKS:
             for d in self.find(nm):
@@ -398,20 +398,20 @@ class AedtDocument:
                     out.append(d)
         return out
 
-    def hfss_designs(self) -> List[AedtBlock]:
+    def warps_designs(self) -> List[WarpBlock]:
         out = []
         for d in self.designs():
             t = str(d.get("DesignType", "") or "")
-            if d.name in ("HFSSModel", "HFSSDesign") or "HFSS" in t \
-                    or d.block("HfssEnums") is not None \
+            if d.name in ("WarpsModel", "WarpsDesign") or "Warps" in t \
+                    or d.block("WarpsEnums") is not None \
                     or d.block("ModelSetup") is not None:
                 out.append(d)
         return out
 
     def __repr__(self):
-        return (f"<AedtDocument {os.path.basename(self.source or '<text>')!r} "
+        return (f"<WarpDocument {os.path.basename(self.source or '<text>')!r} "
                 f"designs={len(self.designs())}>")
 
 
-__all__ = ["AedtDocument", "AedtBlock", "AedtProp", "AedtBinary", "AedtNode", "Call",
+__all__ = ["WarpDocument", "WarpBlock", "WarpProp", "WarpBinary", "WarpNode", "Call",
            "Counted"]

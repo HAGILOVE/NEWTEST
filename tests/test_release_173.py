@@ -3,15 +3,15 @@ from pathlib import Path
 import subprocess, shutil
 import numpy as np
 import pytest
-from aether.io.aedt.tree import AedtBlock
-from aether.io.aedt.values import Call
-from aether.io.aedt.translate import _box_from_topology
+from aether.io.warp.tree import WarpBlock
+from aether.io.warp.values import Call
+from aether.io.warp.translate import _box_from_topology
 from aether.gui.api import dispatch
 from aether.gui.state import Session
 
 
 def topology_box():
-    part=AedtBlock('GeometryPart');ops=part.add_block('Operations');op=ops.add_block('Operation')
+    part=WarpBlock('GeometryPart');ops=part.add_block('Operations');op=ops.add_block('Operation')
     op.add_prop('OperationType','SweepFaceAlongNormalFrom');group=op.add_block('NewFaces')
     import itertools
     for axis in range(3):

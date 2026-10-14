@@ -3,7 +3,7 @@ Eigenmode solution of a rectangular cavity against closed-form resonances.
 
     python examples/13_eigenmode_cavity.py
 
-Prints the first resonances of ``cavity_eigenmode.aedt`` (30 x 15 x 20 mm PEC
+Prints the first resonances of ``cavity_eigenmode.warp`` (30 x 15 x 20 mm PEC
 box) beside f = c/2 sqrt((m/a)^2 + (n/b)^2 + (p/d)^2), and the Q of the
 copper-wall version beside Pozar's conductor-loss formula for the TE101 mode.
 """
@@ -30,14 +30,14 @@ def analytic(n):
 
 def main():
     ae.set_log_level("WARNING")
-    d, _ = ae.open_hfss(os.path.join(HERE, "cavity_eigenmode.aedt"))
+    d, _ = ae.open_warps(os.path.join(HERE, "cavity_eigenmode.warp"))
     sol = d.solve(progress=False)
     print(f"{'mode':>4} {'solver [GHz]':>13} {'analytic [GHz]':>15} {'error':>8}")
     for m, f in zip(sol.modes, analytic(len(sol.modes))):
         print(f"{m.index + 1:>4} {m.f / 1e9:>13.5f} {f / 1e9:>15.5f} "
               f"{100 * (m.f / f - 1):>7.3f}%")
 
-    d2, _ = ae.open_hfss(os.path.join(HERE, "copper_cavity_eigenmode.aedt"))
+    d2, _ = ae.open_warps(os.path.join(HERE, "copper_cavity_eigenmode.warp"))
     m = d2.solve(progress=False).modes[0]
     f0 = analytic(1)[0]
     k = 2 * math.pi * f0 / c0

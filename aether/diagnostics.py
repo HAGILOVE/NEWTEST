@@ -156,7 +156,7 @@ def report(d):
             "eigenmode": True,
             "periodicFloquet": False,
             "pml": False,
-            "hfssNativeFullCompatibility": False,
+            "warpsNativeFullCompatibility": False,
         },
     }
 

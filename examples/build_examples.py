@@ -1,12 +1,12 @@
 """
 Builds the example projects in this folder.
 
-    python examples/build_examples.py            # write every .aedt
+    python examples/build_examples.py            # write every .warp
     python examples/build_examples.py --verify   # ... and solve each one
 
 Every example is a complete project: geometry, materials, boundaries, ports,
 a solution setup and a sweep, so it opens in the desktop (`aether gui
---project examples/<name>.aedt`), analyses with F9 and shows its results with
+--project examples/<name>.warp`), analyses with F9 and shows its results with
 nothing else to configure.  See ``examples/README.md`` for what each one is
 for and what to look at.
 """
@@ -259,14 +259,14 @@ EXAMPLES = {
 
 def build(name: str, directory: str = HERE) -> str:
     d = EXAMPLES[name]()
-    path = os.path.join(directory, name + ".aedt")
-    ae.save_hfss(d, path, mode="create")
+    path = os.path.join(directory, name + ".warp")
+    ae.save_warps(d, path, mode="create")
     return path
 
 
 def verify(path: str) -> str:
     """Open the saved file the way the GUI does and solve it."""
-    d, report = ae.open_hfss(path)
+    d, report = ae.open_warps(path)
     errs = d.validate()
     if errs:
         return "INVALID: " + "; ".join(errs)

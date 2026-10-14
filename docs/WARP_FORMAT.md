@@ -1,11 +1,11 @@
-# HFSS / AEDT interoperability
+# The Warps project file (`.warp`)
 
-## 1. The `.aedt` file
+## 1. The `.warp` file
 
-An AEDT project is a tab-indented, nested, plain-text block tree:
+A Warps project is a tab-indented, nested, plain-text block tree:
 
 ```
-$begin 'AnsoftProject'
+$begin 'WarpsProject'
 	FileVersion(1, 0)
 	Created='Tue Sep 02 09:11:04 2026'
 	$begin 'Desktop'
@@ -13,7 +13,7 @@ $begin 'AnsoftProject'
 		InfoStr='It\'s fine'
 		List=[1, 2, 3.5]
 	$end 'Desktop'
-$end 'AnsoftProject'
+$end 'WarpsProject'
 ```
 
 Statement forms Aether parses and re-emits:
@@ -27,14 +27,14 @@ Statement forms Aether parses and re-emits:
 | call | `Version(2024, 2)` | `Call('Version', [2024, 2])` |
 | counted array | `Pts[3: 'a','b','c']` | `Counted` |
 
-`.aedtz` (the zipped project) is handled transparently by the same API.
+`.warpz` (the zipped project) is handled transparently by the same API.
 
 ### 1.1 Byte-exact round trip
 
 ```python
-from aether.io.aedt.tree import AedtDocument
-doc = AedtDocument.parse("project.aedt")
-doc.write("copy.aedt")          # identical bytes, verified in CI
+from aether.io.warp.tree import WarpDocument
+doc = WarpDocument.parse("project.warp")
+doc.write("copy.warp")          # identical bytes, verified in CI
 ```
 
 Three things make this hold:
@@ -42,7 +42,7 @@ Three things make this hold:
 * every logical statement caches its exact source text and re-emits it unless
   modified;
 * logical lines are reassembled across physical lines when brackets, quotes or
-  parentheses are still open, so HFSS's wrapped dataset entries survive;
+  parentheses are still open, so the usual wrapped dataset entries survive;
 * encoding, BOM presence and newline style (`\n` vs `\r\n`) are detected and
   reproduced — a UTF-8 file never acquires a BOM on the way out.
 
@@ -52,22 +52,22 @@ whose value contains the literal text `$end` does not truncate the file.
 Check any project from the command line:
 
 ```
-aether validate project.aedt
+aether validate project.warp
 ```
 
 ### 1.2 Editing without collateral damage
 
 ```python
 doc.root.path("Desktop").set("Version", Call("Version", [2025, 1]))
-doc.write("out.aedt")           # exactly one line differs
+doc.write("out.warp")           # exactly one line differs
 ```
 
 `update` mode uses this for whole models:
 
 ```python
-design, report = aether.open_hfss("project.aedt")
+design, report = aether.open_warps("project.warp")
 design.get_setup("Setup1").frequency = 12e9
-aether.save_hfss(design, "project_v2.aedt", mode="update")
+aether.save_warps(design, "project_v2.warp", mode="update")
 ```
 
 Mesh operations, optimetrics, report definitions, field overlays and design
@@ -76,7 +76,7 @@ were carefully re-serialised.
 
 ## 2. What transfers between the models
 
-| HFSS | Aether | Direction |
+| Warps | Aether | Direction |
 |---|---|---|
 | model units | `Design.units` | both |
 | project / design variables | evaluated into geometry | import |
@@ -91,13 +91,13 @@ were carefully re-serialised.
 
 ## 3. What does not transfer, and why
 
-**Boundaries stored as kernel face ids.** HFSS writes
+**Boundaries stored as kernel face ids.** Warps writes
 `Faces=[17, 18]` — indices into an ACIS session that no longer exists. There is
 no way to recover which surface that was from the file alone. Aether lists
 these in `ImportReport.unresolved` instead of guessing:
 
 ```
-AEDT import report for design 'HFSSDesign1'
+Warps import report for design 'WarpsDesign1'
   UNRESOLVED (1):
     - boundary 'rad1' (Radiation): attached to kernel face ids [17, 18];
       re-assign it with a selector
@@ -111,7 +111,7 @@ design.assign_radiation("rad1", aether.BoundingBoxFaceSelector("+z"))
 
 Boundaries written as `Objects=['air']` **are** re-attached automatically, and
 Aether's own selectors round-trip exactly, because they are stored in an
-auxiliary `$begin 'AetherSelector'` block that HFSS ignores.
+auxiliary `$begin 'AetherSelector'` block that Warps ignores.
 
 **`.sat` / `.sab` bodies.** ACIS is a proprietary Spatial format that
 OpenCASCADE cannot read. Export the body as STEP AP214 from the modeller
@@ -142,7 +142,7 @@ A wave port's impedance is frequency-dependent; Touchstone 1.0 cannot express
 that, so writing v1 emits a warning and stores the first-point value.
 Renormalise to a constant impedance first, or write v2.
 
-## 4a. Reading a project the HFSS desktop actually wrote
+## 4a. Reading a project the Warps desktop actually wrote
 
 A project saved from the modeller does not look like the tidy text tree the
 format description suggests, and four separate things about it will each stop
@@ -157,7 +157,7 @@ sequences, so a line-oriented parser walks straight into them and reports
 kept verbatim, which also keeps the round trip byte-exact — a 780 kB project
 with 23 embedded bodies rewrites to the same bytes it was read from.
 
-**The design block's name.** The desktop writes `$begin 'HFSSModel'`; scripted
+**The design block's name.** The desktop writes `$begin 'WarpsModel'`; scripted
 and exported projects write `$begin 'Design'`. A reader that knows only one
 finds no designs at all in half the files it is handed. Both are recognised.
 
@@ -165,7 +165,7 @@ finds no designs at all in half the files it is handed. Both are recognised.
 `BoundarySetup ▸ Boundaries`; older projects list them directly under
 `BoundarySetup`. Both layouts are read.
 
-**Boundaries attached to body ids.** HFSS writes `Objects(1255)`, not a name.
+**Boundaries attached to body ids.** Warps writes `Objects(1255)`, not a name.
 The part ids are collected while the geometry is read and the assignments
 resolved through them, so `PerfE` and `Wave Port` land on the right bodies.
 Boundaries given only by *face* ids (`Faces(145)`) still cannot be placed —
@@ -195,7 +195,7 @@ levels of tolerance keep one oddity from costing the whole model:
   joined to every line that followed while the parser looked for the closing
   quote, so one stray apostrophe swallowed the rest of the file and the parse
   died thousands of lines away with `unterminated string near offset 0`. A
-  value genuinely continues across lines only with the trailing backslash HFSS
+  value genuinely continues across lines only with the trailing backslash Warps
   actually writes, in the base64 blocks;
 * a **block** that does not close, or an `$end` naming the wrong block, is
   repaired: the reader unwinds to the block the `$end` names, or closes what is
@@ -209,7 +209,7 @@ setups. Parasolid itself OpenCASCADE cannot read, so each native body is
 written out of the project into `<project>.cad/` and created as an object
 marked *needs a readable source*. The model therefore keeps its structure and
 everything attached to those bodies, and each is completed by exporting STEP
-from HFSS (Modeler ▸ Export ▸ .step) and pointing at it with
+from Warps (Modeler ▸ Export ▸ .step) and pointing at it with
 `Modeler ▸ Replace CAD Source…`.
 
 ## 5. Geometry interchange
@@ -237,7 +237,7 @@ solid count, face count, resulting extent in millimetres and the unit applied
 against the unit declared are reported to the caller and to the message log.
 Writing follows the same rule — STEP and IGES are written *in* millimetres and
 declared as millimetres, so a file Aether exports reads back at the same size
-in Aether, in HFSS and in any mechanical CAD system.
+in Aether, in Warps and in any mechanical CAD system.
 
 **Imported bodies in a project file.** An imported part is written as an
 `ImportParameters` block carrying `SourceFile`, `ModelUnits`, `ScaleToM`,

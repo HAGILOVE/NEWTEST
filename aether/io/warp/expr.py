@@ -1,7 +1,7 @@
 """
-HFSS design-variable expression evaluator.
+Warps design-variable expression evaluator.
 
-Geometry in a real ``.aedt`` file is parametric: ``XSize='$width*2'``.  To
+Geometry in a real ``.warp`` file is parametric: ``XSize='$width*2'``.  To
 turn that into metres we need to resolve variables (project ``$vars`` and
 design-local ones), evaluate the arithmetic, and attach the unit that survives
 the expression.
@@ -70,7 +70,7 @@ _TEMPERATURE = {"cel": (1.0, 273.15), "c": (1.0, 273.15),
 
 
 class ExpressionError(ValueError):
-    """An HFSS expression that could not be evaluated.
+    """A Warps expression that could not be evaluated.
 
     A dedicated type so a caller can decide per property whether to fall back
     to a default -- which is what reading a project has to do, since one
@@ -129,7 +129,7 @@ class VariableScope:
 def evaluate(expr: Any, scope: Optional[VariableScope] = None,
              kind: str = "length") -> float:
     """
-    Evaluate an HFSS expression to SI.
+    Evaluate an Warps expression to SI.
 
     ``"2*$w + 0.5mm"`` -> metres, ``"10GHz"`` -> hertz.
     """

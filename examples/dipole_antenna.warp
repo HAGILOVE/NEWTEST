@@ -1,6 +1,6 @@
-$begin 'AnsoftProject'
+$begin 'WarpsProject'
 	FileVersion(1, 0)
-	Created='Wed Oct 14 14:13:25 2026'
+	Created='Wed Oct 14 16:29:13 2026'
 	Product='ElectronicsDesktop'
 	BuildVariant='Aether-EM'
 	$begin 'Desktop'
@@ -145,9 +145,9 @@ $begin 'AnsoftProject'
 			$begin 'PhysicsTypes'
 				set=['Electromagnetic']
 			$end 'PhysicsTypes'
-			permittivity='4.271006108'
+			permittivity='4.338453173'
 			permeability='1'
-			dielectric_loss_tangent='0.02047287816'
+			dielectric_loss_tangent='0.0202449838'
 			AetherKind='dielectric'
 			AetherColor='#2f7a3f'
 			AetherTransparency=0.6
@@ -210,9 +210,9 @@ $begin 'AnsoftProject'
 			$begin 'PhysicsTypes'
 				set=['Electromagnetic']
 			$end 'PhysicsTypes'
-			permittivity='-16767.41123'
+			permittivity='-16767.41669'
 			permeability='1'
-			dielectric_loss_tangent='-1672.023889'
+			dielectric_loss_tangent='-5573.412962'
 			AetherKind='dielectric'
 			AetherColor='#d4af37'
 			AetherTransparency=0.6
@@ -554,11 +554,11 @@ $begin 'AnsoftProject'
 		$end 'water_distilled'
 	$end 'Materials'
 	$begin 'Design'
-		DesignType='HFSS'
-		Name='wr90_waveguide'
-		SolutionType='HFSS Modal Network'
+		DesignType='Warps'
+		Name='dipole_antenna'
+		SolutionType='Warps Modal Network'
 		DesignVersion=1
-		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.004, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
+		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.01199169832, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
 		AetherImportIssues='[]'
 		AetherDefaultBoundary='pec'
 		$begin 'ModelSetup'
@@ -573,14 +573,15 @@ $begin 'AnsoftProject'
 					$begin 'ToplevelParts'
 						$begin 'GeometryPart'
 							$begin 'Attributes'
-								Name='guide'
+								Name='Air'
 								Flags=''
 								MaterialValue='"vacuum"'
 								SolveInside=true
 								PartCoordinateSystem='Global'
-								Transparency=0.95
+								Transparency=0.92
 								Color(223, 232, 239)
 								AetherIsSheet=false
+								AetherTransparency=0.92
 							$end 'Attributes'
 							$begin 'Operations'
 								$begin 'Operation'
@@ -591,13 +592,124 @@ $begin 'AnsoftProject'
 										PartID=1
 									$end 'GeometryPosition'
 									$begin 'BoxParameters'
-										XPosition='0mm'
-										YPosition='0mm'
-										ZPosition='0mm'
-										XSize='22.86mm'
-										YSize='10.16mm'
-										ZSize='30mm'
+										XPosition='-49.9654096667mm'
+										YPosition='-49.9654096667mm'
+										ZPosition='-69.9515735333mm'
+										XSize='99.9308193333mm'
+										YSize='99.9308193333mm'
+										ZSize='139.903147067mm'
 									$end 'BoxParameters'
+								$end 'Operation'
+							$end 'Operations'
+						$end 'GeometryPart'
+						$begin 'GeometryPart'
+							$begin 'Attributes'
+								Name='Arm_Top'
+								Flags=''
+								MaterialValue='"pec"'
+								SolveInside=true
+								PartCoordinateSystem='Global'
+								Transparency=0
+								Color(184, 115, 51)
+								AetherIsSheet=false
+								AetherColor='#b87333'
+							$end 'Attributes'
+							$begin 'Operations'
+								$begin 'Operation'
+									OperationType='Create'
+									ID=2
+									ParentPartID=2
+									$begin 'GeometryPosition'
+										PartID=2
+									$end 'GeometryPosition'
+									$begin 'BoxParameters'
+										XPosition='-1mm'
+										YPosition='-1mm'
+										ZPosition='1mm'
+										XSize='2mm'
+										YSize='2mm'
+										ZSize='20.4851261567mm'
+									$end 'BoxParameters'
+								$end 'Operation'
+							$end 'Operations'
+						$end 'GeometryPart'
+						$begin 'GeometryPart'
+							$begin 'Attributes'
+								Name='Arm_Bottom'
+								Flags=''
+								MaterialValue='"pec"'
+								SolveInside=true
+								PartCoordinateSystem='Global'
+								Transparency=0
+								Color(184, 115, 51)
+								AetherIsSheet=false
+								AetherColor='#b87333'
+							$end 'Attributes'
+							$begin 'Operations'
+								$begin 'Operation'
+									OperationType='Create'
+									ID=3
+									ParentPartID=3
+									$begin 'GeometryPosition'
+										PartID=3
+									$end 'GeometryPosition'
+									$begin 'BoxParameters'
+										XPosition='-1mm'
+										YPosition='-1mm'
+										ZPosition='-21.4851261567mm'
+										XSize='2mm'
+										YSize='2mm'
+										ZSize='20.4851261567mm'
+									$end 'BoxParameters'
+								$end 'Operation'
+							$end 'Operations'
+						$end 'GeometryPart'
+						$begin 'GeometryPart'
+							$begin 'Attributes'
+								Name='Feed'
+								Flags='NonModel#'
+								MaterialValue='"vacuum"'
+								SolveInside=false
+								PartCoordinateSystem='Global'
+								Transparency=0.25
+								Color(214, 69, 69)
+								AetherIsSheet=true
+								AetherColor='#d64545'
+							$end 'Attributes'
+							$begin 'Operations'
+								$begin 'Operation'
+									OperationType='Create'
+									ID=4
+									ParentPartID=4
+									$begin 'GeometryPosition'
+										PartID=4
+									$end 'GeometryPosition'
+									$begin 'PolylineParameters'
+										IsPolylineCovered=true
+										IsPolylineClosed=true
+										$begin 'PolylinePoints'
+											$begin 'PLPoint'
+												X='-1mm'
+												Y='0mm'
+												Z='-1mm'
+											$end 'PLPoint'
+											$begin 'PLPoint'
+												X='1mm'
+												Y='0mm'
+												Z='-1mm'
+											$end 'PLPoint'
+											$begin 'PLPoint'
+												X='1mm'
+												Y='0mm'
+												Z='1mm'
+											$end 'PLPoint'
+											$begin 'PLPoint'
+												X='-1mm'
+												Y='0mm'
+												Z='1mm'
+											$end 'PLPoint'
+										$end 'PolylinePoints'
+									$end 'PolylineParameters'
 								$end 'Operation'
 							$end 'Operations'
 						$end 'GeometryPart'
@@ -607,65 +719,71 @@ $begin 'AnsoftProject'
 		$end 'ModelSetup'
 		$begin 'BoundarySetup'
 			MapCoefficients=false
-			$begin 'Walls'
-				BoundType='Perfect E'
-				Name='Walls'
+			$begin 'Radiation'
+				BoundType='Radiation'
+				Name='Radiation'
 				$begin 'AetherSelector'
 					Kind='Outer'
 				$end 'AetherSelector'
-			$end 'Walls'
+			$end 'Radiation'
 			$begin 'Port1'
 				Name='Port1'
-				ExcType='Wave Port'
+				ExcType='Lumped Port'
 				NumModes=1
 				UseIntLine=false
+				Impedance='50ohm'
+				Direction=[0, 0, 1]
 				$begin 'AetherSelector'
-					Kind='Plane'
-					Axis='z'
-					Value=0
+					Kind='Box'
+					Lo=[-0.001001, -1e-06, -0.001001]
+					Hi=[0.001001, 1e-06, 0.001001]
 					Tol=1e-09
 				$end 'AetherSelector'
 			$end 'Port1'
-			$begin 'Port2'
-				Name='Port2'
-				ExcType='Wave Port'
-				NumModes=1
-				UseIntLine=false
-				$begin 'AetherSelector'
-					Kind='Plane'
-					Axis='z'
-					Value=0.03
-					Tol=1e-09
-				$end 'AetherSelector'
-			$end 'Port2'
 		$end 'BoundarySetup'
+		$begin 'AetherMeshOperations'
+			$begin 'Operation'
+				Name='Arms'
+				MaxLength=0.0025
+				Objects=['Arm_Top', 'Arm_Bottom']
+				Enabled=true
+				Kind='length'
+			$end 'Operation'
+			$begin 'Operation'
+				Name='Gap'
+				MaxLength=0.001
+				Objects=['Feed']
+				Enabled=true
+				Kind='length'
+			$end 'Operation'
+		$end 'AetherMeshOperations'
 		$begin 'AnalysisSetup'
 			$begin 'SolveSetups'
 				$begin 'Setup1'
-					SetupType='HfssDriven'
+					SetupType='WarpsDriven'
 					Name='Setup1'
 					IsEnabled=true
 					$begin 'SolveSetupProps'
-						Frequency='10GHz'
-						MaxDeltaS=0.02
-						MaximumPasses=3
+						Frequency='3GHz'
+						MaxDeltaS=0.03
+						MaximumPasses=2
 						MinimumPasses=1
 						MinimumConvergedPasses=1
 						PercentRefinement=30
-						BasisOrder=1
+						BasisOrder=2
 					$end 'SolveSetupProps'
 					$begin 'Sweep'
-						Name='XBand'
+						Name='Sweep1'
 						IsEnabled=true
 						Type='Interpolating'
 						RangeType='LinearCount'
-						RangeStart='8.2GHz'
-						RangeEnd='12.4GHz'
-						RangeCount=43
-						SaveFields=false
+						RangeStart='2.6GHz'
+						RangeEnd='3.4GHz'
+						RangeCount=17
+						SaveFields=true
 					$end 'Sweep'
 				$end 'Setup1'
 			$end 'SolveSetups'
 		$end 'AnalysisSetup'
 	$end 'Design'
-$end 'AnsoftProject'
+$end 'WarpsProject'

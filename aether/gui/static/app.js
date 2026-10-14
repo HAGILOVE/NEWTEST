@@ -489,8 +489,8 @@ async function filePicker(opt) {
     if (mode === 'save') {
       const ext = ((first.filters[parseInt(filterSel.value, 10)] || {}).ext || [])[0];
       const cur = nameIn.value.trim();
-      // switching "AEDT project" <-> "three.js viewer" retargets the extension
-      if (ext && /\.(aedt|aedtz|html?)$/i.test(cur))
+      // switching "Warps project" <-> "three.js viewer" retargets the extension
+      if (ext && /\.(warp|warpz|html?)$/i.test(cur))
         nameIn.value = cur.replace(/\.[^.\\/]+$/, ext);
     }
     go(dir, true);
@@ -725,7 +725,7 @@ function dlgTransform(op0) {
   }});
 }
 
-/* Duplicate — the three patterns HFSS offers: along a line, around an axis,
+/* Duplicate — the three patterns Warps offers: along a line, around an axis,
    and mirrored. `count` is the total including the original, so 4 around a
    full circle means quadrants. */
 function dlgDuplicate(mode0) {
@@ -992,7 +992,7 @@ function dlgBoundary() {
   }});
 }
 
-/* Port line — HFSS's integration line, "New Line".
+/* Port line — the usual integration line, "New Line".
    It runs from the SIGNAL conductor to the GROUND and the port's electric
    field points along it (field from + to −). Click the signal end, then the
    ground end, straight in the 3-D view: points snap to vertices and edge
@@ -1231,7 +1231,7 @@ function dlgExcitation(kind) {
     }});
 }
 
-/* Solution setup and frequency sweep, with the fields HFSS puts on its
+/* Solution setup and frequency sweep, with the fields Warps puts on its
    Solution Setup / Edit Frequency Sweep dialogs, so a setup written down for
    one can be entered in the other without translation. */
 function dlgSetup(existing) {
@@ -1423,7 +1423,7 @@ function saveProjectAs() {
       hint: cur,
       path: cur ? cur.replace(/[\\/][^\\/]*$/, '') : '',
       filename: cur.split(/[\\/]/).pop()
-        || ((STATE.project.name || 'Project1') + '.aedt'),
+        || ((STATE.project.name || 'Project1') + '.warp'),
       onPick: async (path) => {
         done = true;
         // the viewer export is a copy for looking at, not the project file:
@@ -1822,7 +1822,7 @@ const MENUS = [
     ['Measure by clicking ▸ Circle', () => startMeasurePick('circle')],
     ['Resize to Dimensions…', dlgResize],
     ['Edit Dimensions / Expressions…', dlgPrimitive],
-    ['HFSS Import Status…', dlgImportStatus],
+    ['Warps Import Status…', dlgImportStatus],
     ['Design Variables…', dlgVariables],
     ['Box Select (Ctrl+drag)', armBandSelect],
     ['Select All', () => setSelection(objNames())],
@@ -1848,9 +1848,9 @@ const MENUS = [
     null,
     ['Toggle Dark Theme', toggleTheme]]],
   ['Project', [
-    ['Insert HFSS Design', () => guard(() => rpc('project.insertDesign')
+    ['Insert Warps Design', () => guard(() => rpc('project.insertDesign')
       .then(() => refreshGeometry(true)))],
-    ['Insert HFSS Eigenmode Design', () => guard(() => rpc('project.insertDesign',
+    ['Insert Warps Eigenmode Design', () => guard(() => rpc('project.insertDesign',
       { solutionType: 'eigenmode' }).then(() => refreshGeometry(true)))],
     ['Rename Design…', () => STATE?.design && dlgRenameDesign(STATE.design.name),
       '', () => !!STATE?.design],
@@ -2117,7 +2117,7 @@ async function dlgImportCad() {
    same one. The object survives the swap: name, material, transforms and the
    boundaries and ports assigned to it all stay. */
 /* One STEP export, forty placeholder bodies.
-   An HFSS project whose parts are ACIS/Parasolid attachments arrives with
+   A project whose parts are ACIS/Parasolid attachments arrives with
    every name, material, boundary and port intact and no geometry at all.
    Repairing that one dialog at a time is not a workflow, so the file is read
    once and the bodies are matched to the placeholders in a single table the
@@ -2234,10 +2234,9 @@ function dlgAbout() {
     'Aether-EM 3-D full-wave finite-element solver.</p>' +
     '<p>Frequency-domain Maxwell solver on tetrahedra with curl-conforming ' +
     '(Nédélec) vector basis functions, modal wave ports, adaptive refinement ' +
-    'and HFSS <code>.aedt</code> interoperability.</p>' +
-    '<p class="hint">Independent software. Not affiliated with, endorsed by or ' +
-    'sponsored by ANSYS, Inc. “HFSS”, “AEDT” and “Ansys” are trademarks of ' +
-    'ANSYS, Inc., used here only to describe file-format compatibility.</p>' });
+    'and its own <code>.warp</code> project format.</p>' +
+    '<p class="hint">Warps is independent software, not affiliated with, endorsed ' +
+    'by or sponsored by any commercial simulation vendor.</p>' });
   dialog({ title: 'About', body, ok: null, cancel: 'Close' });
 }
 
@@ -3350,7 +3349,7 @@ function updateOverlay() {
 /* ------------------------------------------------------- drawing by point */
 /* Draw with the mouse; correct with the keyboard.
    Click to place a point, press Tab to type exact numbers, Enter to accept --
-   the same rhythm as HFSS. The numbers live in a panel beside the model, never
+   the same rhythm as Warps. The numbers live in a panel beside the model, never
    in a modal over it. Nothing is created until the last point is accepted, and
    Esc backs out one step at a time.
 
@@ -6529,10 +6528,10 @@ async function dlgImportStatus(status) {
   await guard(async()=>{
     const r=status||await rpc('project.importStatus');
     const body=el('div',{},el('p',{},r.errors.length?'Import is incomplete. Solve is blocked until these items are repaired.':'No unresolved import blockers recorded.'),
-      el('p',{class:'hint'},'Native Parasolid bodies cannot be decoded by this OCC importer. Export the affected bodies from HFSS to STEP, then select each matching object and use Replace CAD Source. Reassign unknown materials and review ports, boundaries and PML.'),
+      el('p',{class:'hint'},'Native Parasolid bodies cannot be decoded by this OCC importer. Export the affected bodies from the program that created them to STEP, then select each matching object and use Replace CAD Source. Reassign unknown materials and review ports, boundaries and PML.'),
       ...r.errors.map(e=>el('p',{class:'eng-error'},e)),
       el('button',{onclick:()=>exportCsvFile('aether-import-status.csv',[['Design','Issue'],...r.errors.map(e=>[r.design,e])])},'Export issue list CSV'));
-    dialog({title:'HFSS Import Status — '+r.design,body,width:'wide',ok:null,cancel:'Close'});
+    dialog({title:'Warps Import Status — '+r.design,body,width:'wide',ok:null,cancel:'Close'});
   });
 }
 

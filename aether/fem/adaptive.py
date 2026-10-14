@@ -1,7 +1,7 @@
 """
 Adaptive mesh refinement.
 
-The convergence criterion is HFSS's: between two consecutive passes the
+The convergence criterion is the usual: between two consecutive passes the
 maximum change of any S-parameter entry,
 
     dS = max_ij | S_ij^(n) - S_ij^(n-1) |

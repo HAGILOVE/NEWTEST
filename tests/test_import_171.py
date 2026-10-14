@@ -58,7 +58,7 @@ def test_real_step_three_solids_import_render_save(tmp_path):
     assert len(geometry['objects'])==3
     assert all(o['count']>0 for o in geometry['objects'])
     assert np.allclose(geometry['bbox'],[[0,0,0],[.05,.01,.001]],atol=1e-7)
-    output=str(tmp_path/'moved.aedtz');dispatch(s,'project.save',{'path':output})
+    output=str(tmp_path/'moved.warpz');dispatch(s,'project.save',{'path':output})
     p.unlink();dispatch(s,'project.open',{'path':output})
     assert len(dispatch(s,'view.geometry')['objects'])==3
 
@@ -106,7 +106,7 @@ def test_reference_sketch_save_reopen_and_transform(tmp_path):
     s=session();r=dispatch(s,'modeler.importCad',{'path':path,'scale':2})
     dispatch(s,'modeler.transform',{'name':r['name'],'op':'move','params':{'dx':'1mm'}})
     original=dispatch(s,'view.geometry')
-    project=str(tmp_path/'sketch.aedtz');dispatch(s,'project.save',{'path':project})
+    project=str(tmp_path/'sketch.warpz');dispatch(s,'project.save',{'path':project})
     Path(path).unlink();dispatch(s,'project.open',{'path':project})
     restored=dispatch(s,'view.geometry')
     assert np.allclose(original['objects'][0]['edgeVerts'],restored['objects'][0]['edgeVerts'])
@@ -135,35 +135,35 @@ def test_spline_ellipse_and_ocs_elevation(tmp_path):
     assert any(e.kind=='spline' and not e.closed for e in entities)
 
 
-def test_utf16_hfss_project_is_read(tmp_path):
+def test_utf16_warps_project_is_read(tmp_path):
     s=session();dispatch(s,'modeler.draw',{'name':'Patch','shape':'box'})
-    p=tmp_path/'unicode.aedt';dispatch(s,'project.save',{'path':str(p)})
+    p=tmp_path/'unicode.warp';dispatch(s,'project.save',{'path':str(p)})
     text=p.read_text();p.write_bytes(text.replace('\n','\r\n').encode('utf-16'))
     dispatch(s,'project.open',{'path':str(p)})
     assert s.design.solids[0].name=='Patch'
-    assert s.project.aedt_tree.encoding=='utf-16'
-    assert s.project.aedt_tree.newline=='\r\n'
+    assert s.project.warp_tree.encoding=='utf-16'
+    assert s.project.warp_tree.newline=='\r\n'
 
 
 def test_nested_archive_keeps_relative_cad_source(tmp_path):
     s=session();cad=tmp_path/'body.step';cad.write_bytes(b'CAD source fixture')
     s.design.add_solid('Imported',ImportedShape(str(cad)))
-    p=tmp_path/'source.aedtz';dispatch(s,'project.save',{'path':str(p)})
-    nested=tmp_path/'nested.aedtz'
+    p=tmp_path/'source.warpz';dispatch(s,'project.save',{'path':str(p)})
+    nested=tmp_path/'nested.warpz'
     with zipfile.ZipFile(p) as src,zipfile.ZipFile(nested,'w') as dst:
         for member in src.namelist():dst.writestr('ProjectFolder/'+member,src.read(member))
     cad.unlink()
     dispatch(s,'project.open',{'path':str(nested)})
     assert Path(s.design.solids[0].shape.path).read_bytes()==b'CAD source fixture'
-    assert 'ProjectFolder' in s.project.aedt_tree.source
+    assert 'ProjectFolder' in s.project.warp_tree.source
 
 
 def test_bad_archive_keeps_current_design(tmp_path):
     s=session();dispatch(s,'modeler.draw',{'name':'Existing'})
-    p=tmp_path/'good.aedt';dispatch(s,'project.save',{'path':str(p)})
-    bad=tmp_path/'bad.aedtz'
+    p=tmp_path/'good.warp';dispatch(s,'project.save',{'path':str(p)})
+    bad=tmp_path/'bad.warpz'
     with zipfile.ZipFile(bad,'w') as z:
-        z.writestr('model.aedt',p.read_bytes());z.writestr('../outside.step',b'invalid')
+        z.writestr('model.warp',p.read_bytes());z.writestr('../outside.step',b'invalid')
     with pytest.raises(ValueError,match='Unsafe'):dispatch(s,'project.open',{'path':str(bad)})
     assert s.design.solids[0].name=='Existing'
 

@@ -1,7 +1,7 @@
 """
 Optimetrics-style optimisation: tune design variables until goals are met.
 
-HFSS Optimetrics asks for three things -- which variables may move and within
+Warps Optimetrics asks for three things -- which variables may move and within
 what range, what the response must do (the *goals*), and how to search.  This
 module is that, on top of the dimension-expression rebuild that parameter
 studies already use::

@@ -9,7 +9,7 @@ already contains ``Box1`` and ``Box3`` yields ``Box2``.
 
 Names are proposed by the server rather than the browser so that the
 suggestion is always consistent with the real model — including entities
-created from the scripting console or loaded from an ``.aedt`` file.
+created from the scripting console or loaded from an ``.warp`` file.
 """
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def suggest_sweep(setup) -> str:
 
 def suggest_design(project) -> str:
     names = [d.name for d in project.designs] if project else []
-    return next_name(names, "HFSSDesign")
+    return next_name(names, "WarpsDesign")
 
 
 def suggest_part_from_file(design, path: str) -> str:

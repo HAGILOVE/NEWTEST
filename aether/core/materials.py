@@ -8,7 +8,7 @@ and permeability plus a bulk conductivity.  Constitutive evaluation returns
     mu_c(f)  = mu_r'(f)  - j*mu_r''(f)
 
 using the **e^{+jwt} engineering time convention** (loss => negative imaginary
-part), matching HFSS/ADS/Touchstone.  Every solver kernel in Aether-EM consumes
+part), matching Warps/ADS/Touchstone.  Every solver kernel in Aether-EM consumes
 only these two complex numbers, so adding a new dispersion law never touches
 the FEM code.
 """
@@ -36,7 +36,7 @@ class Dispersion:
 
 @dataclass(frozen=True)
 class ConstantTanD(Dispersion):
-    """Constant eps_r with constant loss tangent (HFSS default model)."""
+    """Constant eps_r with constant loss tangent (Warps default model)."""
     eps_r: float = 1.0
     tan_d: float = 0.0
 
@@ -101,7 +101,7 @@ class Lorentz(Dispersion):
 @dataclass(frozen=True)
 class DjordjevicSarkar(Dispersion):
     """
-    Djordjevic-Sarkar wideband causal dielectric (the model HFSS applies when
+    Djordjevic-Sarkar wideband causal dielectric (the model Warps applies when
     you tick "Set Frequency Dependency").  Guarantees Kramers-Kronig causality
     for a nominally constant loss tangent over [f1, f2].
     """
@@ -319,7 +319,7 @@ _reg(Material("gold_drude_optical", Drude(eps_inf=9.0, wp=1.36e16, gamma=1.05e14
 
 
 class MaterialLibrary:
-    """Registry with user-extension support; mirrors HFSS's material manager."""
+    """Registry with user-extension support; mirrors the usual material manager."""
 
     def __init__(self, base: Optional[Dict[str, Material]] = None):
         self._m: Dict[str, Material] = dict(base if base is not None else _LIB)
@@ -331,7 +331,7 @@ class MaterialLibrary:
 
         ``add`` used to key on ``name.lower()`` while ``get`` also folded
         spaces and hyphens to underscores. Any material whose name contained
-        either — and an HFSS project is full of them, "Polyflon copper-clad
+        either — and an Warps project is full of them, "Polyflon copper-clad
         ULTEM (tm)" among others — went in under one key and was looked up
         under another, so it could never be found again. That made
         ``materials.list`` raise for the whole library, which in turn aborted

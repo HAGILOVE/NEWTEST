@@ -201,7 +201,7 @@ class Session:
         self.job = SolveJob()
         self.progress = Progress()
         # True while a project is open. Closing one leaves the workspace with
-        # no document at all -- the state HFSS shows between projects -- rather
+        # no document at all -- the state Warps shows between projects -- rather
         # than silently creating a new empty one.
         self.project_open = True
         #: set by :func:`aether.gui.server.serve` so File ▸ Exit can stop it
@@ -246,7 +246,7 @@ class Session:
             self.selection = []
             self.sel_faces = []
             self.sel_edges = []
-            d = self.project.new_design("HFSSDesign1")
+            d = self.project.new_design("WarpsDesign1")
             self.design = d
             self.dirty = False
             self.project_open = True
@@ -281,7 +281,7 @@ class Session:
 
     def insert_design(self, name: str = "", solution_type: str = "driven_modal"):
         with self._lock:
-            n = name or f"HFSSDesign{len(self.project) + 1}"
+            n = name or f"WarpsDesign{len(self.project) + 1}"
             d = self.project.new_design(n, solution_type=solution_type)
             self.design = d
             self.dirty = True

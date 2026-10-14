@@ -168,7 +168,7 @@ def prune_to_bodies(gmsh, dim_tags) -> int:
     """
     Drop every entity the given bodies do not use, and say how many went.
 
-    A STEP file carries more than its solids. One exported from HFSS through
+    A STEP file carries more than its solids. One exported from Warps through
     Spatial InterOp also carries presentation geometry: free faces of hundreds
     of square metres and free curves tens of metres long, in an assembly whose
     largest body is 48 mm across. ``mesh.generate`` meshes *every* entity in
@@ -622,7 +622,7 @@ def _assign_by_parents(raw, frag_in, parent_map) -> Dict[str, List[int]]:
 
     ``parent_map[i]`` are the resulting entities produced from ``frag_in[i]``.
     Where a child came from several parents (overlap) the *last declared*
-    solid wins -- matching HFSS's "later object overrides" behaviour.
+    solid wins -- matching the usual "later object overrides" behaviour.
     """
     pos: Dict[DimTag, int] = {dt: i for i, dt in enumerate(frag_in)}
     owner_of_index: List[str] = [""] * len(frag_in)

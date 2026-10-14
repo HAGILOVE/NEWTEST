@@ -1,5 +1,5 @@
 """
-Translation between the ``.aedt`` project tree and Aether's :class:`Design`.
+Translation between the ``.warp`` project tree and Aether's :class:`Design`.
 
 What transfers
 --------------
@@ -19,7 +19,7 @@ solution setups         adaptive frequency, MaxDeltaS, passes, and all
 
 What does **not** transfer, and why
 -----------------------------------
-HFSS attaches boundaries to *face ids* produced by its own ACIS kernel.  Those
+Warps attaches boundaries to *face ids* produced by its own ACIS kernel.  Those
 ids exist only inside the modeller session; the project file stores the number,
 not the surface.  A boundary given by ``Objects=[...]`` is therefore
 re-attached to the named solid's faces, while one given only by ``Faces=[...]``
@@ -46,10 +46,10 @@ from ...geometry.select import (BoundingBoxFaceSelector, OuterSelector,
                                 PlaneSelector, ShapeSelector)
 from ...model import Design, Project
 from .expr import VariableScope, evaluate
-from .tree import AedtBlock, AedtDocument, AedtProp
+from .tree import WarpBlock, WarpDocument, WarpProp
 from .values import Call, Counted
 
-log = get_logger("io.aedt.translate")
+log = get_logger("io.warp.translate")
 
 BTYPE_MAP = {
     "perfect e": "pec",
@@ -67,14 +67,14 @@ BTYPE_MAP = {
 }
 
 SOLUTION_MAP = {
-    "hfss modal network": "driven_modal",
+    "warps modal network": "driven_modal",
     "drivenmodal": "driven_modal",
     "driven modal": "driven_modal",
-    "hfss terminal network": "driven_terminal",
+    "warps terminal network": "driven_terminal",
     "driventerminal": "driven_terminal",
     "driven terminal": "driven_terminal",
     "eigenmode": "eigenmode",
-    "hfss eigenmode": "eigenmode",
+    "warps eigenmode": "eigenmode",
 }
 
 
@@ -89,7 +89,7 @@ class ImportReport:
     materials: List[str] = field(default_factory=list)
     unresolved: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    # HFSS attaches boundaries to numeric part ids, not names
+    # Warps attaches boundaries to numeric part ids, not names
     part_ids: Dict[int, str] = field(default_factory=dict)
     # native (Parasolid) bodies written out of the project's own attachments
     extracted: List[str] = field(default_factory=list)
@@ -100,7 +100,7 @@ class ImportReport:
     pml_radiation: bool = False
 
     def __str__(self):
-        out = [f"AEDT import report for design {self.design_name!r}",
+        out = [f"Warps import report for design {self.design_name!r}",
                f"  solids     : {len(self.solids)}  {self.solids[:8]}",
                f"  materials  : {len(self.materials)}",
                f"  boundaries : {len(self.boundaries)}",
@@ -125,9 +125,9 @@ _PML_NAME = re.compile(r"^(pml[_\-]?|pmlgroup)", re.I)
 
 def is_pml_name(name: str) -> bool:
     """
-    True for the auto-generated PML apparatus HFSS writes around a model.
+    True for the auto-generated PML apparatus Warps writes around a model.
 
-    HFSS builds a perfectly matched layer as *geometry*: a shell of
+    Warps builds a perfectly matched layer as *geometry*: a shell of
     ``PML_<region>_1..26`` boxes and wedges, one ``PMLGroup*`` material per
     stretching direction, and a ``PML_radiation*`` boundary on each outer
     face. None of it is the model the engineer drew, none of it survives a
@@ -139,7 +139,7 @@ def is_pml_name(name: str) -> bool:
     return bool(_PML_NAME.match(str(name or "").strip("'\" ")))
 
 
-def collect_variables(doc: AedtDocument, design_blk: AedtBlock) -> VariableScope:
+def collect_variables(doc: WarpDocument, design_blk: WarpBlock) -> VariableScope:
     """Project-level ``$vars`` plus design-local variables."""
     sc = VariableScope()
     for blk in list(doc.find("ProjectVariables")) + list(design_blk.find("Variables")) \
@@ -156,7 +156,7 @@ def collect_variables(doc: AedtDocument, design_blk: AedtBlock) -> VariableScope
         v = blk.get("Value")
         if n:
             sc.set(str(n), v)
-    # HFSS also writes flat  VariableProp('w', 'UD', '', '5mm')  statements
+    # Warps also writes flat  VariableProp('w', 'UD', '', '5mm')  statements
     for b in [design_blk] + list(design_blk.walk()):
         for p in b.props:
             if isinstance(p.value, Call) and p.value.name == "VariableProp" \
@@ -165,7 +165,7 @@ def collect_variables(doc: AedtDocument, design_blk: AedtBlock) -> VariableScope
     return sc
 
 
-def collect_materials(doc: AedtDocument, lib: MaterialLibrary,
+def collect_materials(doc: WarpDocument, lib: MaterialLibrary,
                       report: ImportReport) -> MaterialLibrary:
     """Read ``$begin 'Materials'`` definitions into the library."""
     for mats in doc.find("Materials"):
@@ -185,7 +185,7 @@ def collect_materials(doc: AedtDocument, lib: MaterialLibrary,
     return lib
 
 
-def _material_from_block(b: AedtBlock) -> Material:
+def _material_from_block(b: WarpBlock) -> Material:
     def num(key, default=0.0):
         v = b.get(key)
         if v is None:
@@ -239,9 +239,9 @@ _AXIS = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
 # found next to it. A ContextVar rather than a global: the GUI reads projects
 # from worker threads.
 _PROJECT_DIR: "contextvars.ContextVar[str]" = contextvars.ContextVar(
-    "aedt_project_dir", default="")
+    "warp_project_dir", default="")
 _PROJECT_DOC: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
-    "aedt_project_doc", default=None)
+    "warp_project_doc", default=None)
 
 
 def _resolve_cad(source: str, embedded: str) -> Tuple[str, bool]:
@@ -269,7 +269,7 @@ def _resolve_cad(source: str, embedded: str) -> Tuple[str, bool]:
     return (source or embedded or ""), False
 
 
-def _q(blk: AedtBlock, key: str, sc: VariableScope, default=0.0,
+def _q(blk: WarpBlock, key: str, sc: VariableScope, default=0.0,
        kind: str = "length") -> float:
     v = blk.get(key)
     if v is None:
@@ -280,7 +280,7 @@ def _q(blk: AedtBlock, key: str, sc: VariableScope, default=0.0,
         return default
 
 
-def _shape_from_params(kind: str, blk: AedtBlock, sc: VariableScope,
+def _shape_from_params(kind: str, blk: WarpBlock, sc: VariableScope,
                        name: str) -> Optional[Shape]:
     if kind == "box":
         pos = (_q(blk, "XPosition", sc), _q(blk, "YPosition", sc),
@@ -324,10 +324,10 @@ def _shape_from_params(kind: str, blk: AedtBlock, sc: VariableScope,
     return None
 
 
-def _native_body_shape(part: AedtBlock, name: str,
+def _native_body_shape(part: WarpBlock, name: str,
                        report: ImportReport) -> Optional[Shape]:
     """
-    A body HFSS stored as a native (Parasolid ``.x_b``) attachment.
+    A body Warps stored as a native (Parasolid ``.x_b``) attachment.
 
     Parasolid is a proprietary kernel format that OpenCASCADE cannot read, so
     the geometry itself cannot be rebuilt here. What can be done is everything
@@ -335,7 +335,7 @@ def _native_body_shape(part: AedtBlock, name: str,
     created with its name, material and place in the tree, and it is marked as
     needing a readable source. Boundaries, ports and setups that refer to it
     therefore survive the import, and one *Replace CAD Source* against a STEP
-    export from HFSS completes it -- which beats dropping the part and, with
+    export from Warps completes it -- which beats dropping the part and, with
     it, everything attached to it.
     """
     files = _native_body_files(part)
@@ -347,7 +347,7 @@ def _native_body_shape(part: AedtBlock, name: str,
     shape = ImportedShape(path, name=name)
     shape._cad_unreadable = (
         "Parasolid (.x_b) is a proprietary format OpenCASCADE cannot read. "
-        "In HFSS: Modeler > Export > .step, then Modeler > Replace CAD Source.")
+        "In Warps: Modeler > Export > .step, then Modeler > Replace CAD Source.")
     if written:
         report.extracted.extend(written)
     return shape
@@ -370,19 +370,19 @@ def _extract_attachments(names: List[str]) -> List[str]:
     folder = os.path.join(base, (stem or "project") + ".cad")
     wanted = {os.path.basename(n): n for n in names}
     out: List[str] = []
-    from .tree import AedtBinary
+    from .tree import WarpBinary
     for blk in doc.roots:
-        if not isinstance(blk, AedtBlock):
+        if not isinstance(blk, WarpBlock):
             continue
         for sub in blk.walk():
             children = sub.children
             for i, node in enumerate(children):
-                if not isinstance(node, AedtBinary):
+                if not isinstance(node, WarpBinary):
                     continue
                 # the statement before the payload is the attachment's path
                 label = ""
                 for prev in reversed(children[:i]):
-                    if isinstance(prev, AedtProp):
+                    if isinstance(prev, WarpProp):
                         label = str(prev.value if prev.key is None
                                     else prev.raw or "").strip()
                         break
@@ -400,9 +400,9 @@ def _extract_attachments(names: List[str]) -> List[str]:
     return out
 
 
-def _part_ids(part: AedtBlock) -> List[int]:
+def _part_ids(part: WarpBlock) -> List[int]:
     """
-    The HFSS body ids that name this part.
+    The Warps body ids that name this part.
 
     Boundaries are written as ``Objects(1255)`` -- kernel body ids, not names --
     and the id of a part is the ``ParentPartID`` its operations carry. Reading
@@ -429,7 +429,7 @@ def _part_ids(part: AedtBlock) -> List[int]:
     return sorted(set(ids))
 
 
-def _native_body_files(part: AedtBlock) -> List[str]:
+def _native_body_files(part: WarpBlock) -> List[str]:
     """The attachment file names a native (Parasolid) body is stored in."""
     out: List[str] = []
     for bb in part.find("BodyBlock"):
@@ -471,14 +471,14 @@ class _ItemGuard:
         return True                      # swallowed, on purpose
 
 
-def read_geometry(design_blk: AedtBlock, sc: VariableScope, lib: MaterialLibrary,
+def read_geometry(design_blk: WarpBlock, sc: VariableScope, lib: MaterialLibrary,
                   design: Design, report: ImportReport) -> None:
     """Rebuild solids from the modeller's operation history."""
     # Only the top-level parts are objects in their own right. ``OperandParts``
     # holds the pieces consumed by booleans and sweeps; treating those as
     # objects duplicates geometry that is already inside another body.
     tops = design_blk.find("ToplevelParts")
-    parts: List[AedtBlock] = []
+    parts: List[WarpBlock] = []
     for t in tops:
         parts.extend(t.all_blocks("GeometryPart"))
     if not parts:
@@ -564,7 +564,7 @@ def read_geometry(design_blk: AedtBlock, sc: VariableScope, lib: MaterialLibrary
 _PADDING = re.compile(r"'([+-])([XYZ])Padding(Type)?'\s*=\s*'?([^'\n]*)'?")
 
 
-def _region_op(part: AedtBlock) -> Optional[AedtBlock]:
+def _region_op(part: WarpBlock) -> Optional[WarpBlock]:
     """The ``Region`` creation operation of an air-region part, if it is one."""
     ops = part.block("Operations")
     for op in (ops.all_blocks("Operation") if ops is not None else []):
@@ -573,7 +573,7 @@ def _region_op(part: AedtBlock) -> Optional[AedtBlock]:
     return None
 
 
-def _region_padding(op: AedtBlock) -> Dict[str, Tuple[str, str]]:
+def _region_padding(op: WarpBlock) -> Dict[str, Tuple[str, str]]:
     """``{'+X': ('Absolute Offset', '30mm'), ...}`` from ``RegionParameters``."""
     out: Dict[str, Tuple[str, str]] = {}
     rp = op.block("RegionParameters")
@@ -592,14 +592,14 @@ def _region_padding(op: AedtBlock) -> Dict[str, Tuple[str, str]]:
     return out
 
 
-def _read_region(part: AedtBlock, sc: VariableScope, lib: MaterialLibrary,
+def _read_region(part: WarpBlock, sc: VariableScope, lib: MaterialLibrary,
                  design: Design, report: ImportReport) -> None:
     """
-    Rebuild HFSS's air ``Region`` as a padded box around the model.
+    Rebuild the usual air ``Region`` as a padded box around the model.
 
     The region is the volume the solver actually fills, so an import that
     loses it produces a model that displays but cannot be meshed -- every
-    remaining body is metal, and the solve has nowhere to put a field. HFSS
+    remaining body is metal, and the solve has nowhere to put a field. Warps
     stores it as "the model bounding box, plus this much padding on each of
     the six sides", which is exactly reproducible here as long as the model
     it padded came in. Faces the user afterwards swept outward by hand are
@@ -664,7 +664,7 @@ def _read_region(part: AedtBlock, sc: VariableScope, lib: MaterialLibrary,
         else:
             report.warnings.append(
                 f"part {name!r}: {len(lengths)} region faces were swept by "
-                "different distances in HFSS; the largest is applied to all "
+                "different distances in Warps; the largest is applied to all "
                 "six. Check the air clearance before solving.")
             lo_pad += max(lengths)
             hi_pad += max(lengths)
@@ -695,7 +695,7 @@ def _read_region(part: AedtBlock, sc: VariableScope, lib: MaterialLibrary,
         f"padding recorded in the project ({', '.join(f'{k} {v[1]}' for k, v in sorted(pads.items())) or 'none'})")
 
 
-def _shape_from_part(part: AedtBlock, sc: VariableScope, name: str,
+def _shape_from_part(part: WarpBlock, sc: VariableScope, name: str,
                      report: ImportReport) -> Optional[Shape]:
     """
     Rebuild one part's solid.
@@ -704,9 +704,9 @@ def _shape_from_part(part: AedtBlock, sc: VariableScope, name: str,
 
     1. **Aether-written structure** -- ``BooleanOperation`` / ``SweepOperation``
        / ``Transformations`` blocks describe the CSG tree exactly, so an
-       Aether -> .aedt -> Aether round trip reproduces the geometry rather than
+       Aether -> .warp -> Aether round trip reproduces the geometry rather than
        flattening a subtraction into a union.
-    2. **HFSS-native history** -- a tolerant recursive scan of the operation
+    2. **Warps-native history** -- a tolerant recursive scan of the operation
        list for the creation commands and Move/Rotate/Scale transforms that
        map onto Aether primitives.  Anything else is reported.
     """
@@ -724,11 +724,11 @@ def _shape_from_part(part: AedtBlock, sc: VariableScope, name: str,
         supported={'box','cylinder','sphere','cone','torus','rectangle','circle','polyline','move','translate','rotate','scale','facecsplaceholder'}
         unsupported=[t for t in _history_types(part) if t.lower() not in supported]
         if unsupported:
-            report.unresolved.append(f"Incomplete history for {name!r}: {', '.join(unsupported)}. Displayed primitive is not the final HFSS body; replace with STEP.")
+            report.unresolved.append(f"Incomplete history for {name!r}: {', '.join(unsupported)}. Displayed primitive is not the final Warps body; replace with STEP.")
     return shape
 
 
-def _shape_from_command(op: AedtBlock, sc: VariableScope,
+def _shape_from_command(op: WarpBlock, sc: VariableScope,
                         name: str) -> Optional[Shape]:
     """Read the explicit CSG structure Aether writes (direct children only)."""
     shape: Optional[Shape] = None
@@ -864,7 +864,7 @@ def _shape_from_command(op: AedtBlock, sc: VariableScope,
     return shape
 
 
-def _apply_transform_block(op: AedtBlock, shape: Shape) -> None:
+def _apply_transform_block(op: WarpBlock, shape: Shape) -> None:
     """Restore the recorded transform stack verbatim."""
     tb = op.block("Transformations")
     if tb is None:
@@ -881,9 +881,9 @@ def _apply_transform_block(op: AedtBlock, shape: Shape) -> None:
         shape._xform.append(d)
 
 
-def _shape_from_history(part: AedtBlock, sc: VariableScope, name: str,
+def _shape_from_history(part: WarpBlock, sc: VariableScope, name: str,
                         report: ImportReport) -> Optional[Shape]:
-    """Tolerant scan of an HFSS-native modeller history."""
+    """Tolerant scan of an Warps-native modeller history."""
     shape: Optional[Shape] = None
     for opblk in part.find("Operation") or [part]:
         for bname, kind in _PARAM_BLOCKS.items():
@@ -925,7 +925,7 @@ def _shape_from_history(part: AedtBlock, sc: VariableScope, name: str,
 # --------------------------------------------------------------------------
 
 
-def read_boundaries(design_blk: AedtBlock, sc: VariableScope, design: Design,
+def read_boundaries(design_blk: WarpBlock, sc: VariableScope, design: Design,
                     lib: MaterialLibrary, report: ImportReport) -> None:
     for setup in _boundary_containers(design_blk):
         for b in setup.blocks:
@@ -954,7 +954,7 @@ def read_boundaries(design_blk: AedtBlock, sc: VariableScope, design: Design,
                                    report)
 
 
-def _touches_pml(b: AedtBlock, report: ImportReport) -> bool:
+def _touches_pml(b: WarpBlock, report: ImportReport) -> bool:
     """True when every body a boundary names was part of the dropped PML."""
     objs = b.get("Objects")
     if objs is None or not report.pml_ids:
@@ -1000,7 +1000,7 @@ def _read_one_boundary(b, btype, btype_raw, name, sc, design, lib, report):
     report.boundaries.append(f"{name} [{btype}]")
 
 
-def _selector_from_block(blk: AedtBlock, design: Design):
+def _selector_from_block(blk: WarpBlock, design: Design):
     """Rebuild an Aether selector written by :func:`writer.write_selector`."""
     from ...geometry.select import (BoundingBoxFaceSelector, BoxSelector,
                                     CylinderSelector, OuterSelector,
@@ -1037,7 +1037,7 @@ def _selector_from_block(blk: AedtBlock, design: Design):
 
 
 def _as_list(v) -> List[Any]:
-    """Flatten the several shapes HFSS uses for an object/face list."""
+    """Flatten the several shapes Warps uses for an object/face list."""
     items = getattr(v, "items", None)
     if items is not None:
         return list(items)
@@ -1049,7 +1049,7 @@ def _as_list(v) -> List[Any]:
     return [v]
 
 
-def _boundary_containers(design_blk: AedtBlock) -> List[AedtBlock]:
+def _boundary_containers(design_blk: WarpBlock) -> List[WarpBlock]:
     """
     Every block that directly holds boundary or excitation definitions.
 
@@ -1058,7 +1058,7 @@ def _boundary_containers(design_blk: AedtBlock) -> List[AedtBlock]:
     block finds a project's boundaries in one layout and none at all in the
     other.
     """
-    out: List[AedtBlock] = []
+    out: List[WarpBlock] = []
     for setup in list(design_blk.find("BoundarySetup")) + \
             list(design_blk.find("Excitations")):
         inner = [c for c in setup.blocks
@@ -1067,9 +1067,9 @@ def _boundary_containers(design_blk: AedtBlock) -> List[AedtBlock]:
     return out
 
 
-def _selector_for(b: AedtBlock, design: Design,
+def _selector_for(b: WarpBlock, design: Design,
                   part_ids: Optional[Dict[int, str]] = None):
-    """Best-effort geometric re-attachment of an HFSS boundary."""
+    """Best-effort geometric re-attachment of an Warps boundary."""
     aether = b.block("AetherSelector")
     if aether is not None:
         return _selector_from_block(aether, design), ""
@@ -1082,7 +1082,7 @@ def _selector_for(b: AedtBlock, design: Design,
                           "faces in the modeller")
     if objs is None:
         return OuterSelector(), ""
-    # HFSS writes body ids here, not names; the map is built while the parts
+    # Warps writes body ids here, not names; the map is built while the parts
     # are read. A name is still accepted, for projects Aether wrote itself.
     ids = part_ids or {}
     names = []
@@ -1104,7 +1104,7 @@ def _selector_for(b: AedtBlock, design: Design,
     return ShapeSelector(shp, tol=1e-7), ""
 
 
-def read_excitations(design_blk: AedtBlock, sc: VariableScope, design: Design,
+def read_excitations(design_blk: WarpBlock, sc: VariableScope, design: Design,
                      report: ImportReport) -> None:
     for setup in _boundary_containers(design_blk):
         for b in setup.blocks:
@@ -1155,7 +1155,7 @@ def _read_one_port(b, low, etype, name, sc, design, report):
     report.ports.append(f"{name} [{etype}]")
 
 
-def _integration_line(b: AedtBlock, sc: VariableScope):
+def _integration_line(b: WarpBlock, sc: VariableScope):
     """Recover a port integration line, if one was stored."""
     il = b.block("IntLine")
     if il is None:
@@ -1169,7 +1169,7 @@ def _integration_line(b: AedtBlock, sc: VariableScope):
     return (pts[0], pts[1])
 
 
-def read_setups(design_blk: AedtBlock, sc: VariableScope, design: Design,
+def read_setups(design_blk: WarpBlock, sc: VariableScope, design: Design,
                 report: ImportReport) -> None:
     for asetup in design_blk.find("AnalysisSetup"):
         for solve in (asetup.find("SolveSetups") or [asetup]):
@@ -1184,7 +1184,7 @@ def read_setups(design_blk: AedtBlock, sc: VariableScope, design: Design,
                 _read_one_setup(s, sc, design, report)
 
 
-def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
+def _read_one_setup(s: WarpBlock, sc: VariableScope, design: Design,
                     report: ImportReport) -> None:
     props = s.block("SolveSetupProps") or s
     freq = props.get("Frequency", props.get("SolutionFrequency", "1GHz"))
@@ -1195,7 +1195,7 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
     except Exception:
         f = 1e9
     if eigen and props.get("Frequency") is None:
-        # an HFSS eigenmode setup has no solution frequency; the minimum
+        # an Warps eigenmode setup has no solution frequency; the minimum
         # frequency is the only frequency scale it carries
         try:
             fmin = float(evaluate(props.get("MinimumFrequency", "0Hz"), sc,
@@ -1215,7 +1215,7 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
             st.refinement = min(max(float(pr) / 100.0, 0.01), 1.0)
     except (TypeError, ValueError):
         pass
-    # HFSS writes 0 for "mixed order" and -1 for "zeroth order"; neither has
+    # Warps writes 0 for "mixed order" and -1 for "zeroth order"; neither has
     # an Aether equivalent, and both used to import verbatim and then fail
     # validation with "basis order must be 1 or 2" on a setup the user never
     # touched. The nearest supported element order is used instead.
@@ -1225,7 +1225,7 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
         order = 1
     if order not in (1, 2):
         report.warnings.append(
-            f"setup {name!r}: basis order {order} (HFSS mixed/zeroth order) "
+            f"setup {name!r}: basis order {order} (Warps mixed/zeroth order) "
             "has no equivalent here; first-order elements are used")
         order = 1
     st.basis_order = order
@@ -1266,7 +1266,7 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
             st.add_sweep(swname, a, b,
                          int(sw.get("RangeCount", 101) or 101), kind)
         st.sweeps[-1].save_fields = bool(sw.get("SaveFields", False))
-        # HFSS stores the interpolating tolerance as a percentage of |S|
+        # Warps stores the interpolating tolerance as a percentage of |S|
         try:
             if sw.get("InterpTolerance") is not None and kind != "discrete":
                 st.sweeps[-1].tolerance = min(
@@ -1283,11 +1283,11 @@ def _read_one_setup(s: AedtBlock, sc: VariableScope, design: Design,
 # --------------------------------------------------------------------------
 
 
-def read_design(doc: AedtDocument, index: int = 0,
+def read_design(doc: WarpDocument, index: int = 0,
                 lib: Optional[MaterialLibrary] = None
                 ) -> Tuple[Design, ImportReport]:
-    """Translate one HFSS design out of a parsed project document."""
-    designs = doc.hfss_designs() or doc.designs()
+    """Translate one Warps design out of a parsed project document."""
+    designs = doc.warps_designs() or doc.designs()
     if not designs:
         raise ValueError("project contains no design blocks")
     blk = designs[index]
@@ -1317,7 +1317,7 @@ def read_design(doc: AedtDocument, index: int = 0,
     token = _PROJECT_DIR.set(os.path.dirname(os.path.abspath(doc.source))
                              if getattr(doc, "source", None) else "")
     dtoken = _PROJECT_DOC.set(doc)
-    design._aedt_source = doc
+    design._warp_source = doc
 
     try:
         read_geometry(blk, sc, lib, design, report)
@@ -1365,7 +1365,7 @@ def read_design(doc: AedtDocument, index: int = 0,
     import json
     previous=json.loads(blk.get("AetherImportIssues", "[]"))
     design.import_issues=list(dict.fromkeys(previous+report.unresolved))
-    log.info("imported HFSS design %r: %d solids, %d boundaries, %d ports, "
+    log.info("imported Warps design %r: %d solids, %d boundaries, %d ports, "
              "%d setups (%d unresolved)", name, len(report.solids),
              len(report.boundaries), len(report.ports), len(report.setups),
              len(report.unresolved))
@@ -1374,11 +1374,11 @@ def read_design(doc: AedtDocument, index: int = 0,
 
 def read_project(path: str, progress=None) -> Tuple[Project, List[ImportReport]]:
     """
-    Load a whole ``.aedt`` / ``.aedtz`` file.
+    Load a whole ``.warp`` / ``.warpz`` file.
 
     ``progress`` is an optional ``callable(stage: str, done: int, total: int)``.
-    A large project spends real seconds parsing the AEDT tree and unpacking a
-    ``.aedtz`` archive before a single design appears, and a caller that can
+    A large project spends real seconds parsing the Warps tree and unpacking a
+    ``.warpz`` archive before a single design appears, and a caller that can
     report that -- the desktop workspace does -- needs to be told where it is.
     """
     def say(stage, done=0, total=0):
@@ -1389,16 +1389,16 @@ def read_project(path: str, progress=None) -> Tuple[Project, List[ImportReport]]
                 pass
 
     say("parsing the project file")
-    doc = AedtDocument.parse(path)
-    if str(path).lower().endswith(".aedtz"):
+    doc = WarpDocument.parse(path)
+    if str(path).lower().endswith(".warpz"):
         say("unpacking the archive")
         import zipfile, hashlib, tempfile, shutil
         with open(path, "rb") as stream:
             digest=hashlib.sha256(stream.read()).hexdigest()
         folder=os.path.join(tempfile.gettempdir(),"aether-archives",digest)
         with zipfile.ZipFile(path) as archive:
-            projects=sorted([n for n in archive.namelist() if n.lower().endswith(".aedt")],key=len)
-            if not projects:raise ValueError("Archive contains no AEDT project")
+            projects=sorted([n for n in archive.namelist() if n.lower().endswith(".warp")],key=len)
+            if not projects:raise ValueError("Archive contains no Warps project")
             total=0
             for entry in archive.infolist():
                 name=entry.filename.replace("\\","/")
@@ -1408,7 +1408,7 @@ def read_project(path: str, progress=None) -> Tuple[Project, List[ImportReport]]
                 if entry.is_dir():continue
                 # Preserve relative CAD references including nested project folders.
                 ext=os.path.splitext(name)[1].lower()
-                if ext not in (".aedt",".step",".stp",".iges",".igs",".brep",".stl",".obj",".dxf",".x_b",".x_t",".sat",".sab"):
+                if ext not in (".warp",".step",".stp",".iges",".igs",".brep",".stl",".obj",".dxf",".x_b",".x_t",".sat",".sab"):
                     continue
                 total+=entry.file_size
                 if total>1024*1024*1024:raise ValueError("CAD archive exceeds 1 GiB unpacked limit")
@@ -1416,9 +1416,9 @@ def read_project(path: str, progress=None) -> Tuple[Project, List[ImportReport]]
                 with archive.open(entry) as src,open(dst,"wb") as out:shutil.copyfileobj(src,out)
         doc.source=os.path.join(folder,*projects[0].replace("\\","/").split("/"))
     proj = Project(os.path.splitext(os.path.basename(path))[0])
-    proj.aedt_tree = doc
+    proj.warp_tree = doc
     reports = []
-    n = len(doc.hfss_designs() or doc.designs())
+    n = len(doc.warps_designs() or doc.designs())
     for i in range(n):
         say(f"reading design {i + 1} of {n}", i, n)
         d, r = read_design(doc, i)
@@ -1435,7 +1435,7 @@ __all__ = ["read_design", "read_project", "ImportReport", "collect_variables",
 def _history_types(part):
     ops=part.block('Operations')
     return [str(b.get('OperationType')) for b in (ops.children if ops else [])
-            if isinstance(b,AedtBlock) and b.get('OperationType')]
+            if isinstance(b,WarpBlock) and b.get('OperationType')]
 
 
 def _box_from_topology(part, units):

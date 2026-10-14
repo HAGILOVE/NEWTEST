@@ -1,19 +1,19 @@
-"""File interchange: .aedt tree, HFSS model translation, Touchstone, CSV, VTK."""
+"""File interchange: .warp tree, Warps model translation, Touchstone, CSV, VTK."""
 import os
 
 import numpy as np
 import pytest
 
 import aether as ae
-from aether.io.aedt.expr import VariableScope, evaluate
-from aether.io.aedt.tree import AedtDocument
-from aether.io.aedt.translate import read_project
-from aether.io.aedt.values import Call, format_statement, parse_statement
-from aether.io.aedt.writer import write_project
+from aether.io.warp.expr import VariableScope, evaluate
+from aether.io.warp.tree import WarpDocument
+from aether.io.warp.translate import read_project
+from aether.io.warp.values import Call, format_statement, parse_statement
+from aether.io.warp.writer import write_project
 from aether.io.touchstone import read_touchstone, write_touchstone
 
 SAMPLE = (
-    "$begin 'AnsoftProject'\n"
+    "$begin 'WarpsProject'\n"
     "\tFileVersion(1, 0)\n"
     "\tCreated='Tue Sep 02 09:11:04 2026'\n"
     "\n"
@@ -26,32 +26,32 @@ SAMPLE = (
     "\t\t  3]\n"
     "\t$end 'Desktop'\n"
     "\t$begin 'Design'\n"
-    "\t\tDesignType='HFSS'\n"
-    "\t\tName='HFSSDesign1'\n"
-    "\t\tSolutionType='HFSS Modal Network'\n"
+    "\t\tDesignType='Warps'\n"
+    "\t\tName='WarpsDesign1'\n"
+    "\t\tSolutionType='Warps Modal Network'\n"
     "\t$end 'Design'\n"
-    "$end 'AnsoftProject'\n"
+    "$end 'WarpsProject'\n"
 )
 
 
-# ---------------------------------------------------------------- .aedt tree
-def test_aedt_text_round_trip_is_byte_identical():
-    doc = AedtDocument.parse_text(SAMPLE)
+# ---------------------------------------------------------------- .warp tree
+def test_warp_text_round_trip_is_byte_identical():
+    doc = WarpDocument.parse_text(SAMPLE)
     assert doc.to_text() == SAMPLE
 
 
-def test_aedt_parses_values_and_nesting():
-    doc = AedtDocument.parse_text(SAMPLE)
+def test_warp_parses_values_and_nesting():
+    doc = WarpDocument.parse_text(SAMPLE)
     assert doc.root.get("Created").startswith("Tue Sep")
     dk = doc.root.path("Desktop")
     assert dk.get("InfoStr") == "It's fine"          # escaped quote survives
     assert dk.get("List") == [1, 2, 3.5]
     assert dk.get("Wrapped") == [1, 2, 3]            # multi-line value joined
-    assert len(doc.hfss_designs()) == 1
+    assert len(doc.warps_designs()) == 1
 
 
 def test_editing_only_rewrites_the_edited_statement():
-    doc = AedtDocument.parse_text(SAMPLE)
+    doc = WarpDocument.parse_text(SAMPLE)
     doc.root.path("Desktop").set("Version", Call("Version", [2025, 1]))
     out = doc.to_text().split("\n")
     src = SAMPLE.split("\n")
@@ -62,21 +62,21 @@ def test_editing_only_rewrites_the_edited_statement():
 
 def test_end_without_begin_is_rejected_when_strict():
     with pytest.raises(ValueError):
-        AedtDocument.parse_text("$end 'Nope'\n", strict=True)
+        WarpDocument.parse_text("$end 'Nope'\n", strict=True)
 
 
 def test_mismatched_block_names_are_rejected_when_strict():
     with pytest.raises(ValueError):
-        AedtDocument.parse_text("$begin 'A'\n$end 'B'\n", strict=True)
+        WarpDocument.parse_text("$begin 'A'\n$end 'B'\n", strict=True)
 
 
 def test_damage_is_repaired_and_reported_rather_than_fatal():
     """Reading someone else's project file: a block that does not close is a
     reason to note the damage and keep going, not to hand back nothing."""
-    doc = AedtDocument.parse_text("$end 'Nope'\n")
+    doc = WarpDocument.parse_text("$end 'Nope'\n")
     assert doc.issues and "without a matching" in doc.issues[0]
 
-    doc = AedtDocument.parse_text("$begin 'A'\n\tX=1\n$end 'B'\n")
+    doc = WarpDocument.parse_text("$begin 'A'\n\tX=1\n$end 'B'\n")
     assert doc.issues
     assert doc.root.get("X") == 1                 # the content still arrives
 
@@ -85,14 +85,14 @@ def test_a_stray_quote_costs_one_line_not_the_file():
     """One unbalanced apostrophe used to swallow every line after it, and the
     parse then died far away with 'unterminated string near offset 0'."""
     text = "$begin 'A'\n\tX=1\n\tY='oops\n\tZ=2\n$end 'A'\n"
-    doc = AedtDocument.parse_text(text)
+    doc = WarpDocument.parse_text(text)
     assert doc.root.get("X") == 1 and doc.root.get("Z") == 2
     assert doc.to_text() == text                 # and it still round-trips
 
 
 def test_dollar_end_inside_a_string_does_not_close_the_block():
     text = ("$begin 'A'\n\tNote='contains $end nothing'\n$end 'A'\n")
-    doc = AedtDocument.parse_text(text)
+    doc = WarpDocument.parse_text(text)
     assert doc.root.get("Note") == "contains $end nothing"
     assert doc.to_text() == text
 
@@ -108,19 +108,19 @@ def test_statement_parsing_and_formatting():
     assert format_statement("B", False) == "B=false"
 
 
-def test_aedtz_archive_round_trip(tmp_path):
-    p = str(tmp_path / "p.aedtz")
-    AedtDocument.parse_text(SAMPLE).write(p)
-    doc = AedtDocument.parse(p)
+def test_warpz_archive_round_trip(tmp_path):
+    p = str(tmp_path / "p.warpz")
+    WarpDocument.parse_text(SAMPLE).write(p)
+    doc = WarpDocument.parse(p)
     assert doc.to_text() == SAMPLE
 
 
 def test_bom_is_preserved_and_not_invented(tmp_path):
-    plain = str(tmp_path / "a.aedt")
+    plain = str(tmp_path / "a.warp")
     with open(plain, "wb") as fh:
         fh.write(SAMPLE.encode("utf-8"))
-    doc = AedtDocument.parse(plain)
-    out = str(tmp_path / "b.aedt")
+    doc = WarpDocument.parse(plain)
+    out = str(tmp_path / "b.warp")
     doc.write(out)
     assert open(out, "rb").read() == open(plain, "rb").read()
 
@@ -147,7 +147,7 @@ def test_circular_variables_are_detected():
 
 # ------------------------------------------------------- model translation
 def _demo_design():
-    d = ae.Design("HFSSDesign1", units="mm")
+    d = ae.Design("WarpsDesign1", units="mm")
     d.add_box("sub", (0, 0, 0), ("20mm", "10mm", "0.8mm"), "fr4_epoxy")
     d.add_box("guide", (0, 0, 0), ("22.86mm", "10.16mm", "20mm"), "vacuum")
     d.add_cylinder("via", ("5mm", "5mm", 0), "0.2mm", "0.8mm", "copper")
@@ -163,9 +163,9 @@ def _demo_design():
     return d
 
 
-def test_design_survives_a_full_aedt_round_trip(tmp_path):
+def test_design_survives_a_full_warp_round_trip(tmp_path):
     src = _demo_design()
-    p1 = str(tmp_path / "a.aedt")
+    p1 = str(tmp_path / "a.warp")
     write_project(p1, src, mode="create")
     proj, reports = read_project(p1)
     back = proj[0]
@@ -196,7 +196,7 @@ def test_design_survives_a_full_aedt_round_trip(tmp_path):
 
 def test_second_export_is_identical_to_the_first(tmp_path):
     src = _demo_design()
-    a, b = str(tmp_path / "a.aedt"), str(tmp_path / "b.aedt")
+    a, b = str(tmp_path / "a.warp"), str(tmp_path / "b.warp")
     write_project(a, src, mode="create")
     back = read_project(a)[0][0]
     write_project(b, back, mode="create")
@@ -206,26 +206,26 @@ def test_second_export_is_identical_to_the_first(tmp_path):
 
 
 def test_generated_project_reparses_byte_identically(tmp_path):
-    p = str(tmp_path / "a.aedt")
+    p = str(tmp_path / "a.warp")
     write_project(p, _demo_design(), mode="create")
-    doc = AedtDocument.parse(p)
-    q = str(tmp_path / "b.aedt")
+    doc = WarpDocument.parse(p)
+    q = str(tmp_path / "b.warp")
     doc.write(q)
     assert open(p, "rb").read() == open(q, "rb").read()
 
 
 def test_unresolved_face_ids_are_reported_not_guessed():
     text = SAMPLE.replace(
-        "\t\tSolutionType='HFSS Modal Network'\n",
-        "\t\tSolutionType='HFSS Modal Network'\n"
+        "\t\tSolutionType='Warps Modal Network'\n",
+        "\t\tSolutionType='Warps Modal Network'\n"
         "\t\t$begin 'BoundarySetup'\n"
         "\t\t\t$begin 'rad1'\n"
         "\t\t\t\tBoundType='Radiation'\n"
         "\t\t\t\tFaces=[17, 18]\n"
         "\t\t\t$end 'rad1'\n"
         "\t\t$end 'BoundarySetup'\n")
-    doc = AedtDocument.parse_text(text)
-    from aether.io.aedt.translate import read_design
+    doc = WarpDocument.parse_text(text)
+    from aether.io.warp.translate import read_design
     d, rep = read_design(doc)
     assert d.boundaries == []
     assert any("face ids" in u for u in rep.unresolved)
@@ -250,7 +250,7 @@ def test_csg_boolean_geometry_survives_the_round_trip(tmp_path):
     d.add_wave_port("p1", axis="z", value=0,
                     integration_line=((a, 0, 0), (b, 0, 0)))
     d.add_setup("Setup1", frequency="10GHz")
-    p = str(tmp_path / "coax.aedt")
+    p = str(tmp_path / "coax.warp")
     write_project(p, d, mode="create")
     back = read_project(p)[0][0]
 
@@ -272,7 +272,7 @@ def test_transform_stack_survives_the_round_trip(tmp_path):
                 .rotate("z", "90deg").translate("1mm", 0, 0), "vacuum")
     d.add_wave_port("p1", axis="z", value=0)
     d.add_setup("Setup1", frequency="10GHz")
-    p = str(tmp_path / "x.aedt")
+    p = str(tmp_path / "x.warp")
     write_project(p, d, mode="create")
     back = read_project(p)[0][0]
     pts = np.array([[0.0, 0.003, 0.001], [0.003, 0.001, 0.001]])
@@ -291,7 +291,7 @@ def test_lumped_port_impedance_and_direction_survive(tmp_path):
     d.add_lumped_port("p2", axis="x", value="20mm", impedance=75.0,
                       direction=(0, 1, 0))
     d.add_setup("Setup1", frequency="5GHz")
-    p = str(tmp_path / "l.aedt")
+    p = str(tmp_path / "l.warp")
     write_project(p, d, mode="create")
     back = read_project(p)[0][0]
     assert [x.kind for x in back.ports] == ["lumped", "lumped"]

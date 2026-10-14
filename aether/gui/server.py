@@ -6,7 +6,7 @@ Node, no build step. ``aether gui`` starts a threaded HTTP server bound to
 loopback, opens the browser, and the workspace is live.
 
 Security posture, since this endpoint can execute scripts against your model
-exactly as HFSS's scripting console can:
+exactly as the usual scripting console can:
 
 * the socket binds to 127.0.0.1 only (never 0.0.0.0 unless asked explicitly),
 * every API call must carry a random per-run token, which is baked into the

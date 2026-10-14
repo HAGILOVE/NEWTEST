@@ -1,8 +1,8 @@
 """
 The user-facing model: :class:`Design` and the objects it owns.
 
-This mirrors the HFSS project hierarchy so that a translation layer to and
-from ``.aedt`` is a data mapping rather than a rewrite::
+This mirrors the Warps project hierarchy so that a translation layer to and
+from ``.warp`` is a data mapping rather than a rewrite::
 
     Project
       Design (DrivenModal / DrivenTerminal / Eigenmode)
@@ -166,7 +166,7 @@ class WavePort:
     Wave port -- a 2-D modal eigen-analysis on a planar cross-section.
 
     The port plane must lie on the outer boundary of the solution volume
-    (HFSS rule).  ``num_modes`` transverse modes are solved for and each
+    (Warps rule).  ``num_modes`` transverse modes are solved for and each
     becomes an S-parameter row/column.
     """
     name: str
@@ -226,7 +226,7 @@ class FrequencySweep:
             return np.asarray([to_si(p, "frequency") for p in self.points], float)
         a, b, n = self.start, self.stop, max(int(self.count), 1)
         if self.spacing == "step":
-            # HFSS "Linear Step": start, start+step, ... up to and including stop
+            # Warps "Linear Step": start, start+step, ... up to and including stop
             st = float(self.step or 0.0)
             if st <= 0:
                 raise ValueError("a linear-step sweep needs a positive step")
@@ -251,11 +251,11 @@ class Setup:
     sweeps: List[FrequencySweep] = field(default_factory=list)
     #: eigenmode designs: how many modes to find above ``min_frequency`` [Hz]
     #: and the largest relative frequency change between passes that counts
-    #: as converged (HFSS: "Maximum Delta Frequency Per Pass")
+    #: as converged (Warps: "Maximum Delta Frequency Per Pass")
     n_modes: int = 3
     min_frequency: float = 0.0
     delta_f: float = 0.02
-    #: consecutive passes that must meet the target (HFSS "Minimum Converged
+    #: consecutive passes that must meet the target (Warps "Minimum Converged
     #: Passes") and the share of tetrahedra refined per pass (default 30 %)
     min_converged: int = 1
     refinement: float = 0.30
@@ -339,7 +339,7 @@ class Design:
         self.variables: Dict[str, Any] = {}
         self.mesh = None                     # populated by generate_mesh()
         self.notes: Dict[str, Any] = {}
-        self._aedt_source = None             # round-trip provenance
+        self._warp_source = None             # round-trip provenance
 
     # ----------------------------------------------------------- geometry
     def add_solid(self, name: str, shape: Shape, material="vacuum",
@@ -541,7 +541,7 @@ class Design:
         return self.mesh
 
     def validate(self) -> List[str]:
-        """HFSS-style pre-flight check.  Returns a list of problems found."""
+        """Warps-style pre-flight check.  Returns a list of problems found."""
         errs: List[str] = []
         if not self.solids:
             errs.append("model contains no solids")
@@ -650,12 +650,12 @@ class Design:
 
 
 class Project:
-    """A container of designs -- the unit that maps to one ``.aedt`` file."""
+    """A container of designs -- the unit that maps to one ``.warp`` file."""
 
     def __init__(self, name: str = "Project1"):
         self.name = name
         self.designs: List[Design] = []
-        self.aedt_tree = None            # preserved for lossless round-trip
+        self.warp_tree = None            # preserved for lossless round-trip
 
     def add_design(self, design: Design) -> Design:
         self.designs.append(design)

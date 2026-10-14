@@ -299,7 +299,7 @@ def _close(s: Session, **_):
 
 @command("project.open")
 def _open(s: Session, path: str = "", **_):
-    from ..io.aedt.translate import read_project
+    from ..io.warp.translate import read_project
     path = os.path.expanduser(path)
     s.progress.begin(f"Opening {os.path.basename(path) or path}",
                      stage="reading the project file")
@@ -317,7 +317,7 @@ def _open_impl(s: Session, path: str, read_project):
     clear_display_caches()
     s.progress.step(stage="building the model tree")
     if not len(proj):
-        raise ValueError("No supported HFSS design found. Open an unencrypted .aedt or .aedtz project; legacy .hfss files may need conversion in Ansys. Current project was kept.")
+        raise ValueError("No supported Warps design found. Open a .warp or .warpz project. Current project was kept.")
     s._undo.clear()
     s._redo.clear()
     s.clipboard = []
@@ -327,8 +327,8 @@ def _open_impl(s: Session, path: str, read_project):
     s.design = proj[0] if len(proj) else None
     s.project_path = path
     s.project_open = True
-    if str(proj.aedt_tree.root.get("BuildVariant", "")) != "Aether-EM":
-        s.messages.add("Native HFSS import supports a subset of AEDT. Use Save As to keep the original: saving rebuilds supported geometry, boundary and setup branches; unsupported data within those branches may not survive.", "warning", "project")
+    if str(proj.warp_tree.root.get("BuildVariant", "")) != "Aether-EM":
+        s.messages.add("This project was not written by this program: only the parts it understands were loaded. Use Save As to keep the original; saving rewrites the supported geometry, boundary and setup branches.", "warning", "project")
     s.solution = None
     s.dirty = False
     _restore_results(s, path)
@@ -348,7 +348,7 @@ def _open_impl(s: Session, path: str, read_project):
         s.messages.add(
             f"{len(blocked)} of {len(d.solids)} object(s) have no readable "
             "geometry: the project stores them as native (Parasolid) bodies, "
-            "which were written to the project's .cad folder. In HFSS use "
+            "which were written to the project's .cad folder. In Warps use "
             "Modeler > Export > .step, then Modeler > Repair Bodies here to "
             "connect them all from that one file. Affected: "
             f"{', '.join(blocked[:6])}"
@@ -368,15 +368,15 @@ def _open_impl(s: Session, path: str, read_project):
 @command("project.save")
 def _save(s: Session, path: str = "", mode: str = "auto",
           withResults: bool = True, **_):
-    from ..io.aedt.writer import write_project
+    from ..io.warp.writer import write_project
     p = os.path.expanduser(path or s.project_path)
     if not p:
         raise ValueError("no file name given")
     if not os.path.splitext(p)[1]:
-        p += ".aedt"
+        p += ".warp"
     p = os.path.abspath(p)
-    if os.path.splitext(p)[1].lower() not in (".aedt", ".aedtz"):
-        raise ValueError("Save projects as .aedt or .aedtz")
+    if os.path.splitext(p)[1].lower() not in (".warp", ".warpz"):
+        raise ValueError("Save projects as .warp or .warpz")
     write_project(p, s.project, mode=mode)
     s.project_path = p
     s.dirty = False
@@ -386,7 +386,7 @@ def _save(s: Session, path: str = "", mode: str = "auto",
 
 
 def _save_results(s: Session, path: str, enabled: bool = True) -> str:
-    """Keep the finished solution next to the project (``<project>.aeres``) so
+    """Keep the finished solution next to the project (``<project>.wres``) so
     reopening the project does not mean solving again; drop a stale file."""
     from ..io import results as resio
     sol = s.solution
@@ -542,7 +542,7 @@ def _template(s: Session, template: str = "waveguide", **_):
     import contextlib
     import tempfile
     tmp = os.path.join(tempfile.gettempdir(),
-                       f"_aether_tpl_{int(time.time()*1000)}.aedt")
+                       f"_aether_tpl_{int(time.time()*1000)}.warp")
     with contextlib.redirect_stdout(io.StringIO()):
         _p_new(argparse.Namespace(path=tmp, template=template))
     _open(s, path=tmp)
@@ -802,7 +802,7 @@ def _face_op(s: Session, op: str = "sweep", distance: Any = "1mm",
 
     dist = to_si(distance)
     if op == "sweep":
-        # HFSS semantics: sweeping a face along its normal makes a *new* body
+        # Warps semantics: sweeping a face along its normal makes a *new* body
         # out of the swept volume and leaves the one the face belongs to
         # alone. That is the whole point of the command -- a face of an
         # existing part becomes an object of its own, with its own material,
@@ -924,7 +924,7 @@ def _entities(d, names: Sequence[str]):
 
 
 def _apply_transform(shape, op: str, p: dict):
-    """One HFSS arrange operation on one shape."""
+    """One Warps arrange operation on one shape."""
     if op == "move":
         shape.translate(p.get("dx", 0), p.get("dy", 0), p.get("dz", 0))
     elif op == "rotate":
@@ -1206,7 +1206,7 @@ def _repair_bodies(s: Session, path: str = "", unit: str = "auto",
     """
     Point every unreadable body at one STEP export, in a single step.
 
-    An HFSS project whose parts are ACIS or Parasolid attachments imports
+    A project whose parts are ACIS or Parasolid attachments imports
     with its structure intact and its geometry missing -- forty bodies, forty
     *Replace CAD Source* dialogs. What the engineer actually has is one STEP
     export of the same assembly, so the file is read once, its bodies are
@@ -1719,7 +1719,7 @@ def _assign_port(s: Session, kind: str = "wave", name: str = "",
         line = (tuple(to_si(x) for x in a), tuple(to_si(x) for x in b))
     direction = p.get("direction", (0, 0, 1))
     if kind == "lumped" and p.get("ground") and p.get("signal"):
-        # polarity as HFSS states it: an integration line from the signal
+        # polarity as Warps states it: an integration line from the signal
         # conductor to the ground; the port field points along it
         g = np.array([to_si(x) for x in p["ground"]], float)
         sg = np.array([to_si(x) for x in p["signal"]], float)
@@ -1771,7 +1771,7 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
     A port from two mouse picks: the signal conductor and its return.
 
     This is how a port is actually specified -- "between this pin and that
-    ground" -- and it is what HFSS's pick-two-objects flow means. A lumped
+    ground" -- and it is what the usual pick-two-objects flow means. A lumped
     port needs a sheet bridging the gap, so one is built: a rectangle
     spanning from the signal face to the ground face, no wider than the
     narrower of the two, with the integration line running signal -> ground
@@ -1862,7 +1862,7 @@ def _lumped_ends(d, port):
     """``(signal, ground)`` points of a lumped port, in metres.
 
     The integration line runs from the signal conductor to the ground, and the
-    port's electric field points along it (field from + to -, as in HFSS). A
+    port's electric field points along it (field from + to -, as usual). A
     port with an explicit line has both ends; one defined only by a field
     direction has them implied: the port face's extent along that direction,
     signal at the low end, ground at the high end."""
@@ -1976,7 +1976,7 @@ def _del_port(s: Session, name: str = "", **_):
 
 
 def _apply_setup_options(st, kw) -> None:
-    """The HFSS solution-setup fields, validated; shared by add and edit."""
+    """The Warps solution-setup fields, validated; shared by add and edit."""
     if "frequency" in kw:
         st.frequency = to_si(kw["frequency"], "frequency")
     if "maxPasses" in kw:
@@ -3222,7 +3222,7 @@ def _view_set(s: Session, **kw):
 @command("script.run")
 def _script(s: Session, code: str = "", **_):
     """
-    Run Python against the live model — the equivalent of HFSS's scripting
+    Run Python against the live model — the equivalent of the usual scripting
     console. ``design``, ``project``, ``solution`` and ``aether as ae`` are in
     scope, and anything the script changes appears in the UI immediately
     because it is the same object graph.

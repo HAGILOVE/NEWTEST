@@ -38,7 +38,7 @@ BREP_EXT = {".brep", ".brp"}
 STL_EXT = {".stl"}
 OBJ_EXT = {".obj"}
 DXF_EXT = {".dxf"}
-SAT_EXT = {".sat", ".sab"}          # ACIS -- HFSS's native solid format
+SAT_EXT = {".sat", ".sab"}          # ACIS -- the usual native solid format
 SUPPORTED = STEP_EXT | IGES_EXT | BREP_EXT | STL_EXT | OBJ_EXT | DXF_EXT
 
 
@@ -126,7 +126,7 @@ def import_into_occ(path: str, gmsh, healing="auto",
     if fmt == "sat":
         raise CadImportError(
             "ACIS .sat/.sab is a proprietary Spatial format that OpenCASCADE "
-            "cannot read. Export the body as STEP AP214 from HFSS "
+            "cannot read. Export the body as STEP AP214 from Warps "
             "(Modeler > Export > .step) and import that instead."
         )
 

@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aether-em"
 version = "1.8.0"
-description = "3-D full-wave electromagnetic field solver (FEM, Nedelec edge elements) with HFSS .aedt interoperability"
+description = "3-D full-wave electromagnetic field solver (FEM, Nedelec edge elements) with Warps .warp interoperability"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Proprietary" }
 authors = [{ name = "Aether-EM" }]
-keywords = ["electromagnetics", "FEM", "Maxwell", "S-parameters", "HFSS",
+keywords = ["electromagnetics", "FEM", "Maxwell", "S-parameters", "Warps",
             "microwave", "RF", "antenna", "waveguide", "touchstone"]
 classifiers = [
   "Development Status :: 4 - Beta",

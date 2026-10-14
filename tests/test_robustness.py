@@ -18,8 +18,8 @@ from conftest import needs_occ
 import aether as ae
 from aether.gui.api import dispatch, state_json
 from aether.gui.state import Session
-from aether.io.aedt.tree import AedtDocument
-from aether.io.aedt.values import parse_statement
+from aether.io.warp.tree import WarpDocument
+from aether.io.warp.values import parse_statement
 
 
 # --------------------------------------------------- one bad line, one loss
@@ -43,7 +43,7 @@ def test_a_stray_quote_does_not_swallow_the_rest_of_the_file():
     was one character and the report pointed thousands of lines away."""
     text = ("$begin 'P'\n\tA=1\n\tOops='no closing quote\n\tB=2\n"
             "\t$begin 'Inner'\n\t\tC=3\n\t$end 'Inner'\n$end 'P'\n")
-    doc = AedtDocument.parse_text(text)
+    doc = WarpDocument.parse_text(text)
     root = doc.root
     assert root.get("A") == 1 and root.get("B") == 2
     assert root.block("Inner") is not None
@@ -55,16 +55,16 @@ def test_a_backslash_continuation_still_joins():
     """The base64 blocks in a real project do continue across lines, with a
     trailing backslash -- that must keep working."""
     text = ("$begin 'P'\n\tBlob='aaaa\\\n\tbbbb'\n$end 'P'\n")
-    doc = AedtDocument.parse_text(text)
+    doc = WarpDocument.parse_text(text)
     assert doc.root.get("Blob") is not None
     assert doc.to_text() == text
 
 
 def test_a_damaged_project_still_opens_in_the_workspace(tmp_path):
-    p = tmp_path / "damaged.aedt"
+    p = tmp_path / "damaged.warp"
     p.write_text(
-        "$begin 'AnsoftProject'\n"
-        "\t$begin 'HFSSModel'\n"
+        "$begin 'WarpsProject'\n"
+        "\t$begin 'WarpsModel'\n"
         "\t\tName='D'\n"
         "\t\tJunk='no closing quote\n"
         "\t\t$begin 'ModelSetup'\n"
@@ -92,8 +92,8 @@ def test_a_damaged_project_still_opens_in_the_workspace(tmp_path):
         "\t\t\t\t$end 'GeometryOperations'\n"
         "\t\t\t$end 'GeometryCore'\n"
         "\t\t$end 'ModelSetup'\n"
-        "\t$end 'HFSSModel'\n"
-        "$end 'AnsoftProject'\n")
+        "\t$end 'WarpsModel'\n"
+        "$end 'WarpsProject'\n")
     s = Session()
     s.new_project("P")
     dispatch(s, "project.open", {"path": str(p)})
@@ -101,7 +101,7 @@ def test_a_damaged_project_still_opens_in_the_workspace(tmp_path):
 
 
 def test_an_unterminated_block_is_repaired_and_reported():
-    doc = AedtDocument.parse_text("$begin 'A'\n\tX=1\n")
+    doc = WarpDocument.parse_text("$begin 'A'\n\tX=1\n")
     assert doc.issues and "unterminated" in doc.issues[0]
     assert doc.root.get("X") == 1
 
@@ -277,7 +277,7 @@ def test_a_sheet_stays_a_sheet_through_a_project_file(tmp_path):
     dispatch(s, "modeler.importCad", {"path": p, "name": "Sheet1"})
     dispatch(s, "modeler.setProperty",
              {"name": "Sheet1", "prop": "color", "value": "#00ff00"})
-    proj = str(tmp_path / "p.aedt")
+    proj = str(tmp_path / "p.warp")
     dispatch(s, "project.save", {"path": proj})
     s2 = Session()
     dispatch(s2, "project.open", {"path": proj})
@@ -292,7 +292,7 @@ def test_every_body_of_a_saved_assembly_comes_back_as_itself(assembly, tmp_path)
     s = Session()
     s.new_project("P")
     dispatch(s, "modeler.importCad", {"path": assembly, "name": "A"})
-    proj = str(tmp_path / "asm.aedt")
+    proj = str(tmp_path / "asm.warp")
     dispatch(s, "project.save", {"path": proj})
     s2 = Session()
     dispatch(s2, "project.open", {"path": proj})

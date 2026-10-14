@@ -73,12 +73,12 @@ def test_a_new_project_reopens_the_document(sess):
     dispatch(sess, "project.new", {"name": "Q"})
     st = state_json(sess)
     assert st["project"]["open"] is True
-    assert st["design"]["name"] == "HFSSDesign1"
+    assert st["design"]["name"] == "WarpsDesign1"
 
 
 def test_close_does_not_write_anything(tmp_path, sess):
     """Saving is the caller's decision; close never touches the disk."""
-    p = tmp_path / "P.aedt"
+    p = tmp_path / "P.warp"
     box(sess, "Box1")
     dispatch(sess, "project.save", {"path": str(p)})
     box(sess, "Box2")
@@ -91,7 +91,7 @@ def test_the_dirty_flag_is_what_the_prompt_keys_off(tmp_path, sess):
     assert state_json(sess)["project"]["dirty"] is False
     box(sess, "Box1")
     assert state_json(sess)["project"]["dirty"] is True
-    dispatch(sess, "project.save", {"path": str(tmp_path / "P.aedt")})
+    dispatch(sess, "project.save", {"path": str(tmp_path / "P.warp")})
     assert state_json(sess)["project"]["dirty"] is False
 
 
@@ -124,7 +124,7 @@ def test_progress_reaches_the_state_payload(sess):
 
 def test_opening_a_project_publishes_its_stages(tmp_path, sess):
     """The stage channel must be written during the read, not only after."""
-    p = tmp_path / "P.aedt"
+    p = tmp_path / "P.warp"
     box(sess, "Box1")
     dispatch(sess, "project.save", {"path": str(p)})
 
@@ -145,7 +145,7 @@ def test_opening_a_project_publishes_its_stages(tmp_path, sess):
 
 
 def test_a_failed_open_clears_the_progress_channel(tmp_path, sess):
-    bad = tmp_path / "nope.aedt"
+    bad = tmp_path / "nope.warp"
     bad.write_text("not a project")
     with pytest.raises(Exception):
         dispatch(sess, "project.open", {"path": str(bad)})

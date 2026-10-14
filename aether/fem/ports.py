@@ -82,7 +82,7 @@ class PortMode:
         For a TEM or quasi-TEM line (coax, microstrip, stripline, CPW) the
         meaningful number is the line impedance V^2/(2P), which needs a
         voltage path -- so it is used whenever an integration line was given,
-        exactly as HFSS does.
+        exactly as is usual.
         """
         if self.Z_pv != 0:
             return self.Z_pv
@@ -469,7 +469,7 @@ def _polarity(ps: "PortSurface", order, qp, qw, ct, line) -> float:
     uniform line would otherwise disagree by 180 degrees.  The rule is
 
     1. if the port has an integration line, orient the mode so that
-       ``int_S e . l^ dS > 0`` (the HFSS convention),
+       ``int_S e . l^ dS > 0`` (the Warps convention),
     2. otherwise orient the *mean* transverse field so that its dominant
        global Cartesian component is positive,
     3. and if the mean vanishes by symmetry (higher-order modes), use the

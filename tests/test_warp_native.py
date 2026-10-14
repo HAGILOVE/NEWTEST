@@ -1,5 +1,5 @@
 """
-Reading the .aedt files the HFSS desktop actually writes.
+Reading the .warp files the Warps desktop actually writes.
 
 A project saved from the modeller is not the tidy text tree the format
 description suggests. It carries Parasolid bodies as length-prefixed binary
@@ -18,9 +18,9 @@ from conftest import needs_occ
 
 from aether.gui.api import dispatch, state_json
 from aether.gui.state import Session
-from aether.io.aedt.lexer import split_logical
-from aether.io.aedt.tree import AedtBinary, AedtDocument
-from aether.io.aedt.translate import read_project
+from aether.io.warp.lexer import split_logical
+from aether.io.warp.tree import WarpBinary, WarpDocument
+from aether.io.warp.translate import read_project
 
 # A miniature of the real thing: the desktop's block names, a boundary given
 # by body id, a wave port, and two native bodies whose Parasolid payloads
@@ -37,10 +37,10 @@ def _project(bodies=(BODY_A, BODY_B)) -> bytes:
                 + b"$end 'x_b'\n")
 
     text = (
-        "$begin 'AnsoftProject'\n"
+        "$begin 'WarpsProject'\n"
         "\tCreated='Tue Jul  5 16:17:08 2022'\n"
-        "\t$begin 'HFSSModel'\n"
-        "\t\tName='HFSSDesign1'\n"
+        "\t$begin 'WarpsModel'\n"
+        "\t\tName='WarpsDesign1'\n"
         "\t\tDesignID=0\n"
         "\t\t$begin 'ModelSetup'\n"
         "\t\t\t$begin 'GeometryCore'\n"
@@ -124,8 +124,8 @@ def _project(bodies=(BODY_A, BODY_B)) -> bytes:
         "\t\t\t\t$end '2'\n"
         "\t\t\t$end 'Boundaries'\n"
         "\t\t$end 'BoundarySetup'\n"
-        "\t$end 'HFSSModel'\n"
-        "$end 'AnsoftProject'\n"
+        "\t$end 'WarpsModel'\n"
+        "$end 'WarpsProject'\n"
         "$begin 'AllReferencedFilesForProject'\n"
         "$begin 'Design_0.setup/NativeGeometryFiles'\n"
         "NumFiles= 2\n"
@@ -139,7 +139,7 @@ def _project(bodies=(BODY_A, BODY_B)) -> bytes:
 
 @pytest.fixture()
 def native(tmp_path):
-    p = tmp_path / "patch.aedt"
+    p = tmp_path / "patch.warp"
     p.write_bytes(_project())
     return str(p)
 
@@ -157,41 +157,41 @@ def test_binary_payloads_are_taken_by_length_not_scanned(native):
 
 def test_a_desktop_project_parses_at_all(native):
     """The regression: 'unterminated block x_b'."""
-    doc = AedtDocument.parse(native)
+    doc = WarpDocument.parse(native)
     assert [getattr(r, "name", "") for r in doc.roots][:2] == \
-        ["AnsoftProject", "AllReferencedFilesForProject"]
+        ["WarpsProject", "AllReferencedFilesForProject"]
     assert len(doc.designs()) == 1
 
 
 def test_the_round_trip_is_byte_exact_binaries_included(native):
-    doc = AedtDocument.parse(native)
+    doc = WarpDocument.parse(native)
     assert doc.to_text().encode(doc.encoding) == open(native, "rb").read()
 
 
 def test_the_payload_bytes_are_kept_verbatim(native):
-    doc = AedtDocument.parse(native)
+    doc = WarpDocument.parse(native)
     blobs = [n for b in doc.roots if hasattr(b, "walk")
              for sub in b.walk() for n in sub.children
-             if isinstance(n, AedtBinary)]
+             if isinstance(n, WarpBinary)]
     assert [b.data("latin-1") for b in blobs] == [BODY_A, BODY_B]
 
 
 def test_an_edited_project_still_writes_its_binaries(native, tmp_path):
-    doc = AedtDocument.parse(native)
+    doc = WarpDocument.parse(native)
     doc.designs()[0].set("Name", "Renamed")
-    out = str(tmp_path / "out.aedt")
+    out = str(tmp_path / "out.warp")
     doc.write(out)
-    again = AedtDocument.parse(out)
+    again = WarpDocument.parse(out)
     blobs = [n for b in again.roots if hasattr(b, "walk")
              for sub in b.walk() for n in sub.children
-             if isinstance(n, AedtBinary)]
+             if isinstance(n, WarpBinary)]
     assert [b.data("latin-1") for b in blobs] == [BODY_A, BODY_B]
 
 
 # ------------------------------------------------------- the translation
 def test_the_design_is_found_under_its_solver_specific_name(native):
     proj, reports = read_project(native)
-    assert [d.name for d in proj.designs] == ["HFSSDesign1"]
+    assert [d.name for d in proj.designs] == ["WarpsDesign1"]
 
 
 def test_operand_parts_are_not_imported_as_objects(native):
@@ -235,7 +235,7 @@ def test_a_wave_port_given_by_body_id_is_read_as_an_excitation(native):
 
 def test_the_pml_apparatus_is_dropped_and_replaced_by_a_radiation_boundary(native):
     """
-    HFSS's PML is geometry plus materials plus per-face boundaries, none of
+    the usual PML is geometry plus materials plus per-face boundaries, none of
     which is the model the engineer drew. It is dropped on import and the
     open condition it stood for is put back on the outer surface.
     """
@@ -266,7 +266,7 @@ def test_the_workspace_opens_it(native):
 
 @needs_occ
 def test_an_unreadable_body_can_be_repointed_at_a_step_file(native, tmp_path):
-    """The completion path: export STEP from HFSS, then Replace CAD Source."""
+    """The completion path: export STEP from Warps, then Replace CAD Source."""
     import aether as ae
     from aether.geometry.brep_io import export_shapes
     from aether.geometry.kernel import GmshSession, build_shape
@@ -288,8 +288,8 @@ def test_an_unreadable_body_can_be_repointed_at_a_step_file(native, tmp_path):
 
 
 # ------------------------------------------------- hostile property values
-HOSTILE = """$begin 'AnsoftProject'
-\t$begin 'HFSSModel'
+HOSTILE = """$begin 'WarpsProject'
+\t$begin 'WarpsModel'
 \t\tName='D'
 \t\t$begin 'ModelSetup'
 \t\t\t$begin 'GeometryCore'
@@ -342,8 +342,8 @@ HOSTILE = """$begin 'AnsoftProject'
 \t\t\t\t$end 'Setup1'
 \t\t\t$end 'SolveSetups'
 \t\t$end 'AnalysisSetup'
-\t$end 'HFSSModel'
-$end 'AnsoftProject'
+\t$end 'WarpsModel'
+$end 'WarpsProject'
 """
 
 
@@ -351,7 +351,7 @@ def test_a_temperature_value_does_not_abort_the_load(tmp_path):
     """The regression: 'invalid decimal literal' — '20cel' is on every part of
     a desktop-written project, and one unparseable value used to cost the
     entire model."""
-    p = tmp_path / "hostile.aedt"
+    p = tmp_path / "hostile.warp"
     p.write_text(HOSTILE)
     proj, reports = read_project(str(p))
     d = proj.designs[0]
@@ -360,7 +360,7 @@ def test_a_temperature_value_does_not_abort_the_load(tmp_path):
 
 
 def test_one_bad_property_costs_only_its_own_item(tmp_path):
-    p = tmp_path / "hostile.aedt"
+    p = tmp_path / "hostile.warp"
     p.write_text(HOSTILE)
     proj, reports = read_project(str(p))
     d = proj.designs[0]
@@ -382,12 +382,12 @@ def test_one_bad_property_costs_only_its_own_item(tmp_path):
     ("50%", 0.5),
 ])
 def test_expressions_that_used_to_be_syntax_errors(expr, value):
-    from aether.io.aedt.expr import evaluate
+    from aether.io.warp.expr import evaluate
     assert evaluate(expr) == pytest.approx(value)
 
 
 def test_an_unreadable_expression_raises_a_typed_error_not_a_syntax_error():
-    from aether.io.aedt.expr import ExpressionError, evaluate
+    from aether.io.warp.expr import ExpressionError, evaluate
     with pytest.raises(ExpressionError):
         evaluate("3 utter nonsense")
     with pytest.raises(ExpressionError):

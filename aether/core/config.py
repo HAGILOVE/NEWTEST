@@ -1,7 +1,7 @@
 """
 Global solver configuration -- one dataclass that every kernel reads.
 
-Defaults are chosen to mirror HFSS's out-of-the-box "driven modal" setup so
+Defaults are chosen to mirror the usual out-of-the-box "driven modal" setup so
 that a first-time user gets comparable accuracy without tuning anything.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ class MeshSettings:
 
 @dataclass
 class AdaptiveSettings:
-    """Adaptive-pass loop (HFSS: 'Solution Setup -> Adaptive Solutions')."""
+    """Adaptive-pass loop (Warps: 'Solution Setup -> Adaptive Solutions')."""
     enabled: bool = True
     max_passes: int = 6
     min_passes: int = 1

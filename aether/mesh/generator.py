@@ -13,7 +13,7 @@ Two interchangeable backends
 Both produce the same :class:`~aether.mesh.tetmesh.TetMesh`, so nothing
 downstream cares which one ran.
 
-Element sizing follows the same rule HFSS's initial mesh uses: a target of
+Element sizing follows the same rule the usual initial mesh uses: a target of
 ``lambda_min / N`` per material region, tightened by curvature and by any
 user-supplied maximum.
 """
@@ -455,7 +455,7 @@ def drop_pec_regions(mesh: TetMesh, design) -> TetMesh:
     ``solve_inside=False``) from the solution volume.
 
     The faces exposed by the removal become model boundary faces and pick up
-    the default perfect-E condition -- exactly the behaviour of HFSS's
+    the default perfect-E condition -- exactly the behaviour of the usual
     "do not solve inside" flag, and the reason a metal block never costs any
     unknowns.
     """

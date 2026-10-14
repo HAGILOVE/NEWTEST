@@ -9,8 +9,8 @@ from aether.gui.state import Session
 from aether.gui.files import resolve_save_path
 from aether.gui.measurement import measure_points, segment_distance
 from aether.geometry.primitives import ImportedShape
-from aether.io.aedt.writer import write_project, embed_cad
-from aether.io.aedt.translate import read_project
+from aether.io.warp.writer import write_project, embed_cad
+from aether.io.warp.translate import read_project
 
 
 def session():
@@ -20,7 +20,7 @@ def session():
 
 
 def test_reopened_model_edit_is_actually_saved(tmp_path):
-    s=session(); path=str(tmp_path/'모델.aedt')
+    s=session(); path=str(tmp_path/'모델.warp')
     dispatch(s,'project.save',{'path':path})
     dispatch(s,'project.open',{'path':path})
     dispatch(s,'modeler.transform',{'name':'Box1','op':'move','params':{'dx':'5mm'}})
@@ -37,7 +37,7 @@ def test_reopened_model_edit_is_actually_saved(tmp_path):
 
 
 def test_project_open_resets_cross_project_history(tmp_path):
-    s=session(); p=str(tmp_path/'p.aedt');dispatch(s,'project.save',{'path':p})
+    s=session(); p=str(tmp_path/'p.warp');dispatch(s,'project.save',{'path':p})
     s.selection=['Box1'];dispatch(s,'modeler.copy')
     dispatch(s,'project.open',{'path':p})
     assert not s.can_undo and not s.can_redo
@@ -113,11 +113,11 @@ def test_angle_circle_and_invalid_inputs():
 
 def test_save_relative_subdirectory(tmp_path):
     (tmp_path/'sub').mkdir()
-    assert resolve_save_path(str(tmp_path),'sub/project',['.aedt'])['path']==str(tmp_path/'sub/project.aedt')
+    assert resolve_save_path(str(tmp_path),'sub/project',['.warp'])['path']==str(tmp_path/'sub/project.warp')
 
 
 def test_save_failure_leaves_previous_file_and_dirty(tmp_path,monkeypatch):
-    s=session();p=str(tmp_path/'project.aedt');dispatch(s,'project.save',{'path':p})
+    s=session();p=str(tmp_path/'project.warp');dispatch(s,'project.save',{'path':p})
     before=Path(p).read_bytes();s.dirty=True
     def fail(*a,**k):raise OSError('simulated replace failure')
     monkeypatch.setattr(os,'replace',fail)
@@ -132,12 +132,12 @@ def test_same_basename_cad_is_preserved_and_archive_portable(tmp_path):
         folder=tmp_path/n;folder.mkdir();src=folder/'part.step';src.write_bytes(content)
         shape=ImportedShape(str(src),name=n)
         s.design.add_solid(n,shape)
-    path=tmp_path/'portable.aedtz'
+    path=tmp_path/'portable.warpz'
     write_project(str(path),s.project)
     files=list((tmp_path/'portable.cad').glob('*.step'))
     assert len(files)==2
     assert {f.read_bytes() for f in files}=={b'first CAD payload',b'second CAD payload'}
-    moved=tmp_path/'elsewhere';moved.mkdir();dest=moved/'renamed.aedtz';shutil.copy2(path,dest)
+    moved=tmp_path/'elsewhere';moved.mkdir();dest=moved/'renamed.warpz';shutil.copy2(path,dest)
     shutil.rmtree(tmp_path/'a');shutil.rmtree(tmp_path/'b');shutil.rmtree(tmp_path/'portable.cad')
     project,_=read_project(str(dest))
     assert {Path(o.shape.path).read_bytes() for o in project[0].solids}=={b'first CAD payload',b'second CAD payload'}
@@ -148,7 +148,7 @@ def test_units_mesh_and_full_sweep_settings_roundtrip(tmp_path):
     s.design.add_mesh_operation('Fine','0.25mm',objects=['Box1'])
     st=s.design.add_setup('Custom','2.4GHz');st.min_passes=3;st.basis_order=2
     st.add_sweep('Sparse',points=['2GHz','2.4GHz','3GHz'],save_fields=True)
-    p=str(tmp_path/'settings.aedt');dispatch(s,'project.save',{'path':p})
+    p=str(tmp_path/'settings.warp');dispatch(s,'project.save',{'path':p})
     dispatch(s,'project.open',{'path':p})
     assert s.design.units=='in'
     assert s.design.mesh_ops[0].max_length==pytest.approx(.00025)
@@ -159,15 +159,15 @@ def test_units_mesh_and_full_sweep_settings_roundtrip(tmp_path):
 
 
 def test_insert_design_after_open_can_save(tmp_path):
-    s=session();p=str(tmp_path/'multi.aedt');dispatch(s,'project.save',{'path':p})
+    s=session();p=str(tmp_path/'multi.warp');dispatch(s,'project.save',{'path':p})
     dispatch(s,'project.open',{'path':p})
     dispatch(s,'project.insertDesign',{'name':'Second'})
     dispatch(s,'project.save');dispatch(s,'project.open',{'path':p})
-    assert [d.name for d in s.project.designs]==['HFSSDesign1','Second']
+    assert [d.name for d in s.project.designs]==['WarpsDesign1','Second']
 
 
 def test_empty_import_keeps_existing_project(tmp_path):
-    p=tmp_path/'empty.aedt';p.write_text("$begin 'AnsoftProject'\n$end 'AnsoftProject'\n")
+    p=tmp_path/'empty.warp';p.write_text("$begin 'WarpsProject'\n$end 'WarpsProject'\n")
     s=session()
     with pytest.raises(ValueError):dispatch(s,'project.open',{'path':str(p)})
     assert s.design.solids[0].name=='Box1' and s.can_undo
@@ -181,5 +181,5 @@ def test_rename_and_delete_keep_mesh_references_valid(tmp_path):
     assert not s.design.mesh_ops
     dispatch(s,'edit.undo')
     assert s.design.mesh_ops[0].objects==['Renamed']
-    p=str(tmp_path/'renamed.aedt');dispatch(s,'project.save',{'path':p});dispatch(s,'project.open',{'path':p})
+    p=str(tmp_path/'renamed.warp');dispatch(s,'project.save',{'path':p});dispatch(s,'project.open',{'path':p})
     assert s.design.mesh_ops[0].objects==['Renamed']

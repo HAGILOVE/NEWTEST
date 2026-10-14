@@ -1,10 +1,10 @@
-# Aether EM 1.8.0 — 3D full-wave FEM 해석 툴 (HFSS 호환 워크플로)
+# Aether EM 1.8.0 — Warps 3D full-wave FEM 해석 툴
 
-Maxwell 방정식을 주파수 영역에서 직접 푸는 3D FEM 솔버임. 사면체 + Nédélec edge element(HFSS와 같은 수치 기반)를 쓰고, HFSS `.aedt` 프로젝트를 읽고 쓸 수 있음. 브라우저 기반 데스크톱 GUI(`aether gui`)가 HFSS와 같은 흐름(Modeler → Boundary/Port → Setup → Analyze → Results)으로 동작함.
+Maxwell 방정식을 주파수 영역에서 직접 푸는 3D FEM 솔버임. 사면체 + Nédélec edge element를 쓰고, 자체 `.warp` 프로젝트 형식으로 저장/불러오기를 함. 브라우저 기반 데스크톱 GUI(`aether gui`)가 일반적인 해석 흐름(Modeler → Boundary/Port → Setup → Analyze → Results)으로 동작함.
 
 ```bash
 aether gui                                      # 빈 프로젝트
-aether gui --project examples/dipole_antenna.aedt   # 완성된 다이폴 안테나 예제
+aether gui --project examples/dipole_antenna.warp   # 완성된 다이폴 안테나 예제
 ```
 
 Windows: `SETUP_WINDOWS.cmd`(최초 1회, 인터넷 필요) → `START_WINDOWS.cmd`. Python 3.12 권장.
@@ -14,7 +14,7 @@ Windows: `SETUP_WINDOWS.cmd`(최초 1회, 인터넷 필요) → `START_WINDOWS.c
 | 영역 | 내용 |
 |---|---|
 | 솔버 | 실제 **Interpolating / Fast** 스윕, **Eigenmode**(공진주파수·Q), 원거리장·안테나 지표, **최적화(Optimetrics)** |
-| 해석 설정 | HFSS와 같은 Setup 항목(최소/연속 수렴 패스, 패스당 세분화 %, 기저 차수), Linear Count/Step/Log/Single 스윕, Setup·Sweep 편집 |
+| 해석 설정 | Setup 항목(최소/연속 수렴 패스, 패스당 세분화 %, 기저 차수), Linear Count/Step/Log/Single 스윕, Setup·Sweep 편집 |
 | 결과 | **E / H 필드, 표면 전류(Js)**, 컷 플레인, 위상 슬라이더·**시간 애니메이션(필드·방사패턴)**, 벡터 화살표, 방사패턴(극좌표/직교/3D), 이득·효율 표 |
 | 내보내기 | Save As ▸ **three.js 3D viewer (.html)** — 모델과 결과(E/H/전류/방사)를 인터넷 없이 브라우저에서 3D로 보고 애니메이션 |
 | 모델링 | XY/YZ/ZX 작업 평면, 면에서 평면 가져오기, **Tab으로 수치 입력**, circle/sphere/cone, 그린 면을 포트로 지정 |
@@ -32,13 +32,13 @@ gmsh가 없으면 내장 구조형 메셔로 동작하지만 CAD 가져오기와
 
 ## 예제
 
-`examples/`에 9개의 **완성된 `.aedt` 프로젝트**(다이폴·패치 안테나, 도파관, 필터, 동축, 공동 공진기, 매개변수 슬랩)와 사용법이 있음 → [examples/README.md](examples/README.md).
+`examples/`에 9개의 **완성된 `.warp` 프로젝트**(다이폴·패치 안테나, 도파관, 필터, 동축, 공동 공진기, 매개변수 슬랩)와 사용법이 있음 → [examples/README.md](examples/README.md).
 다이폴 예제는 그린 면에 Lumped Port, Radiation 경계, 2차 요소가 설정되어 있고 공진 2.95 GHz에서 입력임피던스 ≈ 69 Ω, 지향성 2.18 dBi(이론 2.15 dBi), 축 방향 null이 나옴.
 
 ```python
 import aether as ae
 
-d, _ = ae.open_hfss("examples/dipole_antenna.aedt")
+d, _ = ae.open_warps("examples/dipole_antenna.warp")
 sol = d.solve(save_fields=True)
 print(sol.summary())
 ff = sol.farfield(freq=3e9)
@@ -56,9 +56,9 @@ print(ff.summary()["peakDirectivityDbi"])
 | 해석 | Driven Modal, **Eigenmode**; 1·2차 요소; 적응형 메시; Discrete / **Interpolating** / **Fast** 스윕 |
 | 후처리 | S/Z/Y/ABCD, 혼합모드, VSWR, 군지연, **E/H/Js 필드**, **원거리장·이득·효율**, Touchstone/CSV/VTK/HTML |
 | 최적화 | 변수 범위 + 목표(goal), Nelder-Mead / Pattern / L-BFGS-B / Differential evolution |
-| 파일 | `.aedt`/`.aedtz` 읽기·쓰기(원문 보존 round trip), Touchstone `.sNp` |
+| 파일 | `.warp`/`.warpz` 읽기·쓰기(원문 보존 round trip), Touchstone `.sNp` |
 
-지원하지 않는 것(숨기지 않고 적음): PML, 주기 경계/Floquet 포트, Terminal(차동) 솔루션, ACIS/Parasolid 바이너리 직접 읽기(STEP으로 내보낸 뒤 `Modeler ▸ Repair Bodies`로 연결), 방사 경계가 있는 Eigenmode. HFSS와의 수치 일치는 보증하지 않으며, 중요한 설계는 실측 또는 독립 솔버로 검증해야 함.
+지원하지 않는 것(숨기지 않고 적음): PML, 주기 경계/Floquet 포트, Terminal(차동) 솔루션, ACIS/Parasolid 바이너리 직접 읽기(STEP으로 내보낸 뒤 `Modeler ▸ Repair Bodies`로 연결), 방사 경계가 있는 Eigenmode. 외부 해석 도구와의 수치 일치는 보증하지 않으며, 중요한 설계는 실측 또는 독립 솔버로 검증해야 함.
 
 ## GUI 사용 흐름
 
@@ -72,12 +72,12 @@ print(ff.summary()["peakDirectivityDbi"])
 ## 명령줄
 
 ```bash
-aether gui [--project file.aedt] [--template waveguide]
-aether solve project.aedt --order 2 --fields      # .sNp, CSV, HTML 리포트 생성
-aether new demo.aedt --template microstrip
-aether info project.aedt
-aether validate project.aedt                      # parse/write round trip 검증
-aether mesh project.aedt --out m.vtu
+aether gui [--project file.warp] [--template waveguide]
+aether solve project.warp --order 2 --fields      # .sNp, CSV, HTML 리포트 생성
+aether new demo.warp --template microstrip
+aether info project.warp
+aether validate project.warp                      # parse/write round trip 검증
+aether mesh project.warp --out m.vtu
 ```
 
 ## 정확도 (해석해 대비)
@@ -94,7 +94,7 @@ aether mesh project.aedt --out m.vtu
 
 ## 문서·테스트
 
-[docs/QUICKSTART.md](docs/QUICKSTART.md) · [docs/GUI.md](docs/GUI.md) · [docs/THEORY.md](docs/THEORY.md) · [docs/DESIGN.md](docs/DESIGN.md) · [docs/HFSS_INTEROP.md](docs/HFSS_INTEROP.md) · [docs/VALIDATION.md](docs/VALIDATION.md) · [docs/UPGRADE_1.8.0_KO.md](docs/UPGRADE_1.8.0_KO.md)
+[docs/QUICKSTART.md](docs/QUICKSTART.md) · [docs/GUI.md](docs/GUI.md) · [docs/THEORY.md](docs/THEORY.md) · [docs/DESIGN.md](docs/DESIGN.md) · [docs/WARP_FORMAT.md](docs/WARP_FORMAT.md) · [docs/VALIDATION.md](docs/VALIDATION.md) · [docs/UPGRADE_1.8.0_KO.md](docs/UPGRADE_1.8.0_KO.md)
 
 ```bash
 pytest -q                                  # 해석해 대비 솔버 테스트 + GUI API

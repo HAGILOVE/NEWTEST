@@ -1,6 +1,6 @@
 """Dimension-checked expressions and persistent primitive parameter bindings.
 
-This deliberately does not use Python eval or the tolerant AEDT importer.
+This deliberately does not use Python eval or the tolerant Warps importer.
 Unknown units and dimensionally inconsistent expressions are errors.
 """
 

@@ -340,7 +340,7 @@ def test_a_swept_body_can_be_meshed_and_assigned(sess):
 def test_a_face_operation_round_trips_through_a_project_file(sess, tmp_path):
     dispatch(sess, "modeler.select", {"faces": [top_face(sess)], "mode": "face"})
     dispatch(sess, "modeler.faceOperation", {"op": "move", "distance": "3mm"})
-    p = str(tmp_path / "swept.aedt")
+    p = str(tmp_path / "swept.warp")
     dispatch(sess, "project.save", {"path": p})
     s2 = Session()
     dispatch(s2, "project.open", {"path": p})
@@ -353,7 +353,7 @@ def test_a_face_operation_round_trips_through_a_project_file(sess, tmp_path):
 def test_a_swept_body_round_trips_through_a_project_file(sess, tmp_path):
     dispatch(sess, "modeler.select", {"faces": [top_face(sess)], "mode": "face"})
     dispatch(sess, "modeler.faceOperation", {"op": "sweep", "distance": "3mm"})
-    p = str(tmp_path / "sweptnew.aedt")
+    p = str(tmp_path / "sweptnew.warp")
     dispatch(sess, "project.save", {"path": p})
     s2 = Session()
     dispatch(s2, "project.open", {"path": p})

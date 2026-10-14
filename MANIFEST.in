@@ -3,13 +3,13 @@ recursive-include docs *.md
 recursive-include docs/screenshots *.png
 recursive-include aether/gui/static *
 recursive-include aether/gui/vendor *
-recursive-include examples *.py *.md *.aedt
+recursive-include examples *.py *.md *.warp
 recursive-include tests *.py
 
 include run.py
 include *_WINDOWS.cmd
 
 include validate_release.py
-recursive-include examples *.aedtz
+recursive-include examples *.warpz
 
 recursive-include examples *.dxf

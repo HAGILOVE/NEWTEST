@@ -1,5 +1,5 @@
 """
-Release 1.7.9 — what an HFSS project brings in, and what it must not.
+Release 1.7.9 — what an Warps project brings in, and what it must not.
 
 The project this round was built against imported as 29 solids, 0 boundaries
 and a validation report full of PML materials that no solver here can use.
@@ -14,10 +14,10 @@ from conftest import needs_occ
 
 from aether.gui.api import dispatch
 from aether.gui.state import Session
-from aether.io.aedt.translate import read_project
+from aether.io.warp.translate import read_project
 
-PROJECT = """$begin 'AnsoftProject'
-\t$begin 'HFSSModel'
+PROJECT = """$begin 'WarpsProject'
+\t$begin 'WarpsModel'
 \t\tName='D1'
 \t\tDesignID=0
 \t\t$begin 'ModelSetup'
@@ -124,14 +124,14 @@ PROJECT = """$begin 'AnsoftProject'
 \t\t\t\t$end 'Setup1'
 \t\t\t$end 'SolveSetups'
 \t\t$end 'AnalysisSetup'
-\t$end 'HFSSModel'
-$end 'AnsoftProject'
+\t$end 'WarpsModel'
+$end 'WarpsProject'
 """
 
 
 @pytest.fixture()
 def project(tmp_path):
-    p = tmp_path / "pml.aedt"
+    p = tmp_path / "pml.warp"
     p.write_text(PROJECT)
     return str(p)
 
@@ -201,14 +201,14 @@ def test_a_region_with_nothing_to_pad_says_so_instead_of_guessing(tmp_path):
     text = PROJECT.replace("XSize='20mm'", "XSize='0mm'") \
                   .replace("YSize='10mm'", "YSize='0mm'") \
                   .replace("ZSize='2mm'", "ZSize='0mm'")
-    p = tmp_path / "noregion.aedt"
+    p = tmp_path / "noregion.warp"
     p.write_text(text)
     _, reports = read_project(str(p))
     assert any("air region" in u for u in reports[0].unresolved)
 
 
 # ---------------------------------------------------------------- setup
-def test_an_hfss_mixed_order_setup_imports_as_first_order(imported):
+def test_an_warps_mixed_order_setup_imports_as_first_order(imported):
     d, r = imported
     assert d.setups[0].basis_order == 1
     assert any("basis order" in w for w in r.warnings)

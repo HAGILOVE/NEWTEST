@@ -193,7 +193,7 @@ def test_api_rejects_nonsense_sweep_settings(bad):
         dispatch(s, "analysis.addSweep", args)
 
 
-def test_aedt_roundtrip_keeps_the_sweep_tolerance(tmp_path):
+def test_warp_roundtrip_keeps_the_sweep_tolerance(tmp_path):
     d = ae.Design("rt")
     d.add_box("b", (0, 0, 0), (A, B, 0.01), "vacuum")
     d.add_wave_port("p1", axis="z", value=0)
@@ -201,9 +201,9 @@ def test_aedt_roundtrip_keeps_the_sweep_tolerance(tmp_path):
     st = d.add_setup("S1", "10GHz")
     st.add_sweep("Sw", "8GHz", "12GHz", 41, kind="fast", tolerance=0.004,
                  max_points=25)
-    path = str(tmp_path / "rt.aedt")
-    ae.save_hfss(d, path, mode="create")
-    d2, _ = ae.open_hfss(path)
+    path = str(tmp_path / "rt.warp")
+    ae.save_warps(d, path, mode="create")
+    d2, _ = ae.open_warps(path)
     sw = d2.setups[0].sweeps[0]
     assert sw.kind == "fast"
     assert sw.tolerance == pytest.approx(0.004)

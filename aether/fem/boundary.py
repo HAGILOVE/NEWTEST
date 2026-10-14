@@ -66,7 +66,7 @@ class BoundaryTerms:
                 self.kinds[b.name] = b.btype
                 self.eta_rel[b.name] = _relative_eta(mesh, tris)
 
-        # unassigned + not a port -> default boundary (HFSS: perfect E)
+        # unassigned + not a port -> default boundary (Warps: perfect E)
         port_idx = np.concatenate([v for v in mesh.port_faces.values()]) \
             if mesh.port_faces else np.zeros(0, dtype=np.int64)
         free = np.zeros(len(mesh.surf_tris), bool)

@@ -1,6 +1,6 @@
-$begin 'AnsoftProject'
+$begin 'WarpsProject'
 	FileVersion(1, 0)
-	Created='Wed Oct 14 14:16:15 2026'
+	Created='Wed Oct 14 16:29:13 2026'
 	Product='ElectronicsDesktop'
 	BuildVariant='Aether-EM'
 	$begin 'Desktop'
@@ -554,9 +554,9 @@ $begin 'AnsoftProject'
 		$end 'water_distilled'
 	$end 'Materials'
 	$begin 'Design'
-		DesignType='HFSS'
-		Name='copper_cavity_eigenmode'
-		SolutionType='HFSS Eigenmode'
+		DesignType='Warps'
+		Name='cavity_eigenmode'
+		SolutionType='Warps Eigenmode'
 		DesignVersion=1
 		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.006, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
 		AetherImportIssues='[]'
@@ -607,37 +607,35 @@ $begin 'AnsoftProject'
 		$end 'ModelSetup'
 		$begin 'BoundarySetup'
 			MapCoefficients=false
-			$begin 'CopperWalls'
-				BoundType='Finite Conductivity'
-				Name='CopperWalls'
+			$begin 'Walls'
+				BoundType='Perfect E'
+				Name='Walls'
 				$begin 'AetherSelector'
 					Kind='Outer'
 				$end 'AetherSelector'
-				UseMaterial=true
-				Material='copper'
-			$end 'CopperWalls'
+			$end 'Walls'
 		$end 'BoundarySetup'
 		$begin 'AnalysisSetup'
 			$begin 'SolveSetups'
 				$begin 'Eigen1'
-					SetupType='HfssEigen'
+					SetupType='WarpsEigen'
 					Name='Eigen1'
 					IsEnabled=true
 					$begin 'SolveSetupProps'
 						Frequency='10GHz'
 						MaxDeltaS=0.02
-						MaximumPasses=2
+						MaximumPasses=4
 						MinimumPasses=1
 						MinimumConvergedPasses=1
 						PercentRefinement=30
 						BasisOrder=2
-						NumModes=2
+						NumModes=5
 						MinimumFrequency='0Hz'
-						MaxDeltaFreq=2
+						MaxDeltaFreq=1
 						ConvergeOnRealFreq=true
 					$end 'SolveSetupProps'
 				$end 'Eigen1'
 			$end 'SolveSetups'
 		$end 'AnalysisSetup'
 	$end 'Design'
-$end 'AnsoftProject'
+$end 'WarpsProject'

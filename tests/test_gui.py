@@ -32,7 +32,7 @@ def sess():
 def test_new_session_has_a_design(sess):
     st = state_json(sess)
     assert st["project"]["name"] == "TestProject"
-    assert st["design"]["name"] == "HFSSDesign1"
+    assert st["design"]["name"] == "WarpsDesign1"
     assert st["design"]["objects"] == []
     assert st["job"]["running"] is False
 

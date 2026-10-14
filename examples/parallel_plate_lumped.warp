@@ -1,6 +1,6 @@
-$begin 'AnsoftProject'
+$begin 'WarpsProject'
 	FileVersion(1, 0)
-	Created='Wed Oct 14 14:16:11 2026'
+	Created='Wed Oct 14 16:29:13 2026'
 	Product='ElectronicsDesktop'
 	BuildVariant='Aether-EM'
 	$begin 'Desktop'
@@ -145,9 +145,9 @@ $begin 'AnsoftProject'
 			$begin 'PhysicsTypes'
 				set=['Electromagnetic']
 			$end 'PhysicsTypes'
-			permittivity='4.271006108'
+			permittivity='4.309835872'
 			permeability='1'
-			dielectric_loss_tangent='0.02047287816'
+			dielectric_loss_tangent='0.02035341508'
 			AetherKind='dielectric'
 			AetherColor='#2f7a3f'
 			AetherTransparency=0.6
@@ -210,9 +210,9 @@ $begin 'AnsoftProject'
 			$begin 'PhysicsTypes'
 				set=['Electromagnetic']
 			$end 'PhysicsTypes'
-			permittivity='-16767.41123'
+			permittivity='-16767.41573'
 			permeability='1'
-			dielectric_loss_tangent='-1672.023889'
+			dielectric_loss_tangent='-3344.047778'
 			AetherKind='dielectric'
 			AetherColor='#d4af37'
 			AetherTransparency=0.6
@@ -554,11 +554,11 @@ $begin 'AnsoftProject'
 		$end 'water_distilled'
 	$end 'Materials'
 	$begin 'Design'
-		DesignType='HFSS'
-		Name='cavity_eigenmode'
-		SolutionType='HFSS Eigenmode'
+		DesignType='Warps'
+		Name='parallel_plate_lumped'
+		SolutionType='Warps Modal Network'
 		DesignVersion=1
-		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.006, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
+		AetherConfig='{"mesh": {"lambda_refinement": 0.25, "min_elements_per_wavelength": 4.0, "curvature_angle_deg": 22.5, "max_element_size": 0.0015, "min_element_size": null, "surface_deviation": null, "order": 2, "optimize": true, "algorithm3d": 1, "algorithm2d": 6, "growth_rate": 1.5}, "adaptive": {"enabled": true, "max_passes": 6, "min_passes": 1, "min_converged_passes": 1, "delta_s": 0.02, "refinement_fraction": 0.3, "error_metric": "field_jump"}, "solver": {"linear_solver": "auto", "direct_backend": "auto", "iterative": "gmres", "tol": 1e-08, "maxiter": 3000, "restart": 120, "preconditioner": "ilu", "ilu_drop_tol": 0.0001, "ilu_fill_factor": 12.0, "direct_threshold_dof": 400000, "threads": 4}, "sweep": {"kind": "discrete", "rom_order": 12, "interp_tol": 0.001, "interp_max_points": 100, "save_fields": false}, "port": {"num_modes": 1, "deembed": false, "renormalize_to": null, "impedance_definition": "pi", "integration_line_required": false, "eigen_tol": 1e-10, "eigen_maxiter": 500}, "basis_order": 1, "time_convention": "ejwt", "verbose": true, "cache_dir": ".aether_cache"}'
 		AetherImportIssues='[]'
 		AetherDefaultBoundary='pec'
 		$begin 'ModelSetup'
@@ -573,7 +573,7 @@ $begin 'AnsoftProject'
 					$begin 'ToplevelParts'
 						$begin 'GeometryPart'
 							$begin 'Attributes'
-								Name='Cavity'
+								Name='Air'
 								Flags=''
 								MaterialValue='"vacuum"'
 								SolveInside=true
@@ -594,9 +594,9 @@ $begin 'AnsoftProject'
 										XPosition='0mm'
 										YPosition='0mm'
 										ZPosition='0mm'
-										XSize='30mm'
-										YSize='15mm'
-										ZSize='20mm'
+										XSize='20mm'
+										YSize='10mm'
+										ZSize='1mm'
 									$end 'BoxParameters'
 								$end 'Operation'
 							$end 'Operations'
@@ -607,35 +607,82 @@ $begin 'AnsoftProject'
 		$end 'ModelSetup'
 		$begin 'BoundarySetup'
 			MapCoefficients=false
-			$begin 'Walls'
-				BoundType='Perfect E'
-				Name='Walls'
+			$begin 'PMC_y0'
+				BoundType='Perfect H'
+				Name='PMC_y0'
 				$begin 'AetherSelector'
-					Kind='Outer'
+					Kind='Plane'
+					Axis='y'
+					Value=0
+					Tol=1e-09
 				$end 'AetherSelector'
-			$end 'Walls'
+			$end 'PMC_y0'
+			$begin 'PMC_y1'
+				BoundType='Perfect H'
+				Name='PMC_y1'
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='y'
+					Value=0.01
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'PMC_y1'
+			$begin 'Port1'
+				Name='Port1'
+				ExcType='Lumped Port'
+				NumModes=1
+				UseIntLine=false
+				Impedance='37.67303137ohm'
+				Direction=[0, 0, 1]
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='x'
+					Value=0
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'Port1'
+			$begin 'Port2'
+				Name='Port2'
+				ExcType='Lumped Port'
+				NumModes=1
+				UseIntLine=false
+				Impedance='75.34606273ohm'
+				Direction=[0, 0, 1]
+				$begin 'AetherSelector'
+					Kind='Plane'
+					Axis='x'
+					Value=0.02
+					Tol=1e-09
+				$end 'AetherSelector'
+			$end 'Port2'
 		$end 'BoundarySetup'
 		$begin 'AnalysisSetup'
 			$begin 'SolveSetups'
-				$begin 'Eigen1'
-					SetupType='HfssEigen'
-					Name='Eigen1'
+				$begin 'Setup1'
+					SetupType='WarpsDriven'
+					Name='Setup1'
 					IsEnabled=true
 					$begin 'SolveSetupProps'
-						Frequency='10GHz'
+						Frequency='5GHz'
 						MaxDeltaS=0.02
-						MaximumPasses=4
+						MaximumPasses=6
 						MinimumPasses=1
 						MinimumConvergedPasses=1
 						PercentRefinement=30
-						BasisOrder=2
-						NumModes=5
-						MinimumFrequency='0Hz'
-						MaxDeltaFreq=1
-						ConvergeOnRealFreq=true
+						BasisOrder=1
 					$end 'SolveSetupProps'
-				$end 'Eigen1'
+					$begin 'Sweep'
+						Name='Sweep'
+						IsEnabled=true
+						Type='Discrete'
+						RangeType='LinearCount'
+						RangeStart='1GHz'
+						RangeEnd='10GHz'
+						RangeCount=10
+						SaveFields=false
+					$end 'Sweep'
+				$end 'Setup1'
 			$end 'SolveSetups'
 		$end 'AnalysisSetup'
 	$end 'Design'
-$end 'AnsoftProject'
+$end 'WarpsProject'

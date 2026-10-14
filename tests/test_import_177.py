@@ -1,7 +1,7 @@
 """
-Release 1.7.7 — the three things that stopped a real HFSS project loading.
+Release 1.7.7 — the three things that stopped a real Warps project loading.
 
-All three were reproduced from one user's files (an .aedt with 29 bodies, the
+All three were reproduced from one user's files (an .warp with 29 bodies, the
 STEP those bodies were exported to, and a DXF of the coil layer), and each is
 covered here by the smallest synthetic case that carries the same defect:
 
@@ -198,7 +198,7 @@ def test_opening_another_project_drops_the_previous_buffers(tmp_path):
                                             "size": ["8mm", "4mm", "1mm"]}})
     dispatch(s, "view.geometry", {"binary": True})
     assert len(_TESS_CACHE) >= 1 and len(BLOBS) >= 1
-    p = tmp_path / "P.aedt"
+    p = tmp_path / "P.warp"
     dispatch(s, "project.save", {"path": str(p)})
     dispatch(s, "project.open", {"path": str(p)})
     assert len(_TESS_CACHE) == 0

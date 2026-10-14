@@ -1,7 +1,7 @@
 """
 Half-wave dipole: input impedance, radiation pattern and gain.
 
-Opens ``dipole_antenna.aedt`` (lumped port on a drawn feed sheet, radiation
+Opens ``dipole_antenna.warp`` (lumped port on a drawn feed sheet, radiation
 boundary, 2nd-order elements), solves it and reports what an antenna engineer
 asks first: where it resonates, what it presents to a 50 ohm source, and what
 it radiates.
@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def main():
     ae.set_log_level("WARNING")
-    design, report = ae.open_hfss(os.path.join(HERE, "dipole_antenna.aedt"))
+    design, report = ae.open_warps(os.path.join(HERE, "dipole_antenna.warp"))
     sol = design.solve(progress=False, save_fields=True)
     print(sol.summary())
 

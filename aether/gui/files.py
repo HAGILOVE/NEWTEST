@@ -32,7 +32,7 @@ log = get_logger("gui.files")
 
 # Filters offered by each dialog, as (label, [extensions]).
 FILTERS: Dict[str, List[Tuple[str, List[str]]]] = {
-    "project": [("AEDT project (*.aedt, *.aedtz)", [".aedt", ".aedtz"]),
+    "project": [("Warps project (*.warp, *.warpz)", [".warp", ".warpz"]),
                 ("All files", [])],
     "cad": [("All CAD files", [".step", ".stp", ".iges", ".igs", ".brep",
                                ".brp", ".stl", ".obj", ".dxf"]),
@@ -43,7 +43,7 @@ FILTERS: Dict[str, List[Tuple[str, List[str]]]] = {
             ("STL / OBJ", [".stl", ".obj"]),
             ("All files", [])],
     # Save As: the project formats, plus the stand-alone three.js viewer
-    "projectsave": [("AEDT project (*.aedt, *.aedtz)", [".aedt", ".aedtz"]),
+    "projectsave": [("Warps project (*.warp, *.warpz)", [".warp", ".warpz"]),
                     ("three.js 3D viewer (*.html)", [".html", ".htm"]),
                     ("All files", [])],
     "touchstone": [("Touchstone (*.sNp, *.ts)",

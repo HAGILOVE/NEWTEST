@@ -20,7 +20,7 @@ def saved(tmp_path_factory):
     s.project.designs[0] = d
     s.design = d
     s.solution = d.solve(adaptive=False, progress=False, save_fields=True)
-    path = str(tmp_path_factory.mktemp("rt") / "dipole.aedt")
+    path = str(tmp_path_factory.mktemp("rt") / "dipole.warp")
     r = dispatch(s, "project.save", {"path": path})
     return s, path, r
 
@@ -35,7 +35,7 @@ def reopen(path):
 
 def test_saving_a_solved_project_writes_the_results_next_to_it(saved):
     s, path, r = saved
-    assert r["results"].endswith(".aedt.aeres") and os.path.isfile(r["results"])
+    assert r["results"].endswith(".warp.wres") and os.path.isfile(r["results"])
 
 
 def test_reopening_restores_the_solution_without_solving(saved):
@@ -79,9 +79,9 @@ def test_far_field_and_field_plots_work_on_the_restored_solution(saved):
 def test_an_edited_project_does_not_load_stale_results(saved, tmp_path):
     s, path, _ = saved
     import shutil
-    p2 = str(tmp_path / "copy.aedt")
+    p2 = str(tmp_path / "copy.warp")
     shutil.copy(path, p2)
-    shutil.copy(path + ".aeres", p2 + ".aeres")
+    shutil.copy(path + ".wres", p2 + ".wres")
     with open(p2, "ab") as fh:
         fh.write(b"\n")                     # any change to the project file
     s2 = reopen(p2)
@@ -94,10 +94,10 @@ def test_saving_without_a_solution_removes_a_stale_results_file(saved, tmp_path)
     from aether.gui.api import dispatch
     s, path, _ = saved
     import shutil
-    p2 = str(tmp_path / "again.aedt")
+    p2 = str(tmp_path / "again.warp")
     shutil.copy(path, p2)
-    shutil.copy(path + ".aeres", p2 + ".aeres")
+    shutil.copy(path + ".wres", p2 + ".wres")
     s2 = reopen(p2)
     s2.solution = None
     dispatch(s2, "project.save", {"path": p2})
-    assert not os.path.exists(p2 + ".aeres")
+    assert not os.path.exists(p2 + ".wres")

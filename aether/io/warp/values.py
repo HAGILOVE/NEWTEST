@@ -1,5 +1,5 @@
 """
-Value parsing and re-serialisation for ``.aedt`` property statements.
+Value parsing and re-serialisation for ``.warp`` property statements.
 
 Statement shapes handled::
 
@@ -8,9 +8,9 @@ Statement shapes handled::
     Key=true                       -> bool
     Key=[1, 2, 3]                  -> list
     Key(arg, 'arg', 3)             -> Call(name, args)
-    Key[3: 'a', 'b', 'c']          -> Indexed list (HFSS's counted-array form)
+    Key[3: 'a', 'b', 'c']          -> Indexed list (the usual counted-array form)
 
-Round-trip fidelity is the point: :func:`format_value` reproduces HFSS's own
+Round-trip fidelity is the point: :func:`format_value` reproduces the usual own
 spelling (single quotes, ``true``/``false``, no space after commas inside
 brackets) so a re-written file diffs cleanly against the original.
 """
@@ -22,14 +22,14 @@ from typing import Any, List, Optional, Tuple
 
 from ...core.logging import get_logger
 
-log = get_logger("io.aedt.values")
+log = get_logger("io.warp.values")
 
 KEY_RE = re.compile(r"^([A-Za-z_$][\w \-./%]*)")
 
 
 @dataclass
 class Call:
-    """``Name(arg, ...)`` -- HFSS's function-style property."""
+    """``Name(arg, ...)`` -- the usual function-style property."""
     name: str
     args: List[Any] = field(default_factory=list)
 
@@ -39,7 +39,7 @@ class Call:
 
 @dataclass
 class Counted:
-    """``Name[n: v1, v2, ...]`` -- HFSS's length-prefixed array."""
+    """``Name[n: v1, v2, ...]`` -- the usual length-prefixed array."""
     name: str
     items: List[Any] = field(default_factory=list)
 

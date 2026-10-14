@@ -10,7 +10,7 @@ Frequency-sweep strategies: discrete, interpolating and fast.
     through them and evaluated on the requested grid.  New frequencies are
     added until an interpolant built *without* the newest sample predicts it to
     within the sweep tolerance -- the same "does the model already know the
-    answer here?" test HFSS uses.
+    answer here?" test Warps uses.
 
 ``fast``
     a reduced-basis (projection) model.  The field solutions at a few

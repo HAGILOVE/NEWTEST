@@ -1,8 +1,8 @@
 """
-HFSS interoperability: read a project, inspect it, modify it, write it back.
+Project files: read a .warp project, inspect it, modify it, write it back.
 
 Shows both writing modes:
-  * ``create`` -- generate a fresh .aedt from an Aether model,
+  * ``create`` -- generate a fresh .warp from an Aether model,
   * ``update`` -- edit an existing project so that every byte Aether does not
     model is preserved exactly.
 """
@@ -10,12 +10,12 @@ import os
 import sys
 
 import aether as ae
-from aether.io.aedt.tree import AedtDocument
-from aether.io.aedt.writer import write_project
+from aether.io.warp.tree import WarpDocument
+from aether.io.warp.writer import write_project
 
 
 def make_demo_project(path):
-    d = ae.Design("HFSSDesign1", units="mm")
+    d = ae.Design("WarpsDesign1", units="mm")
     d.add_box("substrate", (0, 0, 0), ("20mm", "10mm", "0.8mm"),
               "rogers_ro4003c")
     d.add_box("air", ("-5mm", "-5mm", "0.8mm"), ("30mm", "20mm", "6mm"), "air")
@@ -29,26 +29,26 @@ def make_demo_project(path):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "demo_project.aedt"
+    path = sys.argv[1] if len(sys.argv) > 1 else "demo_project.warp"
     if not os.path.exists(path):
         make_demo_project(path)
         print(f"created {path}")
 
     # ---- raw tree: byte-exact round trip ----------------------------
-    doc = AedtDocument.parse(path)
+    doc = WarpDocument.parse(path)
     assert doc.to_text().encode(doc.encoding) == open(path, "rb").read()
     print("raw parse/write round trip : byte-identical")
     print(f"designs in project         : "
-          f"{[str(b.get('Name')) for b in doc.hfss_designs()]}")
+          f"{[str(b.get('Name')) for b in doc.warps_designs()]}")
 
     # ---- model level -------------------------------------------------
-    design, report = ae.open_hfss(path)
+    design, report = ae.open_warps(path)
     print("\n" + str(report))
     print("\n" + design.summary())
 
     # ---- modify and write back, preserving everything else -----------
     design.get_setup("Setup1").frequency = 12e9
-    out = os.path.splitext(path)[0] + "_modified.aedt"
+    out = os.path.splitext(path)[0] + "_modified.warp"
     write_project(out, design, mode="update")
     print(f"\nwrote {out} (update mode: only the changed statements differ)")
 

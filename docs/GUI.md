@@ -142,7 +142,7 @@ They are two different commands and they do two different things:
 Every place the application reads or writes a file opens a real browser:
 
 * **File ▸ Open Project / Save Project As** — lists the machine the solver
-  runs on, filtered to `.aedt` / `.aedtz`;
+  runs on, filtered to `.warp` / `.warpz`;
 * **Draw ▸ Import CAD** — *Browse…* next to the path, filtered to STEP, IGES,
   BREP, STL and OBJ, the object name taken from the file, and the file's
   contents reported before you commit to it (see §4a);
@@ -223,7 +223,7 @@ named after its file.
 
 1. **Start a model** — `File ▸ New from Template…` gives a complete, solvable
    project (WR-90 waveguide, 50 Ω coax, or a parallel-plate line with lumped
-   ports). `File ▸ Open Project…` reads any `.aedt` / `.aedtz`.
+   ports). `File ▸ Open Project…` reads any `.warp` / `.warpz`.
 2. **Draw** — Box, Cylinder, Sphere, Cone, Torus, Rectangle sheets, or
    `Import CAD…` for STEP / IGES / BREP / STL. Every length field takes units
    (`22.86mm`, `0.9in`, `25mil`).
@@ -243,7 +243,7 @@ named after its file.
 
 ## 4a0. What a CAD file carries besides its parts
 
-A STEP export is not only its solids. One written by HFSS through Spatial
+A STEP export is not only its solids. One written by Warps through Spatial
 InterOp also carries presentation geometry: free faces of hundreds of square
 metres and free curves tens of metres long, in an assembly whose largest part
 is forty-eight millimetres. Nothing in the model refers to them and nothing
@@ -345,7 +345,7 @@ Both edit the existing object rather than making a new one, so its name, its
 material, the transforms applied to it and every boundary and port assigned to
 it survive the change.
 
-**Repairing a whole import at once.** An HFSS project whose parts are stored as
+**Repairing a whole import at once.** A project whose parts are stored as
 ACIS or Parasolid attachments arrives with every name, material, boundary and
 port intact and no geometry at all: those are proprietary kernel formats, and
 nothing outside their own kernel can read them. What the engineer has is one
@@ -357,7 +357,7 @@ no names — for correction before anything is changed. Bodies left unmapped sta
 as they were.
 
 **Saving.** `File ▸ Save Project` copies each imported CAD file into a
-`<project>.cad` folder beside the `.aedt` and records it as a relative path, so
+`<project>.cad` folder beside the `.warp` and records it as a relative path, so
 the project opens correctly after it is moved, copied or sent to a colleague.
 The original absolute path is kept as a fallback. If neither can be found the
 part is still loaded — with its boundaries, ports and transforms intact — and
@@ -366,7 +366,7 @@ with *Locate file…* rather than the model quietly coming back incomplete.
 
 Exports are written to match: STEP and IGES are stamped with millimetres *and*
 written in millimetres, so a file Aether writes reads back at the same size in
-Aether, in HFSS, and in any mechanical CAD system.
+Aether, in Warps, and in any mechanical CAD system.
 
 ### Assemblies arrive as parts
 
@@ -686,7 +686,7 @@ interchangeable.
 ```bash
 aether gui                                # open with an empty project
 aether gui --template waveguide           # start from a template
-aether gui --project my.aedt              # open an existing project
+aether gui --project my.warp              # open an existing project
 aether gui --port 8800 --no-browser       # fixed port, don't launch a browser
 aether gui --host 0.0.0.0                 # expose on the network (see below)
 ```

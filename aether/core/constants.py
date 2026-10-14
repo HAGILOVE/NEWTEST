@@ -4,7 +4,7 @@ Physical constants and unit handling (CODATA-2018 exact SI definitions).
 All internal computation in Aether-EM is performed in **strict SI base units**
 (metre, second, kilogram, ampere).  User-facing APIs accept unit-tagged
 strings ("2.54mm", "10 GHz") which are converted here exactly once, at the
-model boundary.  This is the same discipline HFSS enforces with its
+model boundary.  This is the same discipline Warps enforces with its
 "model units" concept, but resolved eagerly instead of lazily so that no
 downstream kernel ever has to know about units.
 """

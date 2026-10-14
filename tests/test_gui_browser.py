@@ -187,19 +187,19 @@ def test_boundary_dialog_is_type_aware(page):
 
 def test_file_picker_browses_the_real_filesystem(page, tmp_path):
     (tmp_path / "sub").mkdir()
-    (tmp_path / "one.aedt").write_text("x")
-    (tmp_path / "two.aedt").write_text("y")
+    (tmp_path / "one.warp").write_text("x")
+    (tmp_path / "two.warp").write_text("y")
     (tmp_path / "ignore.txt").write_text("z")
     page.evaluate("(p)=>filePicker({mode:'open',kind:'project',"
                   "title:'Open Project',path:p})", str(tmp_path))
     page.wait_for_selector(".fp-list .fp-row", timeout=20000)
     names = page.locator(".fp-row .nm").all_inner_texts()
-    assert [n.strip() for n in names] == ["sub", "one.aedt", "two.aedt"]
+    assert [n.strip() for n in names] == ["sub", "one.warp", "two.warp"]
     assert page.locator(".fp-places button").count() >= 2
     assert page.locator(".fp-crumbs button").count() >= 2
     # selecting a file fills the name box
-    page.locator(".fp-row", has_text="one.aedt").click()
-    assert page.input_value("#fp-name") == "one.aedt"
+    page.locator(".fp-row", has_text="one.warp").click()
+    assert page.input_value("#fp-name") == "one.warp"
     # entering a folder navigates
     page.locator(".fp-row", has_text="sub").dblclick()
     page.wait_for_function(
@@ -211,7 +211,7 @@ def test_file_picker_browses_the_real_filesystem(page, tmp_path):
 
 
 def test_file_picker_saves_and_the_project_reopens(page, tmp_path):
-    target = tmp_path / "FromPicker.aedt"
+    target = tmp_path / "FromPicker.warp"
     page.evaluate("(p)=>filePicker({mode:'save',kind:'project',"
                   "title:'Save',path:p,filename:'FromPicker',"
                   "onPick:(x)=>rpc('project.save',{path:x})})", str(tmp_path))
@@ -220,7 +220,7 @@ def test_file_picker_saves_and_the_project_reopens(page, tmp_path):
     page.wait_for_timeout(1500)
     assert target.is_file(), list(tmp_path.iterdir())
     text = target.read_text()
-    assert "$begin 'AnsoftProject'" in text
+    assert "$begin 'WarpsProject'" in text
 
 
 def test_validation_dialog(page):

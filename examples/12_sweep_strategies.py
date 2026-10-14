@@ -23,7 +23,7 @@ def main():
     ref = None
     print(f"{'sweep':>14} {'full solves':>12} {'time [s]':>9} {'max |dS|':>10}")
     for kind in ("discrete", "interpolating", "fast"):
-        design, _ = ae.open_hfss(os.path.join(HERE, "wr90_waveguide.aedt"))
+        design, _ = ae.open_warps(os.path.join(HERE, "wr90_waveguide.warp"))
         sw = design.setups[0].sweeps[0]
         sw.kind, sw.spacing, sw.count = kind, "linear", 81
         t0 = time.perf_counter()

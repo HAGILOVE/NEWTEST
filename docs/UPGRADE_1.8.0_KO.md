@@ -1,6 +1,6 @@
 # Aether EM 1.8.0 — 사용 안내
 
-새 폴더에 압축 해제 후 `SETUP_WINDOWS.cmd` → `START_WINDOWS.cmd`. 완성된 예제는 `examples\*.aedt`(File ▸ Open Project).
+새 폴더에 압축 해제 후 `SETUP_WINDOWS.cmd` → `START_WINDOWS.cmd`. 완성된 예제는 `examples\*.warp`(File ▸ Open Project).
 아래 수치는 이 릴리스를 만들면서 직접 측정한 값이고, 한계도 같이 적음.
 
 ---
@@ -27,7 +27,7 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 | 사각형이 XY로만 그려지던 문제 | **수정.** XY / YZ / ZX 작업 평면을 선택해 그림. 입력한 좌표가 그대로 형상이 됨(브라우저 테스트로 3개 평면 모두 확인) |
 | 마우스로 위치 선택 + Tab으로 수치 입력 | **됨.** 아래 2장 |
 | 면 그리기 → 포트 지정, Lumped / Wave Port | **됨.** Rectangle·Circle로 면을 그리고, 선택 후 우클릭 `Assign Lumped Port…` / `Assign Wave Port…`. 두 도체 면을 클릭하는 `Port (pick)`도 유지 |
-| HFSS와 같은 Setup(주파수 등) | **됨.** 3장 |
+| Setup(주파수 등) | **됨.** 3장 |
 | E, H 필드, 전류 흐름, 안테나 방사 | **됨.** 4장 |
 | 불필요한 기능·asset 제거 | 릴리스 패치/결과 XML/구버전 안내/스크린샷 일부 삭제 |
 | 다이폴 안테나 완성 파일 + 여러 예제 | `examples/` 9개 프로젝트. 5장 |
@@ -45,7 +45,7 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 
 높이는 항상 작업 평면의 법선 방향임(YZ 평면의 Box는 X 방향으로, ZX 평면의 원기둥 축은 Y).
 
-## 3. Setup / Sweep (HFSS와 같은 항목)
+## 3. Setup / Sweep
 
 `Simulation ▸ Add Solution Setup…`, 트리의 Setup 우클릭 `Edit Setup…`
 
@@ -85,14 +85,14 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 - 플롯은 **창 크기에 맞게 가득 차게** 그려짐. 위쪽 상자에서 X/Y 최소·최대를 직접 입력, 휠로 확대/축소, 드래그로 이동, 더블클릭 또는 `Auto`로 복귀.
 - **마커**: 플롯을 클릭하면 가장 가까운 곡선 위 점에 `m1, m2…`가 찍히고, 표에 X, Y, m1과의 차이(ΔX, ΔY)가 표시됨. 마커는 곡선을 따라 드래그, 더블클릭/× 로 삭제, `Marker ▲ Peak / ▼ Min`으로 극값에 바로 지정. 극좌표 패턴은 `Max [dB]`, `Range [dB]`를 입력해 스케일 조정.
 - 필드 패널의 `Plot opacity`, `Model opacity`로 방사 패턴 안쪽의 안테나가 보이도록 투명도를 조절.
-- **결과 저장**: 해석을 마친 프로젝트를 저장하면 `프로젝트.aedt.aeres`가 함께 저장되고, 다시 열면 재해석 없이 결과가 복원됨. `.aedt`를 수정했다면(다른 파일로 바뀐 것이므로) 결과는 불러오지 않음. 두 파일을 함께 옮겨야 함.
+- **결과 저장**: 해석을 마친 프로젝트를 저장하면 `프로젝트.warp.wres`가 함께 저장되고, 다시 열면 재해석 없이 결과가 복원됨. `.warp`를 수정했다면(다른 파일로 바뀐 것이므로) 결과는 불러오지 않음. 두 파일을 함께 옮겨야 함.
 
-**포트 방향 — New Line (HFSS 방식)** — Lumped/Wave 포트 모두 같은 방법임: 포트 면을 선택하고 `Assign Lumped Port…`(또는 Wave)에서 `🖱 New Line…`을 누르면 대화상자가 잠시 사라지고, 3D 뷰에서 **signal 쪽 점 → ground 쪽 점** 순서로 클릭함.
+**포트 방향 — New Line (Warps 방식)** — Lumped/Wave 포트 모두 같은 방법임: 포트 면을 선택하고 `Assign Lumped Port…`(또는 Wave)에서 `🖱 New Line…`을 누르면 대화상자가 잠시 사라지고, 3D 뷰에서 **signal 쪽 점 → ground 쪽 점** 순서로 클릭함.
 
 - 점은 꼭짓점/모서리 중점에 달라붙고(12 px 이내), 두 번째 점을 정하는 동안 **signal → ground 화살표가 미리 보임**. 좌표는 패널에 실시간으로 표시됨.
 - **Tab**을 누르면 좌표 입력 칸으로 이동해 직접 입력할 수 있고 `Enter`로 확정, `Esc`로 취소. `⇄ Swap`으로 방향을 뒤집음.
-- 선은 signal에서 ground로 향하며 **포트의 전계(E)가 그 방향**임(전계는 + 에서 − 로). Wave 포트의 모드 극성 규칙(∫e·l̂ > 0, HFSS 규약)과 같은 방향임. 대화상자의 `Detect from selection`은 선택한 면의 크기로 축 방향 끝점을 채움.
-- 이미 만든 포트는 속성창 또는 우클릭의 `Reverse Polarity` / `Edit Polarity…`(여기에서도 New Line 사용). Undo 한 번으로 복구되고 `.aedt`에 저장됨. 3D 뷰에는 모든 Lumped 포트의 화살표가 그려짐.
+- 선은 signal에서 ground로 향하며 **포트의 전계(E)가 그 방향**임(전계는 + 에서 − 로). Wave 포트의 모드 극성 규칙(∫e·l̂ > 0, Warps 규약)과 같은 방향임. 대화상자의 `Detect from selection`은 선택한 면의 크기로 축 방향 끝점을 채움.
+- 이미 만든 포트는 속성창 또는 우클릭의 `Reverse Polarity` / `Edit Polarity…`(여기에서도 New Line 사용). Undo 한 번으로 복구되고 `.warp`에 저장됨. 3D 뷰에는 모든 Lumped 포트의 화살표가 그려짐.
 - **주의(동작 변경):** 두 면을 클릭하는 `Lumped / Wave Port (pick)` 도구로 만든 포트는 이제 signal → ground 방향임(이전 ground → signal). 두 포트를 가진 구조에서 S21의 부호(위상 180°)가 1.7.x와 달라질 수 있음. 방향을 직접 지정한 기존 프로젝트의 계산값은 그대로이고 대화상자의 끝점 이름만 새 규약을 따름. 두 포트의 방향이 서로 반대이면 S21 위상이 180° 틀어지므로 확인해야 함.
 
 **안테나 성능 vs 주파수** — `Results ▸ Antenna Parameters vs Frequency…`: Directivity, Gain(Total), **Realized gain**(= Gain × (1−|S11|²)), Radiation/Total efficiency, |S11|을 주파수에 대해 플롯함. 각 주파수의 최댓값 방향 또는 고정 (θ, φ), 전체/θ/φ 편파를 고를 수 있고 마커와 표가 있음. 주파수마다 저장된 필드가 필요하므로 이산(Discrete) 스윕에서 *Save fields*를 켜야 함.
@@ -123,7 +123,7 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 
 **S-파라미터** — `Results ▸ Create Modal S-Parameter Report`: dB, \|S\|, 위상, **Smith chart**, VSWR, **Re/Im/\|Z\|**(입력 임피던스), Re/Im(S), 군지연.
 
-**Eigenmode** — `Project ▸ Insert HFSS Eigenmode Design` → Eigenmode Setup(모드 수, 최소 주파수, 최대 Δf) → Analyze → `Results ▸ Eigenmode Data`(주파수, Q, 수렴 표, 모드별 필드).
+**Eigenmode** — `Project ▸ Insert Warps Eigenmode Design` → Eigenmode Setup(모드 수, 최소 주파수, 최대 Δf) → Analyze → `Results ▸ Eigenmode Data`(주파수, Q, 수렴 표, 모드별 필드).
 
 **최적화** — `Tools ▸ Optimization…`: 변수 범위, 목표(S 파라미터 대역 조건, 노치 주파수, 고유모드 주파수, 최대 이득), 옵티마이저 선택. 매 시도는 복사본에서 실제 풀이를 하며 `Apply best values`가 한 번의 Undo 단계임. 변수는 치수에 연결되어 있어야 함(`Tools ▸ Design Variables…` + 치수 편집).
 
@@ -131,11 +131,11 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 
 | 프로젝트 | 확인한 결과 |
 |---|---|
-| `dipole_antenna.aedt` | 예제 자체 설정(2패스 적응형 + Interpolating 17점, 풀이 12회·약 3분)으로 공진 2.95 GHz, Zin = 69 − 1j Ω, 최적 S11 −17 dB, 지향성 2.18 dBi(이론 2.15) @ θ=90°, 축 방향 −50 dBi, 전후방비 0.01 dB |
-| `wr90_waveguide.aedt` | 차단주파수 6.558 GHz(해석 6.557), 43점 Interpolating |
-| `iris_filter.aedt` | 9.46 GHz에서 S11 −75 dB(공진 대역통과), Fast sweep, 풀이 약 40초 |
-| `cavity_eigenmode.aedt` | TE101 9.0078 GHz(해석 9.0076) 외 4개 모드 |
-| `copper_cavity_eigenmode.aedt` | Q = 9178(Pozar 9182, 0.04 %) |
+| `dipole_antenna.warp` | 예제 자체 설정(2패스 적응형 + Interpolating 17점, 풀이 12회·약 3분)으로 공진 2.95 GHz, Zin = 69 − 1j Ω, 최적 S11 −17 dB, 지향성 2.18 dBi(이론 2.15) @ θ=90°, 축 방향 −50 dBi, 전후방비 0.01 dB |
+| `wr90_waveguide.warp` | 차단주파수 6.558 GHz(해석 6.557), 43점 Interpolating |
+| `iris_filter.warp` | 9.46 GHz에서 S11 −75 dB(공진 대역통과), Fast sweep, 풀이 약 40초 |
+| `cavity_eigenmode.warp` | TE101 9.0078 GHz(해석 9.0076) 외 4개 모드 |
+| `copper_cavity_eigenmode.warp` | Q = 9178(Pozar 9182, 0.04 %) |
 
 자세한 목록과 GUI 작업 순서는 [examples/README.md](../examples/README.md). `python examples/build_examples.py --verify`로 모두 다시 만들고 실제로 풀어 확인할 수 있음.
 
@@ -154,7 +154,7 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 - Fast sweep은 주파수마다 포트 2D 모드 해석을 하므로 작은 모델에서는 시간이 크게 줄지 않음(큰 3D 모델에서 이득). Interpolating은 포트 해석도 건너뜀.
 - 최적화의 국소 옵티마이저는 시작점이 해 근처여야 함(좁은 노치는 평탄 구간에서 못 내려옴). 이 경우 Differential evolution을 사용.
 - 면에서 작업 평면을 가져오는 기능은 축 정렬 면만 지원.
-- 해석 시간은 이 환경(Linux, 4코어)에서 측정한 값이며, 이 도구는 HFSS와의 수치 일치를 보증하지 않음. 중요한 설계는 실측 또는 독립 솔버로 검증해야 함.
+- 해석 시간은 이 환경(Linux, 4코어)에서 측정한 값이며, 이 도구는 외부 해석 도구와의 수치 일치를 보증하지 않음. 중요한 설계는 실측 또는 독립 솔버로 검증해야 함.
 
 ## 8. 검증
 

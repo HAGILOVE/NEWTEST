@@ -3,7 +3,7 @@ Aether-EM -- a 3-D full-wave electromagnetic field solver.
 
 Aether solves Maxwell's equations in the frequency domain with the finite
 element method on tetrahedra, using curl-conforming (Nedelec) vector basis
-functions -- the same numerical foundation as Ansys HFSS -- and produces
+functions -- a standard numerical foundation for full-wave solvers -- and produces
 S-parameters, port modes, field distributions and far-field patterns.
 
 Quick start
@@ -32,9 +32,9 @@ conductivity with thickness and roughness corrections), first-order radiation,
 lumped R-L-C sheets, and modal wave ports whose transverse fields come from a
 2-D eigenanalysis of the port cross-section.
 
-HFSS interoperability
+Project files
 ---------------------
-:mod:`aether.io.aedt` reads and writes the ``.aedt`` / ``.aedtz`` project tree
+:mod:`aether.io.warp` reads and writes the ``.warp`` / ``.warpz`` project tree
 (raw syntax trees can round-trip without edits), :mod:`aether.io.touchstone` handles ``.sNp``
 and ``.ts``, and geometry travels through STEP / IGES / BREP / STL.
 """
@@ -127,7 +127,7 @@ __all__ = [
     # optimisation
     "optimize", "Goal", "OptimizationResult",
     # helpers
-    "open_hfss", "save_hfss", "read_touchstone", "write_touchstone",
+    "open_warps", "save_warps", "read_touchstone", "write_touchstone",
     "import_cad",
 ]
 
@@ -137,14 +137,14 @@ __all__ = [
 # --------------------------------------------------------------------------
 
 
-def open_hfss(path: str, design: int | str = 0):
+def open_warps(path: str, design: int | str = 0):
     """
-    Open an HFSS ``.aedt`` / ``.aedtz`` project.
+    Open an Warps ``.warp`` / ``.warpz`` project.
 
     Returns ``(design, report)``; the report lists everything that could not
     be translated, so nothing is lost silently.
     """
-    from .io.aedt.translate import read_project
+    from .io.warp.translate import read_project
     proj, reports = read_project(path)
     if isinstance(design, str):
         for i, d in enumerate(proj.designs):
@@ -154,15 +154,15 @@ def open_hfss(path: str, design: int | str = 0):
     return proj[design], reports[design]
 
 
-def open_hfss_project(path: str):
-    """Open every design in an HFSS project -> ``(Project, [ImportReport])``."""
-    from .io.aedt.translate import read_project
+def open_warps_project(path: str):
+    """Open every design in an Warps project -> ``(Project, [ImportReport])``."""
+    from .io.warp.translate import read_project
     return read_project(path)
 
 
-def save_hfss(obj, path: str, mode: str = "auto") -> str:
-    """Write a :class:`Design` or :class:`Project` as an ``.aedt`` project."""
-    from .io.aedt.writer import write_project
+def save_warps(obj, path: str, mode: str = "auto") -> str:
+    """Write a :class:`Design` or :class:`Project` as an ``.warp`` project."""
+    from .io.warp.writer import write_project
     return write_project(path, obj, mode=mode)
 
 

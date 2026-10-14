@@ -1,7 +1,7 @@
 """
 Saving a finished solution next to its project, and getting it back.
 
-``project.aedt`` keeps the model; ``project.aedt.aeres`` keeps what the solver
+``project.warp`` keeps the model; ``project.warp.wres`` keeps what the solver
 produced from it -- the mesh, the S-parameters, the port modes and every saved
 field. Opening the project afterwards restores the solution, so S-parameter
 reports, field plots, animations and the far field are available at once
@@ -9,7 +9,7 @@ without solving again.
 
 The file is a compressed ``.npz`` holding plain arrays plus a JSON header (no
 pickle, so a results file can never run code when it is opened). It records the
-SHA-256 of the project file it belongs to; if the ``.aedt`` has been edited
+SHA-256 of the project file it belongs to; if the ``.warp`` has been edited
 since, the results no longer describe it and are not loaded.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from ..core.logging import get_logger
 
 log = get_logger("io.results")
 
-SUFFIX = ".aeres"
+SUFFIX = ".wres"
 FORMAT = 1
 
 
@@ -99,7 +99,7 @@ def _decode_scalars(d: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_solution(solution, project_path: str, design_name: str) -> Optional[str]:
-    """Write ``<project>.aeres`` for *solution*; returns its path."""
+    """Write ``<project>.wres`` for *solution*; returns its path."""
     arrays: Dict[str, np.ndarray] = {}
     meta: Dict[str, Any] = {"format": FORMAT, "design": design_name,
                             "project_sha256": file_digest(project_path)}

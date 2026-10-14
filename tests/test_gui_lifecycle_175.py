@@ -130,7 +130,7 @@ def test_dont_save_discards_and_closes(page):
 
 
 def test_save_writes_the_file_and_then_closes(page, tmp_path):
-    target = str(tmp_path / "kept.aedt")
+    target = str(tmp_path / "kept.warp")
     page.evaluate("()=>rpc('project.new',{}).then(()=>rpc('modeler.draw',"
                   "{shape:'box',name:'Box1',params:{position:['0mm','0mm',"
                   "'0mm'],size:['4mm','4mm','1mm']}}))")
@@ -146,7 +146,7 @@ def test_save_writes_the_file_and_then_closes(page, tmp_path):
     menu_item(page, "File", "Close Project")
     click_dialog(page, "Save")
     page.wait_for_function("()=>STATE.project.open===false", timeout=30000)
-    from aether.io.aedt.translate import read_project
+    from aether.io.warp.translate import read_project
     proj, _ = read_project(target)
     assert {s.name for s in proj[0].solids} == {"Box1", "Box2"}
 
@@ -158,7 +158,7 @@ def test_a_new_project_reopens_the_workspace(page):
     page.wait_for_function("()=>STATE.project.open===false", timeout=20000)
     menu_item(page, "File", "New Project")
     page.wait_for_function("()=>STATE.project.open===true", timeout=20000)
-    assert page.evaluate("()=>STATE.design.name") == "HFSSDesign1"
+    assert page.evaluate("()=>STATE.design.name") == "WarpsDesign1"
 
 
 def test_exit_asks_before_it_quits(page):
@@ -187,12 +187,12 @@ def test_the_message_channel_carries_the_task(page):
 
 
 def test_the_overlay_names_the_stage_and_then_goes_away(page):
-    page.evaluate("""()=>renderTask({active:true, label:'Opening solum.aedt',
+    page.evaluate("""()=>renderTask({active:true, label:'Opening solum.warp',
       stage:'reading design 2 of 5', detail:'Antenna', done:2, total:5,
       fraction:0.4, elapsed:3.5, error:'', seq:1})""")
     page.wait_for_selector("#busy-overlay.on", timeout=10000)
     text = page.locator("#busy-overlay").inner_text()
-    assert "Opening solum.aedt" in text
+    assert "Opening solum.warp" in text
     assert "reading design 2 of 5" in text and "2 / 5" in text
     assert "Antenna" in text
     assert page.evaluate(
@@ -303,7 +303,7 @@ def test_a_failure_after_the_read_still_leaves_the_model_on_screen(page,
     it", and its exception left the workspace holding a complete model and
     showing an empty viewport. Nothing after the read may cost the model.
     """
-    target = str(tmp_path / "resilient.aedt")
+    target = str(tmp_path / "resilient.warp")
     page.evaluate("""async (p)=>{
       await rpc('project.new',{});
       await rpc('modeler.draw',{shape:'box',name:'Body',params:{

@@ -1,4 +1,4 @@
-"""Solution setup and sweep fields as HFSS defines them."""
+"""Solution setup and sweep fields as Warps defines them."""
 import numpy as np
 import pytest
 
@@ -32,7 +32,7 @@ def test_a_zero_step_is_rejected():
         sw.frequencies()
 
 
-def test_setup_carries_the_hfss_adaptive_fields():
+def test_setup_carries_the_warps_adaptive_fields():
     s = session()
     dispatch(s, "analysis.addSetup", {
         "name": "Setup1", "frequency": "2.4GHz", "maxPasses": 12,
@@ -99,7 +99,7 @@ def test_bad_sweeps_are_rejected(bad):
     assert s.design.setups[0].sweeps == []
 
 
-def test_aedt_round_trip_keeps_step_refinement_and_converged_passes(tmp_path):
+def test_warp_round_trip_keeps_step_refinement_and_converged_passes(tmp_path):
     d = ae.Design("rt")
     d.add_box("b", (0, 0, 0), (0.02, 0.01, 0.01), "vacuum")
     d.add_wave_port("p1", axis="z", value=0)
@@ -107,9 +107,9 @@ def test_aedt_round_trip_keeps_step_refinement_and_converged_passes(tmp_path):
     st = d.add_setup("S1", "10GHz", max_passes=8)
     st.min_converged, st.refinement = 3, 0.25
     st.add_sweep("Sw", "8GHz", "12GHz", spacing="step", step="0.25GHz")
-    path = str(tmp_path / "rt.aedt")
-    ae.save_hfss(d, path, mode="create")
-    d2, _ = ae.open_hfss(path)
+    path = str(tmp_path / "rt.warp")
+    ae.save_warps(d, path, mode="create")
+    d2, _ = ae.open_warps(path)
     s2 = d2.setups[0]
     assert s2.min_converged == 3 and s2.refinement == pytest.approx(0.25)
     sw = s2.sweeps[0]

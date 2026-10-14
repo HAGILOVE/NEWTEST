@@ -1,19 +1,19 @@
 """
-Writing Aether models back out as ``.aedt`` projects.
+Writing Aether models back out as ``.warp`` projects.
 
 Two modes, and the difference matters:
 
-``update``  -- you loaded a real HFSS project, changed a few things, and want
+``update``  -- you loaded a real Warps project, changed a few things, and want
                it back.  The original tree is edited *in place*: only the
                statements you touched are re-rendered, everything else keeps
-               its exact original bytes.  Nothing HFSS wrote and Aether does
+               its exact original bytes.  Nothing Warps wrote and Aether does
                not model (mesh operations, optimetrics, report definitions,
                field overlays, design settings) can be lost, because it is
                never rewritten.
 
-``create``  -- you built the model in Aether and want an HFSS project.  A
-               complete tree is generated from scratch following the AEDT
-               layout: AnsoftProject > Desktop / Design > (Materials,
+``create``  -- you built the model in Aether and want an Warps project.  A
+               complete tree is generated from scratch following the Warps
+               layout: WarpsProject > Desktop / Design > (Materials,
                ModelSetup > ToplevelParts, BoundarySetup, AnalysisSetup).
 """
 from __future__ import annotations
@@ -31,12 +31,12 @@ from ...core.logging import get_logger
 from ...core.materials import Material
 from ...geometry.primitives import (Box, Cone, Cylinder, Polygon, Shape,
                                     Sphere, Torus)
-from .tree import AedtBlock, AedtDocument, AedtProp
+from .tree import WarpBlock, WarpDocument, WarpProp
 from .values import Call, Counted
 
-log = get_logger("io.aedt.writer")
+log = get_logger("io.warp.writer")
 
-AEDT_VERSION = (2024, 2)
+WARP_VERSION = (2024, 2)
 AXIS_NAME = {(1, 0, 0): "X", (0, 1, 0): "Y", (0, 0, 1): "Z"}
 
 REV_BTYPE = {
@@ -46,9 +46,9 @@ REV_BTYPE = {
     "symmetry_h": "Symmetry", "pml": "Perfectly Matched Layer",
 }
 REV_SOLUTION = {
-    "driven_modal": "HFSS Modal Network",
-    "driven_terminal": "HFSS Terminal Network",
-    "eigenmode": "HFSS Eigenmode",
+    "driven_modal": "Warps Modal Network",
+    "driven_terminal": "Warps Terminal Network",
+    "eigenmode": "Warps Eigenmode",
 }
 
 
@@ -68,9 +68,9 @@ def _freq(v: float) -> str:
 # ==========================================================================
 
 
-def build_document(project_name: str, designs: List) -> AedtDocument:
-    """Generate a complete AEDT project tree for the given designs."""
-    root = AedtBlock("AnsoftProject")
+def build_document(project_name: str, designs: List) -> WarpDocument:
+    """Generate a complete Warps project tree for the given designs."""
+    root = WarpBlock("WarpsProject")
     root.add_prop("FileVersion", Call("FileVersion", [1, 0]))
     root.add_prop("Created", datetime.datetime.now()
                   .strftime("%a %b %d %H:%M:%S %Y"))
@@ -78,7 +78,7 @@ def build_document(project_name: str, designs: List) -> AedtDocument:
     root.add_prop("BuildVariant", "Aether-EM")
 
     desktop = root.add_block("Desktop")
-    desktop.add_prop("Version", Call("Version", list(AEDT_VERSION)))
+    desktop.add_prop("Version", Call("Version", list(WARP_VERSION)))
     desktop.add_prop("InfoAsciiString", f"Written by Aether-EM")
 
     mats = root.add_block("Materials")
@@ -95,11 +95,11 @@ def build_document(project_name: str, designs: List) -> AedtDocument:
     for d in designs:
         _write_design(root, d)
 
-    doc = AedtDocument([root, AedtProp(None, "", raw="", blank=True)])
+    doc = WarpDocument([root, WarpProp(None, "", raw="", blank=True)])
     return doc
 
 
-def _write_material(parent: AedtBlock, m: Material, f: float) -> AedtBlock:
+def _write_material(parent: WarpBlock, m: Material, f: float) -> WarpBlock:
     b = parent.add_block(m.name)
     b.add_prop("CoordinateSystemType", "Cartesian")
     b.add_prop("BulkOrSurfaceType", 1)
@@ -127,12 +127,12 @@ def _write_material(parent: AedtBlock, m: Material, f: float) -> AedtBlock:
     return b
 
 
-def _write_design(root: AedtBlock, d) -> AedtBlock:
+def _write_design(root: WarpBlock, d) -> WarpBlock:
     blk = root.add_block("Design")
-    blk.add_prop("DesignType", "HFSS")
+    blk.add_prop("DesignType", "Warps")
     blk.add_prop("Name", d.name)
     blk.add_prop("SolutionType", REV_SOLUTION.get(d.solution_type,
-                                                  "HFSS Modal Network"))
+                                                  "Warps Modal Network"))
     blk.add_prop("DesignVersion", 1)
     import json
     blk.add_prop("AetherConfig", json.dumps(d.config.to_dict()))
@@ -183,8 +183,8 @@ def _write_design(root: AedtBlock, d) -> AedtBlock:
     return blk
 
 
-def _write_part(parent: AedtBlock, solid, units: str, pid: int,
-                sheet: bool = False) -> AedtBlock:
+def _write_part(parent: WarpBlock, solid, units: str, pid: int,
+                sheet: bool = False) -> WarpBlock:
     part = parent.add_block("GeometryPart")
     att = part.add_block("Attributes")
     att.add_prop("Name", solid.name)
@@ -221,7 +221,7 @@ def _write_part(parent: AedtBlock, solid, units: str, pid: int,
     return part
 
 
-def _write_primitive(op: AedtBlock, shape: Shape, units: str) -> None:
+def _write_primitive(op: WarpBlock, shape: Shape, units: str) -> None:
     from ...geometry.primitives import (Boolean, Extrude, FaceOperation,
                                         ImportedShape, Revolve)
     if getattr(shape, "_parametric", None):
@@ -282,7 +282,7 @@ def _write_primitive(op: AedtBlock, shape: Shape, units: str) -> None:
             child = note.add_block(f"Operand{k+1}")
             _write_primitive(child, sub, units)
     elif isinstance(shape, FaceOperation):
-        # HFSS records these as SweepFaceAlongNormal / MoveFaces operations
+        # Warps records these as SweepFaceAlongNormal / MoveFaces operations
         # against its own face ids, which mean nothing outside the session
         # that made them. The faces are written by geometry instead, so the
         # operation replays in Aether and is at least readable elsewhere.
@@ -353,7 +353,7 @@ def _rgb(color: str):
     return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def _write_boundary(parent: AedtBlock, b, d) -> AedtBlock:
+def _write_boundary(parent: WarpBlock, b, d) -> WarpBlock:
     blk = parent.add_block(b.name)
     blk.add_prop("BoundType", REV_BTYPE.get(b.btype, "Perfect E"))
     blk.add_prop("Name", b.name)
@@ -381,7 +381,7 @@ def _write_boundary(parent: AedtBlock, b, d) -> AedtBlock:
     return blk
 
 
-def _write_port(parent: AedtBlock, p, d) -> AedtBlock:
+def _write_port(parent: WarpBlock, p, d) -> WarpBlock:
     blk = parent.add_block(p.name)
     blk.add_prop("Name", p.name)
     blk.add_prop("ExcType", "Wave Port" if p.kind == "wave" else "Lumped Port")
@@ -418,15 +418,15 @@ def _selector_objects(sel, d) -> List[str]:
     return []
 
 
-def write_selector(parent: AedtBlock, sel, d) -> AedtBlock:
+def write_selector(parent: WarpBlock, sel, d) -> WarpBlock:
     """
     Persist an Aether face selector as an auxiliary block.
 
-    HFSS identifies boundary faces by kernel ids that mean nothing outside a
+    Warps identifies boundary faces by kernel ids that mean nothing outside a
     live modeller session.  Aether identifies them geometrically, so the
     selector itself is written into the project under a private block name.
-    HFSS ignores blocks it does not know, and Aether reads them back exactly,
-    which is what makes an Aether -> .aedt -> Aether round trip lossless even
+    Warps ignores blocks it does not know, and Aether reads them back exactly,
+    which is what makes an Aether -> .warp -> Aether round trip lossless even
     though a face id could never survive one.
     """
     from ...geometry.select import (BoundingBoxFaceSelector, BoxSelector,
@@ -462,9 +462,9 @@ def write_selector(parent: AedtBlock, sel, d) -> AedtBlock:
     return b
 
 
-def _write_setup(parent: AedtBlock, st, eigen: bool = False) -> AedtBlock:
+def _write_setup(parent: WarpBlock, st, eigen: bool = False) -> WarpBlock:
     blk = parent.add_block(st.name)
-    blk.add_prop("SetupType", "HfssEigen" if eigen else "HfssDriven")
+    blk.add_prop("SetupType", "WarpsEigen" if eigen else "WarpsDriven")
     blk.add_prop("Name", st.name)
     blk.add_prop("IsEnabled", True)
     props = blk.add_block("SolveSetupProps")
@@ -522,14 +522,14 @@ def _write_setup(parent: AedtBlock, st, eigen: bool = False) -> AedtBlock:
 # ==========================================================================
 
 
-def update_document(doc: AedtDocument, design) -> AedtDocument:
+def update_document(doc: WarpDocument, design) -> WarpDocument:
     """
     Push Aether-side edits back into an existing project tree.
 
     Only statements whose value actually changed are marked dirty, so the
     written file differs from the original exactly where the model does.
     """
-    designs = doc.hfss_designs() or doc.designs()
+    designs = doc.warps_designs() or doc.designs()
     target = None
     for b in designs:
         if str(b.get("Name", "")).strip("'") == design.name:
@@ -632,11 +632,11 @@ def write_project(path: str, project_or_design, mode: str = "auto") -> str:
     if isinstance(project_or_design, Design):
         designs = [project_or_design]
         name = project_or_design.name
-        src = project_or_design._aedt_source
+        src = project_or_design._warp_source
     else:
         designs = list(project_or_design.designs)
         name = project_or_design.name
-        src = project_or_design.aedt_tree
+        src = project_or_design.warp_tree
     if mode == "auto":
         mode = "workspace" if src is not None else "create"
     if mode not in ("create", "update", "workspace"):
@@ -648,8 +648,8 @@ def write_project(path: str, project_or_design, mode: str = "auto") -> str:
         doc = copy.deepcopy(src) if src is not None else build_document(name, designs)
         fresh = build_document(name, designs)
         modeled = {"Variables", "ModelSetup", "BoundarySetup", "AnalysisSetup", "AetherMeshOperations"}
-        for generated in fresh.hfss_designs():
-            target = next((b for b in doc.hfss_designs()
+        for generated in fresh.warps_designs():
+            target = next((b for b in doc.warps_designs()
                            if str(b.get("Name", "")) == str(generated.get("Name", ""))), None)
             if target is None:
                 doc.root.add(copy.deepcopy(generated))
@@ -657,7 +657,7 @@ def write_project(path: str, project_or_design, mode: str = "auto") -> str:
             for key in ("DesignType", "Name", "SolutionType", "DesignVersion", "AetherConfig", "AetherDefaultBoundary", "AetherImportIssues"):
                 target.set(key, generated.get(key))
             target.children = [b for b in target.children
-                               if not (isinstance(b, AedtBlock) and b.name in modeled)]
+                               if not (isinstance(b, WarpBlock) and b.name in modeled)]
             for block in generated.blocks:
                 if block.name in modeled:
                     target.add(copy.deepcopy(block))

@@ -129,22 +129,22 @@ def test_names_from_the_console_are_respected_by_the_suggester(sess):
 # =========================================================== file browsing
 def test_listing_a_directory(tmp_path):
     (tmp_path / "sub").mkdir()
-    (tmp_path / "a.aedt").write_text("x")
+    (tmp_path / "a.warp").write_text("x")
     (tmp_path / "b.step").write_text("y")
     (tmp_path / ".hidden").write_text("z")
     r = F.list_dir(str(tmp_path))
     assert r["path"] == str(tmp_path)
     assert [d["name"] for d in r["dirs"]] == ["sub"]
-    assert {f["name"] for f in r["files"]} == {"a.aedt", "b.step"}
+    assert {f["name"] for f in r["files"]} == {"a.warp", "b.step"}
     assert not r["error"] and r["writable"]
     assert r["crumbs"][-1]["path"] == str(tmp_path)
 
 
 def test_extension_filter(tmp_path):
-    (tmp_path / "a.aedt").write_text("x")
+    (tmp_path / "a.warp").write_text("x")
     (tmp_path / "b.step").write_text("y")
-    r = F.list_dir(str(tmp_path), [".aedt", ".aedtz"])
-    assert [f["name"] for f in r["files"]] == ["a.aedt"]
+    r = F.list_dir(str(tmp_path), [".warp", ".warpz"])
+    assert [f["name"] for f in r["files"]] == ["a.warp"]
     r = F.list_dir(str(tmp_path), [])
     assert len(r["files"]) == 2
 
@@ -189,22 +189,22 @@ def test_places_are_absolute_and_unique():
 
 
 def test_save_path_resolution(tmp_path):
-    r = F.resolve_save_path(str(tmp_path), "proj", [".aedt"])
-    assert r["ok"] and r["path"].endswith("proj.aedt") and not r["exists"]
-    (tmp_path / "proj.aedt").write_text("x")
-    assert F.resolve_save_path(str(tmp_path), "proj", [".aedt"])["exists"]
-    assert F.resolve_save_path(str(tmp_path), "keep.txt", [".aedt"])[
+    r = F.resolve_save_path(str(tmp_path), "proj", [".warp"])
+    assert r["ok"] and r["path"].endswith("proj.warp") and not r["exists"]
+    (tmp_path / "proj.warp").write_text("x")
+    assert F.resolve_save_path(str(tmp_path), "proj", [".warp"])["exists"]
+    assert F.resolve_save_path(str(tmp_path), "keep.txt", [".warp"])[
         "path"].endswith("keep.txt")
     assert not F.resolve_save_path(str(tmp_path), "")["ok"]
-    bad = F.resolve_save_path(str(tmp_path / "nope"), "x", [".aedt"])
+    bad = F.resolve_save_path(str(tmp_path / "nope"), "x", [".warp"])
     assert not bad["ok"] and "does not exist" in bad["error"]
 
 
 def test_absolute_name_overrides_the_directory(tmp_path):
     target = tmp_path / "elsewhere"
     target.mkdir()
-    r = F.resolve_save_path(str(tmp_path), str(target / "p.aedt"))
-    assert r["ok"] and r["path"] == str(target / "p.aedt")
+    r = F.resolve_save_path(str(tmp_path), str(target / "p.warp"))
+    assert r["ok"] and r["path"] == str(target / "p.warp")
 
 
 def test_filters_cover_every_dialog_we_open():
@@ -212,7 +212,7 @@ def test_filters_cover_every_dialog_we_open():
         f = F.filters(kind)
         assert f and all("label" in x and "ext" in x for x in f)
     assert ".step" in F.filters("cad")[0]["ext"]
-    assert ".aedt" in F.filters("project")[0]["ext"]
+    assert ".warp" in F.filters("project")[0]["ext"]
 
 
 def test_native_dialog_degrades_cleanly_without_a_desktop():
@@ -224,16 +224,16 @@ def test_native_dialog_degrades_cleanly_without_a_desktop():
 
 # --------------------------------------------------------- through the API
 def test_browse_command_payload(sess, tmp_path):
-    (tmp_path / "p.aedt").write_text("x")
+    (tmp_path / "p.warp").write_text("x")
     r = dispatch(sess, "files.browse",
                  {"path": str(tmp_path), "kind": "project"})
-    assert [f["name"] for f in r["files"]] == ["p.aedt"]
+    assert [f["name"] for f in r["files"]] == ["p.warp"]
     assert r["places"] and r["filters"] and "native" in r
     assert r["crumbs"][-1]["name"] == tmp_path.name
 
 
 def test_default_dir_prefers_the_open_project(sess, tmp_path):
-    sess.project_path = str(tmp_path / "proj.aedt")
+    sess.project_path = str(tmp_path / "proj.warp")
     assert dispatch(sess, "files.defaultDir")["path"] == str(tmp_path)
 
 
@@ -261,11 +261,11 @@ def test_save_then_open_through_the_picker_path(tmp_path):
     r = dispatch(s, "files.resolveSave",
                  {"directory": str(tmp_path), "filename": "MyGuide",
                   "kind": "project"})
-    assert r["ok"] and r["path"].endswith(".aedt")
+    assert r["ok"] and r["path"].endswith(".warp")
     dispatch(s, "project.save", {"path": r["path"]})
     listing = dispatch(s, "files.browse",
                        {"path": str(tmp_path), "kind": "project"})
-    assert [f["name"] for f in listing["files"]] == ["MyGuide.aedt"]
+    assert [f["name"] for f in listing["files"]] == ["MyGuide.warp"]
     s2 = Session()
     dispatch(s2, "project.open", {"path": listing["files"][0]["path"]})
     assert s2.design.name == "WR90_Thru"

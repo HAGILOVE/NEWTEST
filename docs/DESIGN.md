@@ -1,14 +1,14 @@
-# Aether-EM — HFSS Analysis and Engineering Design
+# Aether-EM — Warps Analysis and Engineering Design
 
-This document is the design record: what Ansys HFSS actually does, which of
+This document is the design record: what Warps actually does, which of
 those things matter, and how each one is realised in this code base.
 
 ---
 
-## 1. What HFSS is, functionally
+## 1. What Warps is, functionally
 
-HFSS is not "a Maxwell solver" — it is a **pipeline** with seven stages, each
-of which is a substantial piece of engineering. Reproducing HFSS means
+Warps is not "a Maxwell solver" — it is a **pipeline** with seven stages, each
+of which is a substantial piece of engineering. Reproducing Warps means
 reproducing the pipeline, not just the PDE.
 
 ```
@@ -21,9 +21,9 @@ reproducing the pipeline, not just the PDE.
                     front
 ```
 
-### 1.1 The numerics HFSS actually uses
+### 1.1 The numerics Warps actually uses
 
-| Aspect | HFSS | Why it is that way |
+| Aspect | Warps | Why it is that way |
 |---|---|---|
 | Formulation | E-field double-curl (vector Helmholtz), frequency domain | Directly yields S-parameters; no time-stepping stability limit |
 | Elements | Tetrahedra with **curl-conforming (Nédélec) vector basis** | Enforces `n×E` continuity and `n·D` jump — the actual physics at a material interface. Nodal elements produce *spurious modes*; edge elements do not |
@@ -47,13 +47,13 @@ W_ab = λ_a ∇λ_b − λ_b ∇λ_a ,   DOF = ∮_edge E·dl
 
 reproduce exactly the right continuity, and their gradients span the discrete
 null space of the curl operator cleanly. Every serious full-wave FEM code —
-HFSS included — is built on them. Aether is too.
+Warps included — is built on them. Aether is too.
 
 ---
 
 ## 2. Module map
 
-| HFSS concept | Aether module | Notes |
+| Warps concept | Aether module | Notes |
 |---|---|---|
 | Modeler / history tree | `aether.geometry.primitives` | Symbolic op-tree; serialisable, replayable, exportable |
 | ACIS kernel | `aether.geometry.kernel` (OpenCASCADE via gmsh) | Real BRep, not facets |
@@ -64,7 +64,7 @@ HFSS included — is built on them. Aether is too.
 | Solution setup | `aether.model.Setup`, `aether.fem.driver` | ΔS convergence, sweeps |
 | Solver | `aether.fem.assembly`, `aether.fem.linalg` | Region-blocked assembly, factorise-once/solve-many |
 | Fields / reports | `aether.fem.fields`, `aether.post.*` | VTK, Touchstone, CSV, HTML, far field |
-| `.aedt` project file | `aether.io.aedt` | Byte-exact round trip |
+| `.warp` project file | `aether.io.warp` | Byte-exact round trip |
 
 ---
 
@@ -75,12 +75,12 @@ HFSS included — is built on them. Aether is too.
 `Box`, `Cylinder`, boolean nodes and transforms are recorded as data. The tree
 can be replayed into OpenCASCADE, tested analytically with
 `geometry.implicit.contains` (no CAD kernel needed), **and serialised into real
-HFSS primitive commands** on export. That last point is why an Aether model
-round-trips through `.aedt` as parametric geometry instead of as a dead mesh.
+Warps primitive commands** on export. That last point is why an Aether model
+round-trips through `.warp` as parametric geometry instead of as a dead mesh.
 
 ### 3.2 Boundary conditions are attached geometrically, not by face id
 
-HFSS stores boundaries against ACIS face ids. Those ids are meaningless outside
+Warps stores boundaries against ACIS face ids. Those ids are meaningless outside
 a live modeller session and they change when the model is re-meshed. Aether
 uses **selectors** — predicates on `(centroid, normal)` — so an assignment
 survives remeshing, adaptive passes, and a change of mesh backend. This is
@@ -119,10 +119,10 @@ positive — reproducible across meshes, frequencies and ports.
 
 Solids whose material is PEC (or that are flagged `solve_inside=False`) have
 their elements removed from the solution volume; the exposed faces become model
-boundary and pick up the perfect-E condition. This is HFSS's "do not solve
+boundary and pick up the perfect-E condition. This is the usual "do not solve
 inside", and it is why a model full of metal is not a model full of unknowns.
 
-### 3.7 `.aedt` fidelity: raw preservation plus structured editing
+### 3.7 `.warp` fidelity: raw preservation plus structured editing
 
 Every parsed statement keeps its exact source text. Serialising a node that was
 not modified re-emits those bytes verbatim, so
@@ -149,10 +149,10 @@ Honesty about limits is part of the design.
 * **`.sat` / `.sab` (ACIS) cannot be read.** It is a proprietary Spatial
   format that OpenCASCADE does not support. Export STEP from the modeller.
 * **Swept/lofted/blended history is not replayed** on import — the create
-  commands Aether understands are listed in `io/aedt/translate.py`. Everything
+  commands Aether understands are listed in `io/warp/translate.py`. Everything
   else is reported, not silently dropped. STEP import covers those bodies.
-* Aether writes a structurally correct AEDT tree; **compatibility with a given
-  Ansys release should be verified against that release**, since the schema
+* Aether writes a structurally correct Warps tree; **compatibility with a given
+  Warps release should be verified against that release**, since the schema
   evolves between versions.
 
 ---

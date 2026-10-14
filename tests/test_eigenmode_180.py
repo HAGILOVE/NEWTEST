@@ -162,12 +162,12 @@ def test_summary_lists_the_modes():
     assert "mode 1: f =" in text and "mode 2: f =" in text
 
 
-def test_eigenmode_setup_survives_an_aedt_round_trip(tmp_path):
+def test_eigenmode_setup_survives_an_warp_round_trip(tmp_path):
     d = cavity(n_modes=4, fmin=5e9)
     d.setups[0].delta_f = 0.01
-    path = str(tmp_path / "cav.aedt")
-    ae.save_hfss(d, path, mode="create")
-    d2, _ = ae.open_hfss(path)
+    path = str(tmp_path / "cav.warp")
+    ae.save_warps(d, path, mode="create")
+    d2, _ = ae.open_warps(path)
     assert d2.solution_type == "eigenmode"
     st = d2.setups[0]
     assert st.n_modes == 4

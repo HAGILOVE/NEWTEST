@@ -97,9 +97,9 @@ energy-balance error of `5.4e−14`.
 
 | Check | Result |
 |---|---|
-| `.aedt` parse → write | byte-identical (incl. blank lines, wrapped values, escaped quotes, BOM/CRLF) |
+| `.warp` parse → write | byte-identical (incl. blank lines, wrapped values, escaped quotes, BOM/CRLF) |
 | edit one property | exactly one line differs |
-| Design → `.aedt` → Design → `.aedt` | zero differing lines |
+| Design → `.warp` → Design → `.warp` | zero differing lines |
 | Touchstone v1/v2 × RI/MA/DB × 1–4 ports | max error < 1e−9 |
 | `.s2p` column-major convention | verified against the literal byte order |
 | STEP export → import → mesh | volume matches to 1e−6 relative |
@@ -113,7 +113,7 @@ structure:
 
 | Check | Result |
 |---|---|
-| coax `Cylinder − Cylinder` → `.aedt` → back | point membership identical (centre outside, annulus inside) |
+| coax `Cylinder − Cylinder` → `.warp` → back | point membership identical (centre outside, annulus inside) |
 | rotate + translate stack | membership and bbox identical |
 | lumped port impedance / direction | 37.673 Ω and 75 Ω, `(0,0,1)` and `(0,1,0)` preserved |
 | wave-port integration line | endpoints preserved to 1e−12 |
@@ -140,7 +140,7 @@ and the real interface driven in Chromium.
 | Files & naming (`tests/test_gui_files.py`) | 28 — name generation and collision handling for objects, boundaries, ports, setups and sweeps; directory listing, filtering, hidden files, unreadable folders, breadcrumbs, places, save-path resolution; the full save → browse → reopen path the dialogs take |
 | Edit & CAD (`tests/test_gui_edit.py`) | 40 — move/rotate/mirror on one and many objects with the resulting bounding boxes checked; clipboard round trip and independence of the copy; the three duplicate patterns including the total-count convention and attach-to-original; undo/redo across draw, move and delete, with a deleted object's boundary still pointing at the restored object; a failed command leaving no history entry; CAD import at the declared unit and at each override (mm/cm/m/inch); an imported body saved and reopened after its source file was moved away, with unit and transform intact; a missing source reported rather than dropped; and Replace CAD Source editing the object in place, with its material, transform and boundary references surviving |
 | Selection, meshing & face modelling (`tests/test_selection.py`) | 55 — face counts from both tessellation paths; a boundary on a picked face tagging that face's exact area and no other, at two different mesh sizes; two faces assigned as one boundary; mesh operations on objects and on faces, with locality checked against the opposite face; sweep and move faces including undo, the object keeping its identity and boundaries, a project-file round trip; a face of an imported STEP body swept; a curved face refused; an operation that cannot build leaving the body untouched; a sweep not reaching a neighbouring body's identical face; the true extent of an imported curved part; per-object colour, transparency and visibility; a three-body STEP importing as three pickable parts (and healing no longer welding it into one shell); edge, face, gap and object measurements including offset faces where the centre distance is the wrong answer; and assignments reported on the faces they cover without a mesh |
-| Native HFSS files (`tests/test_aedt_native.py`) | 29 — a desktop-written project with embedded Parasolid payloads: parsed, byte-exact round trip, payloads verbatim after an edit, the design found under its solver-specific block name, operand parts excluded, boundaries and ports resolved through body ids, face-id boundaries reported, native bodies extracted and repointable at a STEP export; values in unanticipated units ('20cel', pF, nH, %) evaluated instead of aborting the load; one unreadable property costing only its own item; and the workspace stating why a project of native bodies shows nothing |
+| Native Warps files (`tests/test_warp_native.py`) | 29 — a desktop-written project with embedded Parasolid payloads: parsed, byte-exact round trip, payloads verbatim after an edit, the design found under its solver-specific block name, operand parts excluded, boundaries and ports resolved through body ids, face-id boundaries reported, native bodies extracted and repointable at a STEP export; values in unanticipated units ('20cel', pF, nH, %) evaluated instead of aborting the load; one unreadable property costing only its own item; and the workspace stating why a project of native bodies shows nothing |
 | Dead-entry sweep | every menu item and ribbon button clicked — **123 entry points, none broken**, plus 7 correctly greyed out (undo, redo and the clipboard on an empty design) |
 
 Measured on the shipped templates through the UI: initial mesh 678 tetrahedra
