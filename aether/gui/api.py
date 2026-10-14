@@ -327,6 +327,7 @@ def _open_impl(s: Session, path: str, read_project):
         s.messages.add("Native HFSS import supports a subset of AEDT. Use Save As to keep the original: saving rebuilds supported geometry, boundary and setup branches; unsupported data within those branches may not survive.", "warning", "project")
     s.solution = None
     s.dirty = False
+    _restore_results(s, path)
     for r in reports:
         s.messages.add(
             f"Imported design {r.design_name!r}: {len(r.solids)} objects, "
@@ -361,7 +362,8 @@ def _open_impl(s: Session, path: str, read_project):
 
 
 @command("project.save")
-def _save(s: Session, path: str = "", mode: str = "auto", **_):
+def _save(s: Session, path: str = "", mode: str = "auto",
+          withResults: bool = True, **_):
     from ..io.aedt.writer import write_project
     p = os.path.expanduser(path or s.project_path)
     if not p:
@@ -375,7 +377,59 @@ def _save(s: Session, path: str = "", mode: str = "auto", **_):
     s.project_path = p
     s.dirty = False
     s.messages.add(f"Saved project to {p}", "info", "project")
-    return {"ok": True, "path": p}
+    saved = _save_results(s, p, withResults)
+    return {"ok": True, "path": p, "results": saved}
+
+
+def _save_results(s: Session, path: str, enabled: bool = True) -> str:
+    """Keep the finished solution next to the project (``<project>.aeres``) so
+    reopening the project does not mean solving again; drop a stale file."""
+    from ..io import results as resio
+    sol = s.solution
+    stale = resio.results_path(path)
+    if not enabled or sol is None or sol.design is not s.design:
+        if os.path.isfile(stale):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+        return ""
+    try:
+        out = resio.save_solution(sol, path, s.design.name)
+    except Exception as exc:                                  # noqa: BLE001
+        s.messages.add(f"The project was saved, but its results could not be: "
+                       f"{exc}", "warning", "project")
+        return ""
+    s.messages.add(f"Saved solution results to {out} "
+                   f"({os.path.getsize(out) / 1e6:.1f} MB). Opening the "
+                   "project restores them without solving again.",
+                   "info", "project")
+    return out
+
+
+def _restore_results(s: Session, path: str) -> None:
+    """After opening a project: bring back the solution saved with it."""
+    from ..io import results as resio
+    head = resio.peek(path)
+    if head is None:
+        return
+    target = next((d for d in s.project.designs if d.name == head.get("design")),
+                  None)
+    if target is None:
+        return
+    sol, why = resio.load_solution(path, target)
+    if sol is None:
+        s.messages.add(f"Saved results were not restored: {why}.", "warning",
+                       "project")
+        return
+    s.design = target
+    target.mesh = sol.mesh
+    s.solution = sol
+    s.messages.add(
+        f"Restored the saved solution of {target.name!r}: "
+        f"{len(sol.freqs)} frequency point(s), {len(sol.fields)} field "
+        f"solution(s), {sol.mesh.n_tets} tetrahedra. No new analysis needed.",
+        "info", "project")
 
 
 @command("export.threejs")
