@@ -82,7 +82,12 @@ def test_the_dipole_example_is_a_drawn_face_feeding_a_lumped_port():
     m = d.generate_mesh(3e9, force=True)
     from aether.post.farfield import radiation_faces
     cen = m.surf_centroids[radiation_faces(d, m)]
-    assert np.all(np.max(np.abs(cen), axis=1) > 0.9 * np.max(np.abs(m.nodes)))
+    # every radiation face lies on the outside of the air box (on one of the
+    # six bounding planes), none on the antenna metal in the middle
+    lo, hi = m.nodes.min(axis=0), m.nodes.max(axis=0)
+    tol = 1e-6 * float(np.max(hi - lo))
+    on_box = np.any((np.abs(cen - lo) < tol) | (np.abs(cen - hi) < tol), axis=1)
+    assert on_box.all()
 
 
 def test_builder_output_matches_the_shipped_files(tmp_path):

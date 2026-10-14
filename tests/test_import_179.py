@@ -312,10 +312,11 @@ def test_a_lumped_port_can_be_built_from_a_signal_and_a_ground_pick():
     sheet = [x for x in s.design.sheets if x.name == out["sheet"]][0]
     lo, hi = sheet.shape.bounds()
     assert np.allclose([lo[1], hi[1]], [1e-3, 2e-3])
-    # ... and the integration line runs ground -> signal, which fixes the
-    # sign of V and therefore of the port impedance
+    # ... and the integration line runs signal -> ground (the port field points
+    # along it), which fixes the sign of V and therefore of the port impedance
     a, b = port.integration_line
-    assert a[1] > b[1]
+    assert a[1] < b[1]                      # starts at the signal, ends at the ground
+    assert port.direction[1] > 0
 
 
 @needs_occ

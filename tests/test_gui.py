@@ -376,4 +376,4 @@ def test_field_overlay_buffer_is_produced():
     assert len(f["scalar"]) == f["count"]
     v = np.asarray(f["scalar"])
     assert v.min() >= 0.0 and v.max() <= 1.0 + 1e-9
-    assert f["range"][1] > f["range"][0] > 0
+    assert f["range"][1] > f["range"][0] >= 0          # linear scale starts at zero
