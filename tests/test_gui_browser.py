@@ -854,6 +854,9 @@ def test_drawing_a_box_from_two_clicked_points(edit_page):
     pg.click("#ribbon-body .rbtn:has-text('Box by points')")
     pg.wait_for_selector("#vp-draw.on", timeout=15000)
     assert pg.evaluate("()=>DIALOG_STACK.length") == 0
+    # Fix the work plane: with "Plane from face" on, the plane would follow
+    # whichever flat face of an earlier test's body the cursor happens to be over
+    pg.click("#dw-pl-xy")
     box = pg.locator("#gl").bounding_box()
     cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
     pg.mouse.click(cx - 60, cy + 40)
