@@ -443,7 +443,7 @@ button.lnk { background: none; border: 0; padding: 0; cursor: pointer;
 button.lnk:hover { color: var(--accent-line, var(--accent)); }
 
 /* right-click menu */
-.ctx { position: fixed; z-index: 400; min-width: 208px; padding: 4px;
+.ctx { position: fixed; max-height: calc(100vh - 12px); overflow-y: auto; z-index: 400; min-width: 208px; padding: 4px;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 6px; box-shadow: 0 14px 40px rgba(0,0,0,.28);
   font-size: 12px; }
