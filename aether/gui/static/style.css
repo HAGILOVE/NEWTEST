@@ -644,3 +644,7 @@ body.resizing iframe, body.resizing #gl { pointer-events: none; }
 .fp-metals .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fp-metals .tg { color: var(--text-dim); font-size: 10.5px; }
 .fp-metals .fl { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--text-dim); }
+
+#status-cs { padding: 0 8px; border-radius: 9px; }
+#status-cs:hover { background: var(--tree-hover); }
+#status-cs.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }

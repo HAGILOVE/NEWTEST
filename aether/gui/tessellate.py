@@ -90,8 +90,55 @@ def _pack(verts: np.ndarray, tris: np.ndarray,
         out["snapPoints"] = verts[boundary_vertices].tolist()
     else:
         out["snapPoints"] = []
-    out["snapKind"]="display vertex"
+    out["snapKind"] = "vertex"
+    # Mid-points of whole straight edges and the centre of every face. A long
+    # outline segment is a real edge; the many tiny segments that discretise a
+    # circle are not, so they offer no mid-point.
+    out["snapMids"], out["snapCenters"] = _snap_extras(verts, out["faceEdges"], out["faces"])
     return out
+
+
+def _snap_extras(verts, face_edges, faces, limit: int = 20000):
+    """Mid-points of straight edges and the centre of every face.
+
+    The display mesh cuts every edge into short pieces, so the pieces on one
+    straight line are merged first and the mid-point is that of the whole edge.
+    A circle has no collinear pieces and therefore offers no edge mid-point."""
+    fe = np.asarray(face_edges, np.int64).reshape(-1, 3) if face_edges else np.zeros((0, 3), np.int64)
+    mids = np.zeros((0, 3))
+    if len(fe) and faces:
+        a, b = verts[fe[:, 0]], verts[fe[:, 1]]
+        d = b - a
+        ln = np.linalg.norm(d, axis=1)
+        ok = ln > 1e-15
+        a, b, d, ln, face = a[ok], b[ok], d[ok] / ln[ok, None], ln[ok], fe[ok, 2]
+        # one direction per line: make the first non-zero component positive
+        lead = np.argmax(np.abs(d) > 1e-9, axis=1)
+        sign = np.sign(d[np.arange(len(d)), lead])
+        sign[sign == 0] = 1.0
+        d = d * sign[:, None]
+        diag = float(np.linalg.norm(verts.max(axis=0) - verts.min(axis=0))) or 1.0
+        perp = a - (a * d).sum(axis=1, keepdims=True) * d            # offset of the line
+        key = np.round(np.hstack([face[:, None], d, perp / diag * 1e6]), 3)
+        _, inv = np.unique(key, axis=0, return_inverse=True)
+        inv = np.asarray(inv).reshape(-1)
+        t0, t1 = (a * d).sum(axis=1), (b * d).sum(axis=1)
+        lo = np.full(inv.max() + 1, np.inf)
+        hi = np.full(inv.max() + 1, -np.inf)
+        np.minimum.at(lo, inv, np.minimum(t0, t1))
+        np.maximum.at(hi, inv, np.maximum(t0, t1))
+        first = np.zeros(inv.max() + 1, np.int64)
+        first[inv[::-1]] = np.arange(len(inv))[::-1]                   # one member per line
+        ext = np.array([max(f["hi"][k] - f["lo"][k] for k in range(3)) for f in faces])
+        # a real edge: several collinear pieces, or one piece spanning the face
+        keep = (np.bincount(inv) > 1) | (ln[first] >= 0.3 * np.maximum(ext[face[first]], 1e-12))
+        if keep.any():
+            f0 = first[keep]
+            mid_t = 0.5 * (lo[keep] + hi[keep])
+            pts = perp[f0] + d[f0] * mid_t[:, None]
+            mids = np.unique(np.round(pts, 9), axis=0)[:limit]
+    centers = [f["point"] for f in faces if f.get("tris")][:limit]
+    return mids.tolist(), centers
 
 
 def _face_meta(verts, tris, tri_n, tri_area, face_of) -> List[Dict]:

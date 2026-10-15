@@ -156,6 +156,9 @@ def _design_json(s: Session) -> Optional[dict]:
             if p.kind == "lumped" else None,
             "selector": _selector_json(p.selector),
         } for p in d.ports],
+        "coordSystems": [{"name": c["name"], "origin": [float(x) for x in c["origin"]]}
+                         for c in d.coordinate_systems],
+        "workingCs": d.working_cs,
         "meshOps": [{"name": m.name, "maxLength": float(m.max_length),
                      "objects": list(m.objects), "enabled": bool(m.enabled),
                      "kind": m.kind,
@@ -1947,6 +1950,114 @@ def _set_polarity(s: Session, name: str = "", ground: Optional[list] = None,
     return {"ok": True, "direction": list(port.direction)}
 
 
+def _marks(s: Session) -> dict:
+    """Signal / ground marks of the open design (reset when the design changes)."""
+    d = s.design
+    pm = getattr(s, "port_marks", None)
+    if pm is None or d is None or pm.get("design") != d.name:
+        pm = {"design": d.name if d is not None else "", "signal": [], "ground": []}
+        s.port_marks = pm
+    return pm
+
+
+@command("portmarks.set")
+def _port_marks_set(s: Session, role: str = "signal", picks: Optional[list] = None,
+                    mode: str = "replace", **_):
+    """Mark objects, faces or edges as the signal or the ground of a port."""
+    if role not in ("signal", "ground"):
+        raise ValueError("role must be signal or ground")
+    s.require_design()
+    pm = _marks(s)
+    new = [dict(p_) for p_ in (picks or [])]
+    if not new:
+        raise ValueError("select the conductor (or a face / edge of it) first")
+    other = "ground" if role == "signal" else "signal"
+    # something cannot be both: moving an object to the other role removes it here
+    names = {p_.get("name") for p_ in new if p_.get("kind", "object") == "object"}
+    pm[other] = [p_ for p_ in pm[other]
+                 if not (p_.get("kind", "object") == "object" and p_.get("name") in names)]
+    pm[role] = (pm[role] + new) if mode == "add" else new
+    s.messages.add(f"Marked {len(new)} item(s) as {role} "
+                   f"({len(pm['signal'])} signal, {len(pm['ground'])} ground).",
+                   "info", "excitation")
+    return {"ok": True, "signal": len(pm["signal"]), "ground": len(pm["ground"])}
+
+
+@command("portmarks.clear")
+def _port_marks_clear(s: Session, **_):
+    pm = _marks(s)
+    pm["signal"], pm["ground"] = [], []
+    return {"ok": True}
+
+
+@command("excitation.autoPort")
+def _auto_port(s: Session, kind: str = "auto", name: str = "",
+               signal: Optional[list] = None, ground: Optional[list] = None,
+               impedance: Any = 50.0, modes: int = 1, end: str = "", **_):
+    """
+    A port made from the marked signal and ground: no coordinates.
+
+    ``kind``  ``lumped``, ``wave`` or ``auto`` (wave when the line runs out to
+    the model boundary, lumped when the conductors sit inside it).
+    """
+    from . import autoport as ap
+    d = s.require_design()
+    pm = _marks(s)
+    S = ap.marks_from_picks(d, signal if signal is not None else pm["signal"], "signal")
+    G = ap.marks_from_picks(d, ground if ground is not None else pm["ground"], "ground")
+    D_lo, D_hi = (np.asarray(v, float) for v in d.bounding_box())
+    chosen = kind if kind in ("lumped", "wave") else ap.choose_kind(S, G, D_lo, D_hi)
+    nm = naming.suggest_port(d, chosen)
+    axname = "XYZ"
+    if chosen == "lumped":
+        plan = ap.plan_lumped(S, G, D_lo, D_hi, ap.taken_planes(d), end)
+        sheet_name = naming.unique_name([o.name for o in d.solids] + [o.name for o in d.sheets],
+                                        nm + "_sheet")
+        sheet = prim.Polygon([[float(v) for v in q] for q in plan["corners"]], name=sheet_name)
+        d.add_sheet(sheet_name, sheet)
+        sel = ShapeSelector(sheet, tol=1e-7)
+        d.add_lumped_port(nm, selector=sel, impedance=complex(to_si(impedance) if isinstance(impedance, str)
+                                                              else impedance),
+                          direction=[float(v) for v in plan["direction"]],
+                          integration_line=(tuple(float(v) for v in plan["signal"]),
+                                            tuple(float(v) for v in plan["ground"])))
+        d.mesh = None
+        s.dirty = True
+        n = _warn_if_empty(s, d, sel, nm, "Port")
+        lam = ap.wavelength_hint(d)
+        msg = (f"Lumped port {nm!r}: {plan['gap'] * 1e3:.4g} mm gap along {axname[plan['axis']]}, "
+               f"{plan['width'] * 1e3:.4g} mm wide, at {axname[plan['plane_axis']]} = "
+               f"{plan['plane_at'] * 1e3:.4g} mm; field from signal to ground.")
+        s.messages.add(msg, "info", "excitation")
+        if lam and plan["gap"] > lam / 10.0:
+            s.messages.add(f"The gap ({plan['gap'] * 1e3:.3g} mm) is more than a tenth of a wavelength "
+                           f"({lam * 1e3:.3g} mm): a lumped port is not accurate here; use a wave port.",
+                           "warning", "excitation")
+        out = {"kind": "lumped", "sheet": sheet_name, "faces": n, "gap": plan["gap"],
+               "width": plan["width"]}
+    else:
+        plan = ap.plan_wave(S, G, D_lo, D_hi, ap.taken_planes(d), end)
+        sel = PlaneSelector(axname[plan["axis"]].lower(), plan["at"], tol=1e-7,
+                            window=plan["window"])
+        d.add_wave_port(nm, selector=sel, num_modes=int(modes),
+                        integration_line=(tuple(float(v) for v in plan["signal"]),
+                                          tuple(float(v) for v in plan["ground"])))
+        d.mesh = None
+        s.dirty = True
+        n = _warn_if_empty(s, d, sel, nm, "Port")
+        s.messages.add(f"Wave port {nm!r} on the {axname[plan['axis']]} = {plan['at'] * 1e3:.4g} mm "
+                       f"plane: {plan['note']}; integration line from signal to ground.",
+                       "info", "excitation")
+        if not plan["on_boundary"]:
+            s.messages.add("The port plane is not on the outer boundary of the model, so it may find "
+                           "no face to attach to. Extend the conductors (and the air region) out to "
+                           "the boundary, or choose a lumped port.", "warning", "excitation")
+        out = {"kind": "wave", "faces": n, "plane": axname[plan["axis"]].lower(),
+               "at": plan["at"], "onBoundary": plan["on_boundary"], "note": plan["note"]}
+    pm["signal"], pm["ground"] = [], []           # consumed
+    return dict(out, ok=True, name=nm)
+
+
 @command("excitation.delete")
 def _del_port(s: Session, name: str = "", **_):
     d = s.require_design()
@@ -2224,6 +2335,73 @@ def _gen_mesh(s: Session, size: Optional[float] = None, **_):
                    f"min quality {m.quality().min():.3f}", "info", "mesh")
     return {"ok": True, "nodes": m.n_nodes, "tets": m.n_tets,
             "skipped": sorted(skipped)}
+
+
+# ==========================================================================
+# relative coordinate systems
+# ==========================================================================
+
+
+@command("cs.create")
+def _cs_create(s: Session, name: str = "", origin: Any = None,
+               setWorking: bool = True, **_):
+    """A relative coordinate system whose origin is *origin* (a picked vertex,
+    edge mid-point or face centre, or typed). Coordinates entered while it is
+    the working system are measured from that origin."""
+    d = s.require_design()
+    if origin is None or len(origin) != 3:
+        raise ValueError("give the origin as three coordinates")
+    org = [to_si(x) for x in origin]
+    nm = str(name).strip()
+    if not nm:
+        n = 1
+        names = {c["name"] for c in d.coordinate_systems}
+        while f"RelativeCS{n}" in names:
+            n += 1
+        nm = f"RelativeCS{n}"
+    d.add_coordinate_system(nm, org)
+    if setWorking:
+        d.working_cs = nm
+    s.dirty = True
+    s.messages.add(f"Coordinate system {nm!r} at ({org[0] * 1e3:.4g}, "
+                   f"{org[1] * 1e3:.4g}, {org[2] * 1e3:.4g}) mm"
+                   + (" is now the working system." if setWorking else "."),
+                   "info", "modeler")
+    return {"ok": True, "name": nm}
+
+
+@command("cs.setWorking")
+def _cs_set_working(s: Session, name: str = "", **_):
+    d = s.require_design()
+    nm = "" if str(name).strip().lower() in ("", "global") else str(name)
+    if nm:
+        d.get_coordinate_system(nm)
+    d.working_cs = nm
+    return {"ok": True, "name": nm}
+
+
+@command("cs.delete")
+def _cs_delete(s: Session, name: str = "", **_):
+    d = s.require_design()
+    d.delete_coordinate_system(name)
+    s.dirty = True
+    return {"ok": True}
+
+
+@command("cs.rename")
+def _cs_rename(s: Session, name: str = "", newName: str = "", **_):
+    d = s.require_design()
+    c = d.get_coordinate_system(name)
+    nn = str(newName).strip()
+    if not nn or nn.lower() == "global":
+        raise ValueError("give the coordinate system a name other than 'Global'")
+    if any(x["name"] == nn for x in d.coordinate_systems if x is not c):
+        raise ValueError(f"a coordinate system named {nn!r} already exists")
+    c["name"] = nn
+    if d.working_cs == name:
+        d.working_cs = nn
+    s.dirty = True
+    return {"ok": True}
 
 
 # ==========================================================================
@@ -2571,9 +2749,11 @@ def _view_assignments(s: Session, **_):
     d = s.design
     if d is None:
         return {"items": []}
+    pm = _marks(s)
+    n_marks = {"signal": len(pm["signal"]), "ground": len(pm["ground"])}
 
-    if not d.ports and not d.boundaries:
-        return {"items": []}
+    if not d.ports and not d.boundaries and not (n_marks["signal"] or n_marks["ground"]):
+        return {"items": [], "marks": n_marks}
 
     got = _model_triangles(d)
     if got is None:
@@ -2619,7 +2799,39 @@ def _view_assignments(s: Session, **_):
                       "count": int(len(sel)),
                       "position": np.round(sel.ravel(), 9).tolist(),
                       "center": [float(x) for x in sel.reshape(-1, 3).mean(0)]})
-    return {"items": items}
+    # what is marked as signal / ground, until a port is made from it
+    for role, color in (("signal", "#ff5d5d"), ("ground", "#4d8dff")):
+        parts, line = [], None
+        for pk in pm[role]:
+            kind = pk.get("kind", "object")
+            try:
+                if kind == "object":
+                    sel_m = ShapeSelector(_entity(d, pk["name"]).shape, tol=1e-6)
+                elif kind == "face":
+                    sel_m = FaceSelector(point=pk["point"], normal=pk["normal"],
+                                         lo=pk["lo"], hi=pk["hi"],
+                                         planar=bool(pk.get("planar", True)),
+                                         object=pk.get("object", ""))
+                else:
+                    line = [[to_si(x) for x in pk["a"]], [to_si(x) for x in pk["b"]]]
+                    continue
+            except Exception:                                   # noqa: BLE001
+                continue
+            t = pick(sel_m)
+            if t is not None:
+                parts.append(t)
+        if not parts and line is None:
+            continue
+        pos = np.vstack(parts) if parts else np.zeros((0, 3, 3))
+        item = {"name": f"{role.capitalize()} mark", "kind": "mark", "type": "mark-" + role,
+                "color": color, "count": int(len(pos)),
+                "position": np.round(pos.ravel(), 9).tolist(),
+                "center": ([float(x) for x in pos.reshape(-1, 3).mean(0)] if len(pos)
+                           else [float(x) for x in np.mean(line, axis=0)])}
+        if line is not None:
+            item["line"] = line
+        items.append(item)
+    return {"items": items, "marks": n_marks}
 
 
 @command("view.mesh")
@@ -3306,6 +3518,7 @@ MUTATING = {
     "boundary.delete": "Delete boundary",
     "excitation.assign": "Assign excitation",
     "excitation.setPolarity": "Set port polarity",
+    "excitation.autoPort": "Assign port (auto)",
     "excitation.delete": "Delete excitation",
     "analysis.addSetup": "Add setup",
     "analysis.editSetup": "Edit setup",

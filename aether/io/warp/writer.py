@@ -165,6 +165,14 @@ def _write_design(root: WarpBlock, d) -> WarpBlock:
     for p in d.ports:
         _write_port(bs, p, d)
 
+    if d.coordinate_systems:
+        cs = blk.add_block("AetherCoordinateSystems")
+        for c in d.coordinate_systems:
+            item = cs.add_block("CS")
+            item.add_prop("Name", c["name"])
+            item.add_prop("Origin", [float(x) for x in c["origin"]])
+        if d.working_cs:
+            cs.add_prop("Working", d.working_cs)
     if d.mesh_ops:
         mesh = blk.add_block("AetherMeshOperations")
         for op in d.mesh_ops:
@@ -673,7 +681,8 @@ def write_project(path: str, project_or_design, mode: str = "auto") -> str:
         import copy
         doc = copy.deepcopy(src) if src is not None else build_document(name, designs)
         fresh = build_document(name, designs)
-        modeled = {"Variables", "ModelSetup", "BoundarySetup", "AnalysisSetup", "AetherMeshOperations"}
+        modeled = {"Variables", "ModelSetup", "BoundarySetup", "AnalysisSetup", "AetherMeshOperations",
+                   "AetherCoordinateSystems"}
         for generated in fresh.warps_designs():
             target = next((b for b in doc.warps_designs()
                            if str(b.get("Name", "")) == str(generated.get("Name", ""))), None)

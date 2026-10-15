@@ -336,10 +336,51 @@ class Design:
         self.ports: List[Port] = []
         self.setups: List[Setup] = []
         self.mesh_ops: List[MeshOperation] = []
+        #: named relative coordinate systems: ``[{"name": str, "origin": (x, y, z) m}]``.
+        #: Offset-only (axes stay parallel to the global ones), like an
+        #: "Offset" relative CS: coordinates typed in one are measured from its origin.
+        self.coordinate_systems: List[Dict[str, Any]] = []
+        #: the coordinate system new coordinates are read in ("" = Global)
+        self.working_cs: str = ""
         self.variables: Dict[str, Any] = {}
         self.mesh = None                     # populated by generate_mesh()
         self.notes: Dict[str, Any] = {}
         self._warp_source = None             # round-trip provenance
+
+    # ------------------------------------------------ coordinate systems
+    def add_coordinate_system(self, name: str, origin) -> Dict[str, Any]:
+        name = str(name).strip()
+        if not name or name.lower() == "global":
+            raise ValueError("give the coordinate system a name other than 'Global'")
+        if any(c["name"] == name for c in self.coordinate_systems):
+            raise ValueError(f"a coordinate system named {name!r} already exists")
+        o = tuple(float(x) for x in origin)
+        if len(o) != 3 or not all(math.isfinite(x) for x in o):
+            raise ValueError("a coordinate system origin is three finite numbers")
+        cs = {"name": name, "origin": o}
+        self.coordinate_systems.append(cs)
+        return cs
+
+    def get_coordinate_system(self, name: str) -> Dict[str, Any]:
+        for c in self.coordinate_systems:
+            if c["name"] == name:
+                return c
+        raise KeyError(f"no coordinate system named {name!r}")
+
+    def delete_coordinate_system(self, name: str) -> None:
+        self.get_coordinate_system(name)
+        self.coordinate_systems = [c for c in self.coordinate_systems if c["name"] != name]
+        if self.working_cs == name:
+            self.working_cs = ""
+
+    def working_origin(self):
+        """Origin (metres) of the coordinate system in use; the global one is 0."""
+        if self.working_cs:
+            try:
+                return self.get_coordinate_system(self.working_cs)["origin"]
+            except KeyError:
+                self.working_cs = ""
+        return (0.0, 0.0, 0.0)
 
     # ----------------------------------------------------------- geometry
     def add_solid(self, name: str, shape: Shape, material="vacuum",
@@ -598,6 +639,7 @@ class Design:
             "units": self.units, "solution_type": self.solution_type,
             "config": self.config, "default_boundary": getattr(self, "default_boundary", "pec"),
             "name": self.name, "materials": self.materials,
+            "coordinate_systems": self.coordinate_systems,
         })
 
     def restore(self, snap: dict) -> "Design":
@@ -618,6 +660,10 @@ class Design:
         self.solution_type = s["solution_type"]
         self.name = s["name"]
         self.materials = s["materials"]
+        self.coordinate_systems = s.get("coordinate_systems", [])
+        if self.working_cs and not any(c["name"] == self.working_cs
+                                       for c in self.coordinate_systems):
+            self.working_cs = ""
         for i, p in enumerate(self.ports):
             p.index = i
         self.mesh = None

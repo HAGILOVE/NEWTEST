@@ -129,6 +129,23 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 
 **최적화** — `Tools ▸ Optimization…`: 변수 범위, 목표(S 파라미터 대역 조건, 노치 주파수, 고유모드 주파수, 최대 이득), 옵티마이저 선택. 매 시도는 복사본에서 실제 풀이를 하며 `Apply best values`가 한 번의 Undo 단계임. 변수는 치수에 연결되어 있어야 함(`Tools ▸ Design Variables…` + 치수 편집).
 
+### 포트 자동 설정 (좌표 입력 없이)
+
+1. 금속 설정 후 **신호선**을 선택(객체 또는 면/모서리) → 우클릭 ▸ **Mark as Signal (+)**
+2. **GND**를 선택 → 우클릭 ▸ **Mark as Ground (−)** (여러 개는 *Add Selection to …*)
+3. 우클릭 ▸ **Assign Lumped Port (auto)** / **Assign Wave Port (auto)** / **Assign Port (auto type)**
+   - Lumped: 신호선 끝(모델 경계에 가까운 쪽)에서 신호↔GND 간극을 잇는 시트가 자동 생성되고 적분선은 signal → ground. 폭은 두 도체 중 좁은 쪽. 같은 선에 두 번째 포트는 반대쪽 끝에 만들어짐.
+   - Wave: 신호선 끝단에 단면을 잡고 창은 GND 단면 전체(또는 신호폭의 약 10배)로 자동 결정, 적분선은 마주 보는 도체 면에 맞춤.
+   - Auto type: 도체가 모델 경계까지 나가 있으면 Wave, 내부에 있으면 Lumped.
+   - 객체 2개를 선택하면 **Lumped/Wave Port between the two selected**(먼저 선택 = signal)로 한 번에 생성.
+4. 간극이 λ/10보다 크면 Lumped 정확도 경고가 나옴 → Wave 포트 사용.
+
+검증: 직선 마이크로스트립에 자동 Wave 포트 2개 → \|S21\| > 0.7, \|S11\| < 0.6.
+
+### 상대 좌표계 (Relative CS)
+
+`Draw ▸ Coordinate System ▸ Relative CS…`에서 객체의 **꼭짓점 / 모서리 중점 / 면 중심**을 클릭(스냅)하거나 좌표를 직접 입력하면 그 점이 원점인 작업 CS가 됨. 이후 그리기·포트·New Line의 입력값과 상태바 좌표가 모두 이 CS 기준으로 표시·입력되고, 모델과 파일은 전역 좌표(m)로 저장됨. 상태바 칩에서 작업 CS 변경, 이름 변경, 삭제, Global 복귀. `.warp`에 저장됨. **한계: 평행이동만 지원** (회전 CS, Face CS 없음).
+
 ## 5. 예제
 
 | 프로젝트 | 확인한 결과 |

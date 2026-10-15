@@ -264,7 +264,8 @@ class Viewport {
         faceEdges: o.faceEdges || [],
         edgeGroups: o.cadEdges?.length?o.cadEdges:buildEdgeGroups(o.faceEdges||[],o.edgeVerts||[]),
         pickTree: buildPickTree(o.position),
-        snapPoints: o.snapPoints || [], snapKind: o.snapKind || "display vertex",
+        snapPoints: o.snapPoints || [], snapKind: o.snapKind || "vertex",
+        snapMids: o.snapMids || [], snapCenters: o.snapCenters || [],
         hiCpu: new Float32Array(n),
         hi: this._buf(new Float32Array(n)),
         centroid: centroid(o.position.length ? o.position : (o.edgeVerts || []))
@@ -294,8 +295,8 @@ class Viewport {
     for (const a of (this.assign || [])) gl.deleteBuffer(a.b);
     this.assign = [];
     for (const it of (items || [])) {
-      if (!it.position || !it.position.length) continue;
-      const p = new Float32Array(it.position);
+      if ((!it.position || !it.position.length) && !it.line) continue;
+      const p = new Float32Array(it.position || []);
       this.assign.push({
         b: this._buf(p), n: p.length / 3, name: it.name, type: it.type,
         color: hex2rgb(it.color || '#ff4fa3'),
@@ -578,11 +579,14 @@ class Viewport {
     for(const o of this.objects) {
       if(o.visible===false||o.name==='__field__')continue;
       if(mode==='point') {
-        const pts=o.snapPoints?.length?o.snapPoints:[];
-        for(const point of pts) {
-          const q=this.project(point);if(!q)continue;
-          const d=Math.hypot(q.x-px,q.y-py);
-          if(d<bestPixels&&visible(o,point)){bestPixels=d;best={name:o.name,point:[...point],snapKind:o.snapKind||'display vertex',vertex:true};}
+        // vertices win a tie over mid-points, which win over face centres
+        const kinds=[[o.snapPoints,o.snapKind||'vertex',0],[o.snapMids,'edge midpoint',3],[o.snapCenters,'face centre',6]];
+        for(const [pts,kind,bias] of kinds) {
+          for(const point of (pts||[])) {
+            const q=this.project(point);if(!q)continue;
+            const d=Math.hypot(q.x-px,q.y-py)+bias;
+            if(d<bestPixels&&visible(o,point)){bestPixels=d;best={name:o.name,point:[...point],snapKind:kind,vertex:true};}
+          }
         }
       } else {
         const ev=o.evCpu,fe=o.faceEdges?.length?o.faceEdges:[];

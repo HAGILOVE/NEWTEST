@@ -271,6 +271,8 @@ const toMeters = txt => {
   const k = { m: 1, cm: 1e-2, mm: 1e-3, um: 1e-6, 'µm': 1e-6, mil: 2.54e-5, in: 2.54e-2 }[m[2] || U()] ;
   return parseFloat(m[1]) * (k == null ? 1e-3 : k);
 };
+/* three position fields -> global metres (numbers), adding the working origin */
+const g3abs = pre => ['x', 'y', 'z'].map((c, k) => toMeters($('#' + pre + c).value) + csOrigin()[k]);
 const g3 = p => [$('#' + p + 'x').value, $('#' + p + 'y').value, $('#' + p + 'z').value];
 const gv = id => $('#' + id).value;
 const gn = id => parseFloat($('#' + id).value);
@@ -523,6 +525,87 @@ function autoName(inputId, kind, what, setup) {
 
 const U = () => (STATE?.design?.units) || 'mm';
 
+/* Working coordinate system: the select that lives in panels, the status-bar
+   chip, the menu, the dialog and the click that places an origin. */
+function csChoices() {
+  const d = STATE && STATE.design;
+  return ['Global'].concat(((d && d.coordSystems) || []).map(c => c.name));
+}
+async function setWorkingCs(name) {
+  await guard(() => rpc('cs.setWorking', { name: name === 'Global' ? '' : name }));
+  updateCsLabel();
+  if (DRAW) updateDrawPanel();
+}
+function updateCsLabel() {
+  const c = $('#status-cs'); if (!c) return;
+  c.textContent = 'CS: ' + csName();
+  c.classList.toggle('on', csName() !== 'Global');
+  for (const sl of document.querySelectorAll('select[data-cs]')) refillCsSelect(sl);
+}
+function refillCsSelect(sl) {
+  const cur = csName();
+  sl.innerHTML = '';
+  for (const n of csChoices()) sl.appendChild(el('option', { value: n }, n === 'Global' ? 'Global' : n));
+  sl.appendChild(el('option', { value: '__pick__' }, '＋ New from picked point…'));
+  sl.appendChild(el('option', { value: '__typed__' }, '＋ New (type origin)…'));
+  sl.value = cur;
+}
+/* A <select> for panels. `after` runs once the working system has changed. */
+function csSelect(id, after) {
+  const sl = el('select', { id, 'data-cs': '1', title: 'Coordinates you type are measured from this origin' });
+  refillCsSelect(sl);
+  sl.onchange = async () => {
+    const v = sl.value;
+    if (v === '__pick__') { refillCsSelect(sl); startCsPick(after); return; }
+    if (v === '__typed__') { refillCsSelect(sl); dlgCoordSystem(after); return; }
+    await setWorkingCs(v); after && after();
+  };
+  return sl;
+}
+function csMenuItems(after) {
+  const items = csChoices().map(n => [(csName() === n ? '● ' : '○ ') + n, () => setWorkingCs(n).then(() => after && after())]);
+  items.push(null,
+    ['New Relative CS from Picked Point…', () => startCsPick(after)],
+    ['New Relative CS (type origin)…', () => dlgCoordSystem(after)]);
+  const cs = (STATE.design.coordSystems || []);
+  if (cs.length) items.push(null, ['Delete Coordinate System ▸', null],
+    ...cs.map(c => ['    ' + c.name, () => guard(() => rpc('cs.delete', { name: c.name })).then(() => { updateCsLabel(); if (DRAW) updateDrawPanel(); })]));
+  return items;
+}
+/* Click a vertex, an edge mid-point or a face centre: it becomes the origin. */
+function startCsPick(after) {
+  if (!VP) return toastError('3-D viewport is unavailable.');
+  if (DRAW) { DRAW.typing = false; }
+  startMeasurePick('csorigin');
+  MEASURE_PICK.onDone = async pts => {
+    await guard(() => rpc('cs.create', { origin: pts[0], setWorking: true }));
+    updateCsLabel(); if (DRAW) updateDrawPanel(); after && after();
+  };
+  $('#vp-hint').textContent =
+    'Relative CS: click a vertex, edge mid-point or face centre — it becomes the origin · Esc cancels';
+}
+function dlgCoordSystem(after) {
+  const u = U();
+  const body = el('div');
+  body.appendChild(field('Name', inp('cs-name', '', 'text', { placeholder: 'auto' })));
+  body.appendChild(field('Origin (global)', xyz('cso', ['0' + u, '0' + u, '0' + u])));
+  body.appendChild(el('div', { style: 'margin-top:6px' }, el('button', { class: 'pri', onclick: () => {
+    const back = $('#modal-back'); back.classList.remove('on');
+    startMeasurePick('csorigin');
+    MEASURE_PICK.restore = () => back.classList.add('on');
+    MEASURE_PICK.onDone = pts => { back.classList.add('on');
+      ['x', 'y', 'z'].forEach((c, k) => { $('#cso' + c).value = fmtLen(pts[0][k], u); }); };
+    $('#vp-hint').textContent = 'Click a vertex, edge mid-point or face centre · Esc cancels';
+  } }, '🖱 Pick with mouse')));
+  body.appendChild(el('div', { class: 'hint' },
+    'The origin is in global coordinates. After creating it the coordinates you type in the drawing ' +
+    'and port panels are measured from it; choose Global in the Origin list to go back.'));
+  dialog({ title: 'New Relative Coordinate System', body, ok: 'Create', onOk: async () => {
+    await guard(() => rpc('cs.create', { name: gv('cs-name'), origin: g3('cso'), setWorking: true }));
+    updateCsLabel(); if (DRAW) updateDrawPanel(); after && after();
+  } });
+}
+
 async function dlgDraw(kind, picked) {
   if (!await ensureDesign()) return;
   const u = U();
@@ -530,6 +613,8 @@ async function dlgDraw(kind, picked) {
   const body = el('div');
   // Values from two clicked points, when the draw started that way.
   const P = picked ? pickedGeometry(kind, picked, u) : null;
+  if (P && P.position && csName() !== 'Global')       // shown from the working origin
+    P.position = P.position.map((t, k) => fmtLen(toMeters(t) - csOrigin()[k], u) + u);
   const nameI = inp('d-name', '', 'text', { placeholder: 'auto' });
   const matI = sel('d-mat', mats.length ? mats : ['vacuum'], 'vacuum');
   body.appendChild(field('Name', nameI));
@@ -574,6 +659,8 @@ async function dlgDraw(kind, picked) {
       if (h) h.value = P.depth;
     }, 0);
   }
+  if (csName() !== 'Global') body.appendChild(el('div', { class: 'hint' },
+    `Positions are measured from ${csName()}.`));
   if (P) body.appendChild(el('div', { class: 'hint' },
     'Filled in from the two points you clicked — correct any of them here.'));
   body.appendChild(el('div', { class: 'hint' },
@@ -585,7 +672,9 @@ async function dlgDraw(kind, picked) {
     body, ok: 'Create',
     onOk: async () => {
       const p = {};
-      if (kind === 'box') { p.position = g3('p'); p.size = g3('s'); }
+      const g3 = pre => g3abs(pre);              // positions are in the working CS
+      const g3size = pre => ['x', 'y', 'z'].map(c => $('#' + pre + c).value);
+      if (kind === 'box') { p.position = g3('p'); p.size = g3size('s'); }
       else if (kind === 'sphere') { p.center = g3('p'); p.radius = gv('d-r'); }
       else if (kind === 'cylinder') {
         p.center = g3('p'); p.radius = gv('d-r'); p.height = gv('d-h');
@@ -1010,9 +1099,11 @@ function portLineFields(getSelector, kind) {
   const zero = () => ['0' + u, '0' + u, '0' + u];
   const sEl = xyz('pls', zero()), gEl = xyz('plg', zero());
   const note = el('div', { class: 'hint', style: 'margin:4px 0 0' });
-  const num = c => ['x', 'y', 'z'].map(a => toMeters($('#' + c + a).value));
-  const set = (pre, v) => ['x', 'y', 'z'].forEach((c, i) => { $('#' + pre + c).value = fmtLen(v[i], u); });
-  const preview = () => { try { VP && VP.setDraft(arrowStrip(num('pls'), num('plg'))); } catch (e) { /* not numbers yet */ } };
+  // fields are in the working coordinate system; the server always gets global metres
+  const num = c => ['x', 'y', 'z'].map((a, k) => toMeters($('#' + c + a).value) + csOrigin()[k]);
+  const set = (pre, v) => ['x', 'y', 'z'].forEach((c, i) => { $('#' + pre + c).value = fmtLen(v[i] - csOrigin()[i], u); });
+  let lastAbs = null;
+  const preview = () => { try { lastAbs = [num('pls'), num('plg')]; VP && VP.setDraft(arrowStrip(lastAbs[0], lastAbs[1])); } catch (e) { /* not numbers yet */ } };
   const detect = async () => {
     const a = axisSel.value;
     if (a === 'custom') return;
@@ -1039,7 +1130,10 @@ function portLineFields(getSelector, kind) {
     preview();
   }, { current: () => { try { return [num('pls'), num('plg')]; } catch (e) { return null; } } });
   axisSel.onchange = detect;
-  box.append(field('Direction', axisSel), field('Signal (+) start', sEl), field('Ground (−) end', gEl),
+  box.append(field('Direction', axisSel), field('Origin', csSelect('pl-cs', () => {
+      // keep the points, show them from the new origin
+      const keep = lastAbs; if (keep) { set('pls', keep[0]); set('plg', keep[1]); }
+    })), field('Signal (+) start', sEl), field('Ground (−) end', gEl),
     el('div', { style: 'display:flex;gap:8px;margin-top:6px;flex-wrap:wrap' },
       el('button', { class: 'pri', onclick: newLine,
         title: 'Click the signal point, then the ground point, in the 3-D view (Tab types coordinates)' }, '🖱 New Line…'),
@@ -1048,12 +1142,12 @@ function portLineFields(getSelector, kind) {
     note);
   try { const k = getSelector().kind; if (k === 'faces' || k === 'object') setTimeout(detect, 60); }
   catch (e) { /* selector not readable yet */ }
-  return { node: box, read: () => ({ signal: g3('pls'), ground: g3('plg') }) };
+  return { node: box, read: () => ({ signal: num('pls'), ground: num('plg') }) };
 }
 
 /* The panel and the clicking behind "New Line". The dialog that asked steps out
    of the way while the model is clicked and comes back with the two points. */
-let PLP = null;
+let PLP = null, PLP_ABS = [null, null];
 function pickPortLine(onDone, opts) {
   if (!VP) return toastError('3-D viewport is unavailable.');
   if (DRAW) cancelPointDraw();
@@ -1074,6 +1168,9 @@ function pickPortLine(onDone, opts) {
       ...['x', 'y', 'z'].map(c => inp(pre + c, '', 'text', { placeholder: c.toUpperCase(), spellcheck: 'false' })));
     box.appendChild(r); return r;
   };
+  box.appendChild(el('div', { class: 'row' }, el('label', {}, 'Origin'), csSelect('plp-cs', () => {
+    for (let i = 0; i < 2; i++) if (PLP_ABS[i]) PLP.write(i, PLP_ABS[i]);   // same points, new origin
+  })));
   rowFor('Signal +', 'plp-s'); rowFor('Ground −', 'plp-g');
   const hint = el('div', { class: 'note', id: 'plp-note' });
   box.appendChild(hint);
@@ -1083,8 +1180,9 @@ function pickPortLine(onDone, opts) {
     el('button', { onclick: () => cancelMeasurePick() }, 'Cancel')));
   PLP = { idx: 0, typing: false };
   const rowIds = i => ['x', 'y', 'z'].map(c => '#' + (i ? 'plp-g' : 'plp-s') + c);
-  const writeRow = (i, p) => rowIds(i).forEach((id, k) => { $(id).value = fmtLen(p[k], u); });
-  const readRow = i => rowIds(i).map(id => toMeters($(id).value));
+  PLP_ABS = [null, null];
+  const writeRow = (i, p) => { PLP_ABS[i] = p.slice(); rowIds(i).forEach((id, k) => { $(id).value = fmtLen(p[k] - csOrigin()[k], u); }); };
+  const readRow = i => rowIds(i).map((id, k) => toMeters($(id).value) + csOrigin()[k]);
   PLP.write = writeRow; PLP.read = readRow; PLP.hint = hint;
   const cur = opts && opts.current && opts.current();
   if (cur) { writeRow(0, cur[0]); writeRow(1, cur[1]); }
@@ -1151,13 +1249,14 @@ async function dlgPolarity(name) {
   const u = U();
   const body = el('div');
   const sg = geo.signal || geo.center, g = geo.ground || geo.center;
-  const sEl = xyz('pg-s', sg.map(v => fmtLen(v, u))), gEl = xyz('pg-g', g.map(v => fmtLen(v, u)));
-  const num = pre => ['x', 'y', 'z'].map(c => toMeters($('#' + pre + c).value));
+  const o0 = csOrigin();
+  const sEl = xyz('pg-s', sg.map((v, k) => fmtLen(v - o0[k], u))), gEl = xyz('pg-g', g.map((v, k) => fmtLen(v - o0[k], u)));
+  const num = pre => ['x', 'y', 'z'].map((c, k) => toMeters($('#' + pre + c).value) + csOrigin()[k]);
   const prev = () => { try { VP && VP.setDraft(arrowStrip(num('pg-s'), num('pg-g'))); } catch (e) { /* ignore */ } };
-  body.append(field('Signal (+) start', sEl), field('Ground (−) end', gEl),
+  body.append(field('Origin', csSelect('pg-cs', null)), field('Signal (+) start', sEl), field('Ground (−) end', gEl),
     el('div', { style: 'margin-top:6px;display:flex;gap:8px;flex-wrap:wrap' },
       el('button', { class: 'pri', onclick: () => pickPortLine(pts => {
-        ['x', 'y', 'z'].forEach((c, i) => { $('#pg-s' + c).value = fmtLen(pts[0][i], u); $('#pg-g' + c).value = fmtLen(pts[1][i], u); });
+        ['x', 'y', 'z'].forEach((c, i) => { $('#pg-s' + c).value = fmtLen(pts[0][i] - csOrigin()[i], u); $('#pg-g' + c).value = fmtLen(pts[1][i] - csOrigin()[i], u); });
         prev(); }, { current: () => { try { return [num('pg-s'), num('pg-g')]; } catch (e) { return null; } } }) }, '🖱 New Line…'),
       el('button', { onclick: () => {
         for (const c of ['x', 'y', 'z']) { const a = $('#pg-s' + c), b = $('#pg-g' + c); [a.value, b.value] = [b.value, a.value]; }
@@ -1166,7 +1265,7 @@ async function dlgPolarity(name) {
       'The line runs from the signal conductor to the ground and the port field points along it. ' +
       'Reversing it changes the sign of the port voltage (S21 between two ports shifts by 180°).'));
   dialog({ title: `Port polarity — ${name}`, body, ok: 'Apply', onOk: async () => {
-    await guard(() => rpc('excitation.setPolarity', { name, signal: g3('pg-s'), ground: g3('pg-g') }));
+    await guard(() => rpc('excitation.setPolarity', { name, signal: num('pg-s'), ground: num('pg-g') }));
     await refreshAssignments();
   }, onClose: () => { VP && VP.setDraft(null); } });
   setTimeout(prev, 50);
@@ -1874,6 +1973,10 @@ const MENUS = [
     ['Draw Cone by Points', () => startPointDraw('cone')],
     null, ['Import CAD…', dlgImportCad]]],
   ['Modeler', [
+    ['Relative CS from Picked Point\u2026', () => startCsPick()],
+    ['Relative CS (type origin)\u2026', () => dlgCoordSystem()],
+    ['Working Coordinate System\u2026', () => { const r = $('#status-cs').getBoundingClientRect(); contextMenu(r.left, r.top - 4, csMenuItems()); }],
+    null,
     ['Boolean\u2026', dlgBoolean],
     ['Replace CAD Source\u2026', dlgReplaceCad],
     ['Arrange\u2026', () => dlgTransform('move')],
@@ -2301,7 +2404,7 @@ const TREE_ICON = {
   project: 'i-new', design: 'i-box', modeler: 'i-box', object: 'i-box',
   sheet: 'i-rect', boundary: 'i-bnd', port: 'i-port', setup: 'i-setup',
   sweep: 'i-sweep', results: 'i-report', mesh: 'i-mesh',
-  meshop: 'i-mesh', material: 'i-mat'
+  meshop: 'i-mesh', material: 'i-mat', cs: 'i-move'
 };
 const collapsed = new Set();
 
@@ -2373,6 +2476,16 @@ function renderTree() {
         add(3, 's:' + s.name, s.name, 'sheet', { tag: 'sheet',
           sel: STATE.selection.includes(s.name),
           onclick: () => setSelection([s.name]) });
+    }
+    {
+      const cs = d.coordSystems || [];
+      if (add(2, 'cs', 'Coordinate Systems', 'cs', { kids: 1 + cs.length, tag: csName() })) {
+        add(3, 'cs:Global', 'Global', 'cs', { sel: csName() === 'Global', ctxName: 'Global',
+          onclick: () => setWorkingCs('Global') });
+        for (const c of cs) add(3, 'cs:' + c.name, c.name, 'cs', { sel: csName() === c.name, ctxName: c.name,
+          tag: '(' + c.origin.map(v => fmtLen(v, U())).join(', ') + ')',
+          title: 'Click to work in this coordinate system', onclick: () => setWorkingCs(c.name) });
+      }
     }
     if (add(2, 'bnd', 'Boundaries', 'boundary',
       { kids: 1, tag: String(d.boundaries.length) })) {
@@ -2957,6 +3070,7 @@ async function refreshAssignments() {
   try {
     const r = await rpc('view.assignments', {});
     ASSIGN_ITEMS = r.items || [];
+    PORT_MARK_COUNT = r.marks || { signal: 0, ground: 0 };
   } catch (e) { ASSIGN_ITEMS = []; }
   VP.setAssignments(ASSIGN_ITEMS);
   renderAssignLegend();
@@ -2975,8 +3089,7 @@ function renderAssignLegend() {
     if (it.type === 'radiation' && !VP.showRadiation) continue;
     box.appendChild(el('div', { class: 'row',
       title: `${it.name} — ${it.type}, ${it.count} triangles`,
-      onclick: () => showProps(it.kind === 'boundary' ? 'boundary' : 'port',
-        it.name) },
+      onclick: () => { if (it.kind !== 'mark') showProps(it.kind === 'boundary' ? 'boundary' : 'port', it.name); } },
       el('span', { class: 'sw', style: `background:${it.color}` }),
       `${it.name} · ${it.type}`));
   }
@@ -3490,8 +3603,22 @@ function niceSnapStep(x) {
 
 /* metres -> the number shown in the panel, and back. The panel works in the
    design's own units, which is what the model is dimensioned in. */
+/* ------------------------------------------- relative coordinate systems
+   A coordinate system is an offset origin. Typed coordinates are read as
+   measured from it and shown as measured from it; everything underneath
+   (the model, the server) stays in global metres. Pick a vertex, an edge
+   mid-point or a face centre of any object to start one. */
+const csOrigin = () => {
+  const d = typeof STATE !== 'undefined' && STATE && STATE.design;
+  if (!d || !d.workingCs) return [0, 0, 0];
+  const c = (d.coordSystems || []).find(x => x.name === d.workingCs);
+  return c ? c.origin : [0, 0, 0];
+};
+const csName = () => (typeof STATE !== 'undefined' && STATE && STATE.design && STATE.design.workingCs) || 'Global';
 const toU = m => Number((m / (UNIT_SCALE[U()] || 1e-3)).toPrecision(9));
 const fromU = v => parseFloat(v) * (UNIT_SCALE[U()] || 1e-3);
+const relU = (m, k) => toU(m - csOrigin()[k]);            // global metres -> working-CS value
+const absM = (txt, k) => fromU(txt) + csOrigin()[k];      // typed working-CS value -> global metres
 
 const planeOf = () => PLANES[DRAW.plane];
 /* A world point from (u, v, n) coordinates on the work plane. */
@@ -3599,11 +3726,13 @@ function buildDrawPanel() {
   box.appendChild(planeRow);
   const off = el('input', { id: 'dw-off', type: 'text', spellcheck: 'false' });
   off.addEventListener('input', () => {
-    const v = fromU(off.value);
+    const v = DRAW ? absM(off.value, planeOf().n) : NaN;
     if (Number.isFinite(v) && DRAW && DRAW.stage === 'p1') { DRAW.offset = v; DRAW.typing = true; }
   });
   box.appendChild(el('div', { class: 'row' },
     el('label', { id: 'dw-offlab' }, 'Offset'), off));
+  box.appendChild(el('div', { class: 'row' }, el('label', {}, 'Origin'),
+    csSelect('dw-cs', () => DRAW && updateDrawPanel())));
   const fsn = el('input', { type: 'checkbox', id: 'dw-facesnap', style: 'width:auto' });
   fsn.checked = DRAW.faceSnap;
   fsn.onchange = () => { DRAW.faceSnap = fsn.checked; };
@@ -3686,7 +3815,8 @@ function setXYZ(prefix, p) {
     const f = $('#' + prefix + k);
     if (!f) continue;
     if (document.activeElement === f) continue;    // never fight the typist
-    f.value = p ? String(toU(p[k])) : '';
+    // positions are shown in the working coordinate system; sizes are not positions
+    f.value = p ? String(prefix === 'dw-s' ? toU(p[k]) : relU(p[k], k)) : '';
   }
 }
 
@@ -3701,7 +3831,7 @@ function updateDrawPanel(cursor) {
   }
   const offf = $('#dw-off');
   if (offf && document.activeElement !== offf)
-    offf.value = String(toU(DRAW.p1 ? DRAW.p1[P.n] : DRAW.offset));
+    offf.value = String(relU(DRAW.p1 ? DRAW.p1[P.n] : DRAW.offset, P.n));
   const offl = $('#dw-offlab');
   if (offl) offl.textContent = 'Offset ' + 'XYZ'[P.n];
   if (offf) offf.disabled = DRAW.stage !== 'p1';
@@ -3798,7 +3928,8 @@ function drawNextStage() {
    when the step it belongs to was the one being waited on, moves on. */
 function drawFieldEdited(prefix, k, advance) {
   if (!DRAW) return;
-  const v = fromU($('#' + prefix + k).value);
+  const txt = $('#' + prefix + k).value;
+  const v = prefix === 'dw-s' ? fromU(txt) : absM(txt, k);   // corners are in the working CS
   if (!Number.isFinite(v)) return updateDrawPanel();
   const P = planeOf();
   const base = (() => { const q = [0, 0, 0]; q[P.n] = DRAW.offset; return q; })();
@@ -4586,6 +4717,8 @@ function viewportContext(hit, ev) {
     ['Box Select (Ctrl+drag)', armBandSelect],
     null,
     ['Assign Boundary…', dlgBoundary, hasFaces || hasSel],
+    ...portMenuItems(),
+    null,
     ['Port by Picking ▸ Lumped (signal, ground)',
       () => startPortPick('lumped')],
     ['Port by Picking ▸ Wave', () => startPortPick('wave')],
@@ -4615,6 +4748,68 @@ function viewportContext(hit, ev) {
 }
 
 /* The project tree menu: what applies to the node that was right-clicked. */
+/* ---------------------------------------------------------- automatic ports
+   Mark the signal conductor and the ground (objects, picked faces or edges),
+   then Assign Port: the server draws the sheet or picks the plane, sizes it,
+   and orients signal -> ground. Nothing to type. */
+let PORT_MARK_COUNT = { signal: 0, ground: 0 };
+function currentPicks() {
+  // a face or edge pick is more specific than an object that is merely still selected
+  if (FACE_PICKS.length) return FACE_PICKS.map(f => Object.assign({ kind: 'face' }, f));
+  if (EDGE_PICKS.length) return EDGE_PICKS.map(e => ({ kind: 'edge', object: e.object, a: e.a, b: e.b }));
+  return (STATE.selection || []).map(n => ({ kind: 'object', name: n }));
+}
+async function markPort(role, add) {
+  const picks = currentPicks();
+  if (!picks.length) return toastError('Select the ' + role + ' conductor (or a face / edge of it) first');
+  const r = await guard(() => rpc('portmarks.set', { role, picks, mode: add ? 'add' : 'replace' }));
+  if (r === false) return;
+  clearPicks();
+  await refreshAssignments();
+  setStatus(`${PORT_MARK_COUNT.signal} signal, ${PORT_MARK_COUNT.ground} ground marked — right-click ▸ Assign Port`, '');
+}
+async function autoPort(kind) {
+  const r = await guard(() => rpc('excitation.autoPort', { kind }));
+  if (r === false || !r) return;
+  clearPicks();
+  await refreshGeometry(false);
+  await refreshAssignments();
+  setStatus(`${r.kind === 'wave' ? 'Wave' : 'Lumped'} port ${r.name} assigned`, '');
+  renderTree();
+}
+async function clearPortMarks() {
+  await guard(() => rpc('portmarks.clear'));
+  await refreshAssignments();
+}
+/* the entries every context menu gets */
+function portMenuItems() {
+  const picks = currentPicks().length > 0;
+  const both = PORT_MARK_COUNT.signal > 0 && PORT_MARK_COUNT.ground > 0;
+  const two = !FACE_PICKS.length && !EDGE_PICKS.length && (STATE.selection || []).length === 2;
+  const items = [
+    ['Mark as Signal (+)', () => markPort('signal', false), picks],
+    ['Mark as Ground (−)', () => markPort('ground', false), picks],
+    ['Add Selection to Signal', () => markPort('signal', true), picks],
+    ['Add Selection to Ground', () => markPort('ground', true), picks],
+    null,
+    ['Assign Lumped Port  (auto)', () => autoPort('lumped'), both],
+    ['Assign Wave Port  (auto)', () => autoPort('wave'), both],
+    ['Assign Port  (auto type)', () => autoPort('auto'), both],
+    ['Clear Signal / Ground Marks', clearPortMarks, PORT_MARK_COUNT.signal + PORT_MARK_COUNT.ground > 0]];
+  if (two) items.splice(5, 0,
+    ['Lumped Port between the two selected  (1st = signal)', async () => {
+      const [a, b] = STATE.selection;
+      await guard(() => rpc('portmarks.set', { role: 'signal', picks: [{ kind: 'object', name: a }] }));
+      await guard(() => rpc('portmarks.set', { role: 'ground', picks: [{ kind: 'object', name: b }] }));
+      await autoPort('lumped'); }],
+    ['Wave Port between the two selected  (1st = signal)', async () => {
+      const [a, b] = STATE.selection;
+      await guard(() => rpc('portmarks.set', { role: 'signal', picks: [{ kind: 'object', name: a }] }));
+      await guard(() => rpc('portmarks.set', { role: 'ground', picks: [{ kind: 'object', name: b }] }));
+      await autoPort('wave'); }]);
+  return items;
+}
+
 function treeContext(ev, type, name, extra) {
   ev.preventDefault();
   ev.stopPropagation();
@@ -4632,6 +4827,8 @@ function treeContext(ev, type, name, extra) {
       ['Boolean…', dlgBoolean],
       null,
       ['Assign Boundary…', dlgBoundary],
+      ...portMenuItems(),
+      null,
       ['Assign Wave Port…', () => dlgExcitation('wave')],
       ['Assign Lumped Port…', () => dlgExcitation('lumped')],
       ['Add Mesh Operation…', dlgMeshOp],
@@ -4651,6 +4848,14 @@ function treeContext(ev, type, name, extra) {
       null,
       ['Delete', () => guard(() => rpc('modeler.delete', { names: [name] })
         .then(() => refreshGeometry(false)))]);
+  } else if (type === 'cs') {
+    if (name === 'Global') items.push(['Work in Global', () => setWorkingCs('Global')],
+      null, ['New Relative CS from Picked Point…', () => startCsPick()]);
+    else items.push(['Work in ' + name, () => setWorkingCs(name)],
+      ['Rename…', () => { const n = prompt('Coordinate system name', name);
+        if (n && n.trim()) guard(() => rpc('cs.rename', { name, newName: n.trim() })).then(() => { updateCsLabel(); renderTree(); }); }],
+      ['Delete', () => guard(() => rpc('cs.delete', { name })).then(() => { updateCsLabel(); renderTree(); })],
+      null, ['New Relative CS from Picked Point…', () => startCsPick()]);
   } else if (type === 'result') {
     const it = RESULTS.items.find(x => x.id === name);
     if (it) items.push(['Open', () => openResult(it)],
@@ -6242,6 +6447,7 @@ function renderAll() {
   VP && VP.setSelection(STATE.selection);
   updateOverlay();
   seedResults();
+  updateCsLabel();
 }
 
 async function loadMaterials() {
@@ -6373,6 +6579,8 @@ async function boot() {
   renderAll();
   await refreshGeometry(true);
   pollMessages();
+  { const chip = $('#status-cs');
+  if (chip) chip.onclick = e => contextMenu(e.clientX, Math.max(e.clientY - 150, 40), csMenuItems()); }
   window.__aetherReady = true;
 }
 boot();
@@ -6497,7 +6705,8 @@ function arrowStrip(a, b) {
 
 function startMeasurePick(mode) {
   if (!VP) return toastError('3-D viewport is unavailable.');
-  if (DRAW) cancelPointDraw();
+  // choosing an origin happens in the middle of drawing: the drawing stays open
+  if (DRAW && mode !== 'csorigin') cancelPointDraw();
   clearPicks();
   MEASURE_PICK = {mode, points:[]};
   $('#vp-hint').textContent = 'Measure '+mode+': click '+(mode==='distance'?'2':'3')+' points · vertex snap within 12 px · Esc cancels';
@@ -6526,7 +6735,7 @@ function measurePickClick(px,py) {
   if(MEASURE_PICK.points.some(p=>Math.hypot(...p.map((v,i)=>v-point[i]))<1e-12)){toastError('Choose a different point.');return true;}
   MEASURE_PICK.points.push(point);VP.setPointSelection(MEASURE_PICK.points);
   if (MEASURE_PICK.mode==='portline') portLineClicked(point);
-  const n=(MEASURE_PICK.mode==='distance'||MEASURE_PICK.mode==='portline')?2:3;
+  const n=MEASURE_PICK.mode==='csorigin'?1:(MEASURE_PICK.mode==='distance'||MEASURE_PICK.mode==='portline')?2:3;
   if (MEASURE_PICK.points.length<n) {
     VP.setDraft(MEASURE_PICK.mode==='portline' ? null : MEASURE_PICK.points);
     $('#vp-hint').textContent=MEASURE_PICK.mode==='portline'
@@ -6535,7 +6744,7 @@ function measurePickClick(px,py) {
     return true;
   }
   const {mode,points,onDone,restore}=MEASURE_PICK;
-  if (mode==='portline') {                 // hand the two points back to the dialog
+  if (mode==='portline' || mode==='csorigin') {   // hand the point(s) back to whoever asked
     MEASURE_PICK=null; VP.setHover(null);
     $('#vp-hint').textContent='click select · drag rotate · wheel zoom';
     restore && restore();
@@ -6561,8 +6770,10 @@ function updateCursorReadout(px, py) {
     const hit = VP.planePoint(px, py, null);
     if (hit) p = hit.point;
   } catch (e) { p = null; }
+  const o = csOrigin();
   box.textContent = p
-    ? ['X', 'Y', 'Z'].map((a, k) => `${a} ${fmtLen(p[k], U())}`).join('  ')
+    ? (csName() !== 'Global' ? `[${csName()}]  ` : '')
+      + ['X', 'Y', 'Z'].map((a, k) => `${a} ${fmtLen(p[k] - o[k], U())}`).join('  ')
     : '';
 }
 

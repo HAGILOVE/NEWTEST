@@ -1349,6 +1349,16 @@ def read_design(doc: WarpDocument, index: int = 0,
         read_boundaries(blk, sc, design, lib, report)
         read_excitations(blk, sc, design, report)
         read_setups(blk, sc, design, report)
+        for cs_blk in blk.find("AetherCoordinateSystems"):
+            for item in cs_blk.blocks:
+                try:
+                    design.add_coordinate_system(str(item.get("Name", "")).strip("'"),
+                                                 [float(x) for x in item.get("Origin", [0, 0, 0])])
+                except (ValueError, TypeError):
+                    continue
+            wk = str(cs_blk.get("Working", "") or "").strip("'")
+            if wk and any(c["name"] == wk for c in design.coordinate_systems):
+                design.working_cs = wk
         for mesh in blk.find("AetherMeshOperations"):
             for item in mesh.blocks:
                 selector = item.block("AetherSelector")
