@@ -230,7 +230,8 @@ def test_binary_mode_moves_the_arrays_out_of_the_json(sess):
 
 
 def test_binary_mode_is_smaller_on_the_wire(sess):
-    box(sess, "Box1")
+    # a box is a few dozen numbers now; a round body is where the bulk is
+    sess.design.add_cylinder("Cyl1", (0, 0, 0), 5e-3, 10e-3, "pec")
     plain = json.dumps(dispatch(sess, "view.geometry", {}))
     packed = json.dumps(dispatch(sess, "view.geometry", {"binary": True}))
     assert len(packed) < len(plain) / 4

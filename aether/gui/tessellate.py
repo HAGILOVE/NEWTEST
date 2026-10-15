@@ -132,6 +132,32 @@ def _snap_extras(verts, face_edges, faces, limit: int = 20000):
         ext = np.array([max(f["hi"][k] - f["lo"][k] for k in range(3)) for f in faces])
         # a real edge: several collinear pieces, or one piece spanning the face
         keep = (np.bincount(inv) > 1) | (ln[first] >= 0.3 * np.maximum(ext[face[first]], 1e-12))
+        # A single short piece is still a real edge when the outline turns
+        # sharply at both its ends (the thin edge of a patch); the pieces of a
+        # circle turn by a few degrees only.
+        cand = np.nonzero(~keep)[0]
+        if len(cand) and len(fe) <= 60000:
+            fe_ok = fe[ok]
+            ends: dict = {}
+            for i, (u, v, f) in enumerate(fe_ok):
+                ends.setdefault((int(f), int(u)), []).append(i)
+                ends.setdefault((int(f), int(v)), []).append(i)
+            dirs = (b - a) / np.maximum(ln, 1e-300)[:, None]
+
+            def sharp(i, vert):
+                other = [j for j in ends[(int(face[i]), int(vert))] if j != i]
+                if len(other) != 1:
+                    return True
+                j = other[0]
+                s_i = 1.0 if fe_ok[i, 0] == vert else -1.0        # direction leaving the vertex
+                s_j = 1.0 if fe_ok[j, 0] == vert else -1.0
+                c = float(np.dot(dirs[i] * s_i, dirs[j] * s_j))
+                return c > -0.94                                    # turns by more than ~20 degrees
+
+            for g in cand:
+                i = int(first[g])
+                if sharp(i, fe_ok[i, 0]) and sharp(i, fe_ok[i, 1]):
+                    keep[g] = True
         if keep.any():
             f0 = first[keep]
             mid_t = 0.5 * (lo[keep] + hi[keep])

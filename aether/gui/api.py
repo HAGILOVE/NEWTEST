@@ -2718,7 +2718,7 @@ def _to_blobs(s: Session, buf: dict) -> None:
     refs = {}
     for field, dtype in _BLOB_FIELDS:
         vals = buf.get(field)
-        if vals is None or len(vals) < 512:
+        if vals is None or len(vals) < 96:
             continue                    # small enough that a round trip costs
         refs[field] = _put_blob(np.asarray(vals, dtype))
         buf[field] = []
