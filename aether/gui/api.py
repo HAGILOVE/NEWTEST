@@ -2397,6 +2397,10 @@ def _edit_sweep(s: Session, setup: str = "", name: str = "", newName: str = "",
     tol_in = sw.tolerance if tolerance == "keep" else tolerance
     mp_in = sw.max_points if maxPoints == "keep" else maxPoints
     step_in = sw.step if step == "keep" else step
+    if kind == "discrete":                    # these belong to the adaptive kinds only
+        tol_in = mp_in = None
+    if spacing != "step":
+        step_in = None
     tol, mp = _sweep_args(kind, spacing, tol_in, mp_in, step_in)
     a = to_si(start, "frequency") if start not in (None, "") else sw.start
     b = to_si(stop, "frequency") if stop not in (None, "") else sw.stop

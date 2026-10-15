@@ -46,18 +46,31 @@ let ACTION_ERRORS = 0;
    flight is newer than that picture. Stamping the selection lets a late reply
    refresh everything else without quietly undoing the click you just made. */
 let SEL_EPOCH = 0;
+/* ... and so is a reply to a request that was in flight *with* a selection
+   change: the server may have served it just before it applied the new
+   selection. A selection command in flight, or one that completed while the
+   request was out, means the reply's selection is not to be trusted. */
+let SEL_INFLIGHT = 0, SEL_COMPLETED = 0;
 
 async function rpc(method, params = {}) {
-  const epoch = SEL_EPOCH;
-  const r = await fetch('/api/rpc?token=' + encodeURIComponent(window.AETHER_TOKEN), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',
-      'X-Aether-Token': window.AETHER_TOKEN },
-    body: JSON.stringify({ method, params })
-  });
-  const j = await r.json();
+  const epoch = SEL_EPOCH, completed = SEL_COMPLETED;
+  const isSelect = method === 'modeler.select';
+  if (isSelect) SEL_INFLIGHT++;
+  let j;
+  try {
+    const r = await fetch('/api/rpc?token=' + encodeURIComponent(window.AETHER_TOKEN), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+        'X-Aether-Token': window.AETHER_TOKEN },
+      body: JSON.stringify({ method, params })
+    });
+    j = await r.json();
+  } finally {
+    if (isSelect) { SEL_INFLIGHT--; SEL_COMPLETED++; }
+  }
   if (j.state) {
-    if (SEL_EPOCH !== epoch && STATE) j.state.selection = STATE.selection;
+    const raced = !isSelect && (SEL_INFLIGHT > 0 || SEL_COMPLETED !== completed);
+    if ((SEL_EPOCH !== epoch || raced) && STATE) j.state.selection = STATE.selection;
     STATE = j.state;
     renderAll();
   }
