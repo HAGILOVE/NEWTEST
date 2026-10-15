@@ -305,6 +305,11 @@ def _shape_from_params(kind: str, blk: WarpBlock, sc: VariableScope,
         ax = _AXIS.get(str(blk.get("WhichAxis", "Z")).upper(), (0, 0, 1))
         return Torus(c, _q(blk, "MajorRadius", sc), _q(blk, "MinorRadius", sc),
                      ax, name)
+    if kind == "circle":
+        from ...geometry.primitives import Circle
+        c = (_q(blk, "XCenter", sc), _q(blk, "YCenter", sc), _q(blk, "ZCenter", sc))
+        ax = _AXIS.get(str(blk.get("WhichAxis", "Z")).upper(), (0, 0, 1))
+        return Circle(c, _q(blk, "Radius", sc), ax, name)
     if kind == "rectangle":
         pos = (_q(blk, "XStart", sc), _q(blk, "YStart", sc), _q(blk, "ZStart", sc))
         w = _q(blk, "Width", sc)
@@ -774,11 +779,20 @@ def _shape_from_command(op: WarpBlock, sc: VariableScope,
                 vec = (_q(sw, "XVector", sc), _q(sw, "YVector", sc),
                        _q(sw, "ZVector", sc))
                 shape = Extrude(profile, vec, name=name)
+            elif stype == "pathsweep":
+                from ...geometry.primitives import PathSweep
+                pb = sw.block("PathPoints")
+                pts = [(_q(b, "X", sc), _q(b, "Y", sc), _q(b, "Z", sc))
+                       for b in (pb.blocks if pb is not None else [])]
+                shape = PathSweep(profile, pts, name=name)
             else:
                 from ...geometry.primitives import Revolve
                 ax = _AXIS.get(str(sw.get("WhichAxis", "Z")).upper(), (0, 0, 1))
+                if sw.get("AxisVector") is not None:
+                    ax = tuple(float(x) for x in sw.get("AxisVector"))
+                org = (_q(sw, "XOrigin", sc, 0.0), _q(sw, "YOrigin", sc, 0.0), _q(sw, "ZOrigin", sc, 0.0))
                 ang = _q(sw, "SweepAngle", sc, 2 * math.pi, "angle")
-                shape = Revolve(profile, ax, (0, 0, 0), ang, name=name)
+                shape = Revolve(profile, ax, org, f"{math.degrees(ang):.12g}deg", name=name)
 
     if shape is None:
         for bname in ("SweepFaceAlongNormalParameters", "MoveFacesParameters"):

@@ -29,7 +29,7 @@ import numpy as np
 from ...core.constants import from_si
 from ...core.logging import get_logger
 from ...core.materials import Material
-from ...geometry.primitives import (Box, Cone, Cylinder, Polygon, Shape,
+from ...geometry.primitives import (Box, Circle, Cone, Cylinder, Polygon, Shape,
                                     Sphere, Torus)
 from .tree import WarpBlock, WarpDocument, WarpProp
 from .values import Call, Counted
@@ -231,7 +231,7 @@ def _write_part(parent: WarpBlock, solid, units: str, pid: int,
 
 def _write_primitive(op: WarpBlock, shape: Shape, units: str) -> None:
     from ...geometry.primitives import (Boolean, Extrude, FaceOperation,
-                                        ImportedShape, Revolve)
+                                        ImportedShape, PathSweep, Revolve)
     if getattr(shape, "_parametric", None):
         import json
         op.add_prop("AetherParameters", json.dumps(shape._parametric, ensure_ascii=False))
@@ -273,6 +273,12 @@ def _write_primitive(op: WarpBlock, shape: Shape, units: str) -> None:
         b.add_prop("MajorRadius", _len(shape.r_major, units))
         b.add_prop("MinorRadius", _len(shape.r_minor, units))
         b.add_prop("WhichAxis", _axis_name(shape.axis))
+    elif isinstance(shape, Circle):
+        b = op.add_block("CircleParameters")
+        for k, v in zip(("XCenter", "YCenter", "ZCenter"), shape.center):
+            b.add_prop(k, _len(v, units))
+        b.add_prop("Radius", _len(shape.radius, units))
+        b.add_prop("WhichAxis", _axis_name(shape.axis))
     elif isinstance(shape, Polygon):
         b = op.add_block("PolylineParameters")
         b.add_prop("IsPolylineCovered", True)
@@ -311,16 +317,26 @@ def _write_primitive(op: WarpBlock, shape: Shape, units: str) -> None:
             fb.add_prop("Planar", bool(f.get("planar", True)))
             fb.add_prop("Object", str(f.get("object", "")))
         _write_primitive(note.add_block("BaseBody"), shape.base, units)
-    elif isinstance(shape, (Extrude, Revolve)):
+    elif isinstance(shape, (Extrude, Revolve, PathSweep)):
         note = op.add_block("SweepOperation")
         note.add_prop("SweepType", type(shape).__name__)
         _write_primitive(note.add_block("Profile"), shape.profile, units)
         if isinstance(shape, Extrude):
             for k, v in zip(("XVector", "YVector", "ZVector"), shape.vector):
                 note.add_prop(k, _len(v, units))
+        elif isinstance(shape, PathSweep):
+            pts = note.add_block("PathPoints")
+            for p in shape.path:
+                pb = pts.add_block("PathPoint")
+                for k, v in zip(("X", "Y", "Z"), p):
+                    pb.add_prop(k, _len(v, units))
         else:
             note.add_prop("SweepAngle", f"{math.degrees(shape.angle):.10g}deg")
             note.add_prop("WhichAxis", _axis_name(shape.axis))
+            for k, v in zip(("XOrigin", "YOrigin", "ZOrigin"), shape.origin):
+                note.add_prop(k, _len(v, units))
+            ax = [float(x) for x in shape.axis]
+            note.add_prop("AxisVector", ax)
     elif isinstance(shape, ImportedShape):
         b = op.add_block("ImportParameters")
         b.add_prop("SourceFile", shape.path)
@@ -644,14 +660,14 @@ def embed_cad(designs, project_path: str) -> List[str]:
 
 def _walk_shapes(shape):
     """A shape and every operand inside it."""
-    from ...geometry.primitives import Boolean, Extrude, Revolve, FaceOperation
+    from ...geometry.primitives import Boolean, Extrude, PathSweep, Revolve, FaceOperation
     if shape is None:
         return
     yield shape
     if isinstance(shape, Boolean):
         for o in shape.operands:
             yield from _walk_shapes(o)
-    elif isinstance(shape, (Extrude, Revolve)):
+    elif isinstance(shape, (Extrude, Revolve, PathSweep)):
         yield from _walk_shapes(shape.profile)
     elif isinstance(shape, FaceOperation):
         yield from _walk_shapes(shape.base)

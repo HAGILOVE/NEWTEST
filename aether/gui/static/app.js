@@ -222,6 +222,29 @@ function dialog({ title, body, width, ok = 'OK', cancel = 'Cancel', onOk,
   return { close, id, node: d };
 }
 
+/* The browser's own confirm() and prompt() are blocked or invisible in embedded
+   webviews and some browsers: confirm() then quietly answers "no", which looked
+   exactly like "the file would not save" the second time a name was reused.
+   These ask inside the application instead. */
+function askYesNo(message, okLabel = 'OK', title = 'Confirm') {
+  return new Promise(resolve => {
+    dialog({ title, body: el('p', { style: 'margin:0;white-space:pre-wrap;word-break:break-all' }, message),
+      buttons: [{ label: 'Cancel', value: false },
+                { label: okLabel, value: true, primary: true }],
+      onClose: v => resolve(v === true) });
+  });
+}
+function askText(title, label, value = '') {
+  return new Promise(resolve => {
+    let done = false;
+    const body = el('div', {}, field(label, inp('ask-text', value, 'text')));
+    setTimeout(() => { const f = $('#ask-text'); if (f) { f.focus(); f.select(); } }, 40);
+    dialog({ title, body, ok: 'OK',
+      onOk: async () => { done = true; resolve(gv('ask-text')); },
+      onClose: () => { if (!done) resolve(null); } });
+  });
+}
+
 function closeTopDialog() {
   const top = DIALOG_STACK[DIALOG_STACK.length - 1];
   if (top) top.close();
@@ -388,7 +411,7 @@ async function filePicker(opt) {
       const r = await rpc('files.resolveSave',
         { directory: dir, filename: typed, kind });
       if (!r.ok) { note.className = 'err'; note.textContent = r.error; return false; }
-      if (r.exists && !confirm(`${r.path}\n\nThis file already exists. Replace it?`))
+      if (r.exists && !await askYesNo(`${r.path}\n\nThis file already exists. Replace it?`, 'Replace', 'File exists'))
         return false;
       finish(r.path);
       return false;
@@ -853,6 +876,10 @@ function dlgDuplicate(mode0) {
       el('input', { type: 'checkbox', id: 'q-attach' }),
       el('label', { for: 'q-attach' },
         'Attach copies to the original (unite into one object)')));
+    dyn.appendChild(el('div', { class: 'check' },
+      el('input', { type: 'checkbox', id: 'q-assign', checked: 'checked' }),
+      el('label', { for: 'q-assign' },
+        'Copy boundaries, ports and mesh operations with the geometry')));
   };
   setTimeout(() => { $('#q-mode').onchange = build; build(); }, 0);
   dialog({ title: 'Duplicate', body, ok: 'Create', onOk: async () => {
@@ -867,7 +894,7 @@ function dlgDuplicate(mode0) {
       count = parseInt(gv('q-n'), 10) || 2;
     } else { p.normal = g3('q').map(Number); p.origin = g3('qo'); }
     await guard(() => rpc('modeler.duplicate', { names, mode, count, params: p,
-      attach: $('#q-attach').checked }));
+      attach: $('#q-attach').checked, withAssignments: $('#q-assign').checked }));
     await refreshGeometry(false);
   }});
 }
@@ -913,6 +940,153 @@ function dlgFaceOp(op) {
     } });
 }
 
+/* ---------------------------------------- sweeps, curves, split (HFSS tips) */
+const sheetNames = () => ((STATE?.design?.sheets) || []).filter(o => !o.referenceOnly).map(o => o.name);
+const lineNames = () => ((STATE?.design?.sheets) || []).filter(o => o.referenceOnly).map(o => o.name);
+const materialNames = () => (window.MATERIALS || []).map(m => m.name);
+
+/* Draw ▸ Sweep: a flat object becomes a solid by turning it about an axis,
+   pulling it along a vector, or dragging it along a line. */
+function dlgShapeSweep(mode0) {
+  const flats = sheetNames();
+  if (!flats.length) return toastError('Draw a flat object first (Rectangle, Circle or a covered line)');
+  const u = U();
+  const pre = (STATE.selection || []).find(n => flats.includes(n)) || flats[0];
+  const body = el('div');
+  body.appendChild(field('Flat object', sel('sw3-obj', flats, pre)));
+  body.appendChild(field('Sweep', sel('sw3-mode', [['axis', 'Around Axis'], ['vector', 'Along Vector'],
+    ['path', 'Along Path (a line)']], mode0 || 'vector')));
+  const dyn = el('div', { id: 'sw3-dyn' });
+  body.appendChild(dyn);
+  body.appendChild(field('Material', sel('sw3-mat', materialNames(), 'vacuum')));
+  body.appendChild(el('div', { class: 'check' }, el('input', { type: 'checkbox', id: 'sw3-keep' }),
+    el('label', { for: 'sw3-keep' }, 'Keep the flat object (sweep a copy)')));
+  const build = () => {
+    dyn.innerHTML = '';
+    const m = gv('sw3-mode');
+    if (m === 'axis') {
+      dyn.appendChild(field('Axis', sel('sw3-axis', [['z', 'Z'], ['x', 'X'], ['y', 'Y']], 'z')));
+      dyn.appendChild(field('Axis point', xyz('sw3o', ['0' + u, '0' + u, '0' + u])));
+      dyn.appendChild(field('Angle', inp('sw3-ang', '360deg')));
+      dyn.appendChild(el('div', { class: 'hint' }, 'Draw the profile away from the axis by the radius you want; 360° closes a ring.'));
+    } else if (m === 'vector') {
+      dyn.appendChild(field('Vector (ΔX, ΔY, ΔZ)', xyz('sw3v', ['0' + u, '0' + u, '3' + u])));
+    } else {
+      const ls = lineNames();
+      dyn.appendChild(field('Path (line)', sel('sw3-path', ls.length ? ls : ['(no line drawn)'], ls[0])));
+      dyn.appendChild(el('div', { class: 'hint' }, 'The profile is stood on the start of the line, square to it. '
+        + 'Smooth lines (helix, spiral) sweep smoothly; a path with sharp corners is built as straight bars.'));
+    }
+  };
+  setTimeout(() => { $('#sw3-mode').onchange = build; build(); }, 0);
+  dialog({ title: 'Sweep', body, ok: 'Sweep', onOk: async () => {
+    const mode = gv('sw3-mode');
+    const args = { name: gv('sw3-obj'), mode, material: gv('sw3-mat'), keep: $('#sw3-keep').checked };
+    if (mode === 'axis') { args.axis = gv('sw3-axis'); args.origin = g3('sw3o'); args.angle = gv('sw3-ang'); }
+    else if (mode === 'vector') args.vector = g3('sw3v');
+    else args.path = gv('sw3-path');
+    await guard(() => rpc('modeler.sweep', args));
+    await refreshGeometry(false);
+  } });
+}
+
+/* Draw ▸ Equation Based Curve: x(_t), y(_t), z(_t). The presets are the ones
+   the tips book builds (ellipse, helix, spiral); anything else is a custom one. */
+const CURVE_PRESETS = {
+  ellipse: { vars: 'a = 3mm\nb = 1.5mm', x: 'a*cos(_t)', y: 'b*sin(_t)', z: '0mm', t0: '0', t1: '2*pi', n: '360' },
+  helix: { vars: 'radius = 2mm\npitch = 1mm\nturns = 5', x: 'pitch*_t', y: 'radius*cos(2*pi*_t)',
+    z: 'radius*sin(2*pi*_t)', t0: '0', t1: 'turns', n: '36*turns' },
+  spiral: { vars: 'radius = 1mm\npitch = 0.5mm\nturns = 3', x: '(radius+_t*pitch)*cos(2*pi*_t)',
+    y: '(radius+_t*pitch)*sin(2*pi*_t)', z: '0mm', t0: '0', t1: 'turns', n: '50*turns' },
+  circle: { vars: 'r = 2mm', x: 'r*cos(_t)', y: 'r*sin(_t)', z: '0mm', t0: '0', t1: '2*pi', n: '120' },
+  line: { vars: 'L = 10mm', x: 'L*_t', y: '0mm', z: '0mm', t0: '0', t1: '1', n: '2' },
+  custom: { vars: '', x: '_t*1mm', y: '0mm', z: '0mm', t0: '0', t1: '10', n: '100' }
+};
+function dlgCurve(kind0) {
+  const body = el('div');
+  body.appendChild(field('Curve', sel('cv-kind', Object.keys(CURVE_PRESETS).map(k => [k, k[0].toUpperCase() + k.slice(1)]), kind0 || 'ellipse')));
+  body.appendChild(field('Name', inp('cv-name', '', 'text', { placeholder: 'auto' })));
+  body.appendChild(field('Variables (name = value)', el('textarea', { id: 'cv-vars', rows: 3, spellcheck: 'false',
+    style: 'width:100%;font-family:monospace' })));
+  for (const [id, lab] of [['x', 'x(_t)'], ['y', 'y(_t)'], ['z', 'z(_t)']]) body.appendChild(field(lab, inp('cv-' + id, '')));
+  body.appendChild(field('Start _t', inp('cv-t0', '0')));
+  body.appendChild(field('End _t', inp('cv-t1', '1')));
+  body.appendChild(field('Number of points', inp('cv-n', '100')));
+  body.appendChild(el('div', { class: 'hint' }, 'Write lengths with units (a*cos(_t), 2mm) — a bare number is in model units. '
+    + 'Functions: sin cos tan sqrt abs exp ln atan2 … A closed curve can be covered with a face (Cover Lines); '
+    + 'any curve can be a sweep path or be given a width (Line Pattern).'));
+  const fill = () => {
+    const p = CURVE_PRESETS[gv('cv-kind')];
+    $('#cv-vars').value = p.vars; $('#cv-x').value = p.x; $('#cv-y').value = p.y; $('#cv-z').value = p.z;
+    $('#cv-t0').value = p.t0; $('#cv-t1').value = p.t1; $('#cv-n').value = p.n;
+  };
+  setTimeout(() => { $('#cv-kind').onchange = fill; fill(); }, 0);
+  dialog({ title: 'Equation Based Curve', body, ok: 'Create', onOk: async () => {
+    const variables = {};
+    for (const line of $('#cv-vars').value.split('\n')) {
+      if (!line.trim()) continue;
+      const m = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$/);
+      if (!m) throw new Error('Use name = value: ' + line);
+      variables[m[1]] = m[2];
+    }
+    await guard(() => rpc('modeler.curve', { kind: gv('cv-kind'), name: gv('cv-name'), x: gv('cv-x'), y: gv('cv-y'),
+      z: gv('cv-z'), tmin: gv('cv-t0'), tmax: gv('cv-t1'), points: gv('cv-n'), variables }));
+    await refreshGeometry(false);
+  } });
+}
+
+async function cmdCoverLines() {
+  const name = (STATE.selection || []).find(n => lineNames().includes(n)) || lineNames()[0];
+  if (!name) return toastError('Draw or select a closed line first');
+  await guard(() => rpc('modeler.coverLines', { name }));
+  await refreshGeometry(false);
+}
+
+/* Draw ▸ Lines with a cross-section: the line becomes a patterned trace. */
+function dlgLinePattern() {
+  const ls = lineNames();
+  if (!ls.length) return toastError('Draw a line first (Equation Based Curve, or import a drawing)');
+  const pre = (STATE.selection || []).find(n => ls.includes(n)) || ls[0];
+  const body = el('div');
+  body.appendChild(field('Line', sel('lp-line', ls, pre)));
+  body.appendChild(field('Cross-section', sel('lp-kind', [['line', 'Flat trace (face, width)'],
+    ['rectangle', 'Rectangle (width × height)'], ['circle', 'Circle (diameter = width)']], 'line')));
+  body.appendChild(field('Width', inp('lp-w', '1' + U())));
+  const h = field('Height', inp('lp-h', '0.035' + U()));
+  body.appendChild(h);
+  body.appendChild(field('Material', sel('lp-mat', materialNames(), 'pec')));
+  setTimeout(() => { const f = () => { h.style.display = gv('lp-kind') === 'rectangle' ? '' : 'none'; };
+    $('#lp-kind').onchange = f; f(); }, 0);
+  dialog({ title: 'Line Pattern', body, ok: 'Create', onOk: async () => {
+    await guard(() => rpc('modeler.pathStrip', { name: gv('lp-line'), kind: gv('lp-kind'), width: gv('lp-w'),
+      height: gv('lp-h'), material: gv('lp-mat') }));
+    await refreshGeometry(false);
+  } });
+}
+
+/* Modeler ▸ Boolean ▸ Split with a coordinate plane. */
+function dlgSplit() {
+  if (!objNames().length) return toastError('No objects to split');
+  const u = U();
+  const body = el('div');
+  body.appendChild(field('Objects', objectList('sp-objs')));
+  body.appendChild(field('Split plane', sel('sp-plane', [['xy', 'XY (normal Z)'], ['yz', 'YZ (normal X)'], ['zx', 'ZX (normal Y)']], 'xy')));
+  body.appendChild(field('At (from the working CS)', inp('sp-at', '0' + u)));
+  body.appendChild(field('Keep', sel('sp-keep', [['both', 'Both sides (two objects)'], ['positive', 'Positive side only'],
+    ['negative', 'Negative side only']], 'both')));
+  body.appendChild(el('div', { class: 'hint' }, 'Both sides keeps the original name for the positive side and adds <name>_1 for the other. '
+    + 'Use a Relative CS to cut at a place you picked.'));
+  dialog({ title: 'Split', body, ok: 'Split', onOk: async () => {
+    const names = picked('sp-objs');
+    if (!names.length) throw new Error('select at least one object');
+    const plane = gv('sp-plane');
+    const ax = { xy: 2, yz: 0, zx: 1 }[plane];
+    const at = fromU(gv('sp-at')) + csOrigin()[ax];
+    await guard(() => rpc('modeler.split', { names, plane, offset: at + 'm', keep: gv('sp-keep') }));
+    await refreshGeometry(false);
+  } });
+}
+
 /* --------------------------------------------------------- clipboard ops */
 async function editCopy(cut) {
   const names = STATE.selection || [];
@@ -920,10 +1094,14 @@ async function editCopy(cut) {
   await guard(() => rpc('modeler.copy', { names, cut }));
   if (cut) await refreshGeometry(false);
 }
-async function editPaste() {
+async function editPaste(thenMove) {
   if (!STATE.history?.clipboard) return toastError('The clipboard is empty');
-  await guard(() => rpc('modeler.paste', {}));
+  const ok = await guard(() => rpc('modeler.paste', {}));
   await refreshGeometry(false);
+  // a paste lands exactly on top of what was copied, so it looks as if nothing
+  // happened: Paste & Move goes straight on to placing the copy
+  if (thenMove === true && ok !== false && (STATE.selection || []).length) startInteractiveMove();
+  else if (ok !== false) setStatus('Pasted on top of the original — Move by Two Points (Ctrl+M) to place it, or use Paste & Move (Ctrl+Shift+V)', '');
 }
 function dlgPasteOffset() {
   if (!STATE.history?.clipboard) return toastError('The clipboard is empty');
@@ -1996,7 +2174,9 @@ const MENUS = [
     null,
     ['Cut', () => editCopy(true), 'Ctrl+X', () => (STATE?.selection || []).length > 0],
     ['Copy', () => editCopy(false), 'Ctrl+C', () => (STATE?.selection || []).length > 0],
-    ['Paste', editPaste, 'Ctrl+V', () => !!STATE?.history?.clipboard],
+    ['Paste', () => editPaste(), 'Ctrl+V', () => !!STATE?.history?.clipboard],
+    ['Paste & Move', () => editPaste(true), 'Ctrl+Shift+V', () => !!STATE?.history?.clipboard],
+    ['Select by Area Filter…', dlgAreaFilter],
     ['Paste at Offset\u2026', dlgPasteOffset, '', () => !!STATE?.history?.clipboard],
     null,
     ['Duplicate \u25b8 Along Line\u2026', () => dlgDuplicate('line')],
@@ -2079,6 +2259,17 @@ const MENUS = [
     ['Replace CAD Source\u2026', dlgReplaceCad],
     ['Arrange\u2026', () => dlgTransform('move')],
     ['Duplicate\u2026', () => dlgDuplicate('line')],
+    ['Copy & Move by Two Points\u2026', () => startInteractiveMove(null, { copy: true })],
+    ['Mirror by Two Points\u2026', () => startInteractiveMove(null, { mode: 'mirror' })],
+    ['Mirror Copy by Two Points\u2026', () => startInteractiveMove(null, { mode: 'mirror', copy: true })],
+    ['Split\u2026', dlgSplit],
+    null,
+    ['Sweep Around Axis\u2026', () => dlgShapeSweep('axis')],
+    ['Sweep Along Vector\u2026', () => dlgShapeSweep('vector')],
+    ['Sweep Along Path\u2026', () => dlgShapeSweep('path')],
+    ['Equation Based Curve\u2026', () => dlgCurve('ellipse')],
+    ['Cover Lines', cmdCoverLines],
+    ['Line Pattern\u2026', dlgLinePattern],
     null,
     ['Sweep Face Along Normal\u2026', () => dlgFaceOp('sweep')],
     ['Move Faces\u2026', () => dlgFaceOp('move')],
@@ -2168,11 +2359,26 @@ const RIBBON = {
     ['History', [['i-undo', 'Undo', editUndo], ['i-redo', 'Redo', editRedo]]],
     ['Clipboard', [['i-copy', 'Copy', () => editCopy(false)],
       ['i-copy', 'Cut', () => editCopy(true)],
-      ['i-paste', 'Paste', editPaste]]],
+      ['i-paste', 'Paste', () => editPaste()],
+      ['i-paste', 'Paste & Move', () => editPaste(true)]]],
     ['Edit', [['i-bool', 'Boolean', dlgBoolean],
+      ['i-bool', 'Split', dlgSplit],
       ['i-move', 'Move by points', () => startInteractiveMove()],
-      ['i-move', 'Arrange', () => dlgTransform('move')],
-      ['i-dup', 'Duplicate', () => dlgDuplicate('line')]]],
+      ['i-move', 'Arrange', () => dlgTransform('move')]]],
+    ['Copy / Mirror', [['i-dup', 'Copy & Move', () => startInteractiveMove(null, { copy: true })],
+      ['i-dup', 'Mirror', () => startInteractiveMove(null, { mode: 'mirror' })],
+      ['i-dup', 'Mirror Copy', () => startInteractiveMove(null, { mode: 'mirror', copy: true })],
+      ['i-dup', 'Along Line', () => dlgDuplicate('line')],
+      ['i-dup', 'Around Axis', () => dlgDuplicate('axis')],
+      ['i-dup', 'Mirror…', () => dlgDuplicate('mirror')]]],
+    ['Sweep', [['i-sweep', 'Around Axis', () => dlgShapeSweep('axis')],
+      ['i-sweep', 'Along Vector', () => dlgShapeSweep('vector')],
+      ['i-sweep', 'Along Path', () => dlgShapeSweep('path')]]],
+    ['Curves', [['i-rect', 'Equation Curve', () => dlgCurve('ellipse')],
+      ['i-rect', 'Helix', () => dlgCurve('helix')],
+      ['i-rect', 'Spiral', () => dlgCurve('spiral')],
+      ['i-rect', 'Cover Lines', cmdCoverLines],
+      ['i-rect', 'Line Pattern', dlgLinePattern]]],
     ['Dimensions', [['i-rect', 'Measure', dlgMeasure], ['i-box', 'Resize', dlgResize], ['i-setup', 'Parameters', dlgPrimitive]]],
     ['Parametric', [['i-setup', 'Variables', dlgVariables], ['i-export', 'Export CAD', dlgCadExport]]],
     ['Faces', [['i-import', 'Sweep Face', () => dlgFaceOp('sweep')],
@@ -2800,6 +3006,77 @@ function multiProps(row) {
   }
 }
 
+/* Properties are edited where they are shown: a field that can change is an
+   input (or a select / checkbox), applied on Enter or when it loses focus, and
+   the panel redraws from the server's answer. A failed edit shows its message
+   and puts the old value back instead of leaving a rejected number on screen. */
+/* A primitive's own numbers (position, size, radius ...) as fields in the panel:
+   change one and the object is rebuilt with it. Values accept units and design
+   variables (10mm, W/2), exactly like the dimensions dialog. */
+let PRIM_CACHE = {};
+const PRIM_PENDING = new Set();
+async function inlinePrimitive(tbl, row, o) {
+  // Answers come back with the whole state, which redraws this panel: the
+  // lookup is therefore cached, and only one is ever in flight per object.
+  let r = PRIM_CACHE[o.name];
+  if (!r) {
+    if (PRIM_PENDING.has(o.name)) return;
+    PRIM_PENDING.add(o.name);
+    try { PRIM_CACHE[o.name] = await rpc('modeler.primitiveInfo', { name: o.name }); }
+    catch (e) { PRIM_CACHE[o.name] = { fields: {}, definition: { params: {} } }; }
+    finally { PRIM_PENDING.delete(o.name); }
+    if (propTarget && propTarget.name === o.name) renderProps();
+    return;
+  }
+  const mini = (txt) => tbl.appendChild(el('tr', {}, el('td', { class: 'k', colspan: 2,
+    style: 'font-weight:600;padding-top:6px' }, txt)));
+  if (!Object.keys(r.fields || {}).length) return;
+  mini('Primitive');
+  for (const [key, n] of Object.entries(r.fields)) {
+    const value = r.definition.params[key];
+    const fmtv = (v) => (typeof v === 'number' && key !== 'axis' && key !== 'angle' && n !== 0) ? fmtLen(v, r.definition.units || U()) : v;
+    const send = async (params) => {
+      PRIM_CACHE = {};
+      const ok = await guard(async () => { await rpc('modeler.editPrimitive', { name: o.name, params }); await refreshGeometry(false); });
+      renderProps();
+      return ok;
+    };
+    if (n > 1 || key === 'axis') {
+      const arr = Array.isArray(value) ? value : [0, 0, 1];
+      const ins = arr.map((v, i) => inp('', fmtv(v), 'text', { style: 'width:62px' }));
+      const go = () => send({ [key]: ins.map(x => key === 'axis' ? Number(x.value) : x.value) });
+      ins.forEach(x => { x.onchange = go; });
+      tbl.appendChild(el('tr', {}, el('td', { class: 'k' }, key),
+        el('td', { class: 'v' }, el('div', { style: 'display:flex;gap:3px' }, ...ins))));
+    } else if (key === 'plane') {
+      row(key, editSelect(['xy', 'yz', 'xz'], value, v => send({ plane: v })));
+    } else {
+      row(key, editRow(key, fmtv(value), v => send({ [key]: v })));
+    }
+  }
+}
+
+function editRow(label, value, apply, opts = {}) {
+  const i = inp('', value, opts.type || 'text', opts.attrs || {});
+  i.onchange = async () => {
+    const ok = await guard(() => apply(i.value));
+    if (ok === false) i.value = value;
+    renderProps();
+  };
+  return i;
+}
+function editSelect(options, value, apply) {
+  const x = sel('', options, value);
+  x.onchange = async () => { const ok = await guard(() => apply(x.value)); if (ok === false) x.value = value; renderProps(); };
+  return x;
+}
+function editCheck(value, apply) {
+  const c = el('input', { type: 'checkbox' });
+  c.checked = !!value;
+  c.onchange = async () => { const ok = await guard(() => apply(c.checked)); if (ok === false) c.checked = !c.checked; renderProps(); };
+  return c;
+}
+
 function renderProps() {
   const p = $('#props-body');
   p.innerHTML = '';
@@ -2823,7 +3100,10 @@ function renderProps() {
       });
       row('Name', ni);
       row('Type', o.kind);
-      if(['box','cylinder','sphere','cone','torus','rectangle'].includes(o.kind)) row('Dimensions',el('button',{onclick:dlgPrimitive},'Edit dimensions / expressions…'));
+      if(['box','cylinder','sphere','cone','torus','rectangle','circle'].includes(String(o.kind).toLowerCase())) {
+        row('Dimensions',el('button',{onclick:dlgPrimitive},'Edit dimensions / expressions…'));
+        inlinePrimitive(tbl, row, o);
+      }
       const ms = sel('pm', (window.MATERIALS || []).map(m => m.name), o.material);
       ms.onchange = () => guard(() => rpc('modeler.setProperty',
         { name: o.name, prop: 'material', value: ms.value })
@@ -2840,7 +3120,8 @@ function renderProps() {
   } else if (t === 'meshop' && d) {
     const m = (d.meshOps || []).find(x => x.name === propTarget.name);
     if (m) {
-      row('Name', m.name);
+      row('Name', editRow('Name', m.name, v => rpc('mesh.setOperation', { name: m.name, newName: v })
+        .then(r => { propTarget.name = v.trim() || m.name; return r; })));
       row('Type', 'Length based');
       row('Applies to', m.where);
       const li = inp('', fmtLen(m.maxLength, U()));
@@ -2860,10 +3141,35 @@ function renderProps() {
   } else if (t === 'boundary' && d) {
     const b = d.boundaries.find(x => x.name === propTarget.name);
     if (b) {
-      row('Name', b.name); row('Type', b.type);
+      const editB = (patch) => rpc('boundary.edit', { name: b.name, params: patch }).then(refreshAssignments);
+      row('Name', editRow('Name', b.name, v => rpc('boundary.edit', { name: b.name, newName: v })
+        .then(r => { propTarget.name = r.name; return refreshAssignments(); })));
+      row('Type', b.type);
       row('Assignment', b.selector.label);
-      for (const [k, v] of Object.entries(b.params || {}))
-        row(k, Array.isArray(v) ? v.join(', ') : String(v));
+      const P = b.params || {};
+      if (b.type === 'lumped_rlc') {
+        row('R [Ω]', editRow('R', P.R, v => editB({ R: v })));
+        row('L [H]', editRow('L', P.L, v => editB({ L: v })));
+        row('C [F]', editRow('C', P.C, v => editB({ C: v })));
+        row('Parallel', editCheck(P.parallel !== false, v => editB({ parallel: v })));
+        row('Current direction', editSelect([['', 'Automatic'], ['1,0,0', '+X'], ['0,1,0', '+Y'], ['0,0,1', '+Z']],
+          Array.isArray(P.direction) ? P.direction.map(x => Math.round(x)).join(',') : '',
+          v => editB({ direction: v ? v.split(',').map(Number) : null })));
+      } else if (b.type === 'impedance') {
+        const z = Array.isArray(P.Zs) ? P.Zs : [Number(P.Zs) || 0, 0];
+        row('Resistance [Ω/sq]', editRow('R', z[0], v => editB({ R: v })));
+        row('Reactance [Ω/sq]', editRow('X', z[1], v => editB({ X: v })));
+      } else if (b.type === 'finite_cond') {
+        row('Conductor', editSelect(((window.MATERIALS || []).filter(m => m.kind === 'conductor').map(m => m.name)
+          .concat([]) || ['copper']), P.material || 'copper', v => editB({ material: v })));
+        row('Thickness', editRow('Thickness', P.thickness == null ? '' : fmtLen(P.thickness, U()),
+          v => editB({ thickness: v })));
+        row('Roughness', editRow('Roughness', P.roughness ? fmtLen(P.roughness, U()) : '0',
+          v => editB({ roughness: v })));
+      } else {
+        for (const [k, v] of Object.entries(P))
+          row(k, Array.isArray(v) ? v.join(', ') : String(v));
+      }
       tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
         el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
           onclick: () => guard(() => rpc('boundary.delete', { name: b.name })
@@ -2873,15 +3179,20 @@ function renderProps() {
   } else if (t === 'port' && d) {
     const x = d.ports.find(y => y.name === propTarget.name);
     if (x) {
-      row('Name', x.name); row('Type', x.kind === 'wave' ? 'Wave Port' : 'Lumped Port');
+      const editP = (patch) => rpc('excitation.edit', Object.assign({ name: x.name }, patch)).then(refreshAssignments);
+      row('Name', editRow('Name', x.name, v => rpc('excitation.edit', { name: x.name, newName: v })
+        .then(r => { propTarget.name = r.name; return refreshAssignments(); })));
+      row('Type', x.kind === 'wave' ? 'Wave Port' : 'Lumped Port');
       row('Assignment', x.selector.label);
       if (x.kind === 'wave') {
-        row('Modes', x.modes);
-        row('De-embed', fmtLen(x.deembed, U()));
-        row('Renormalise', x.renorm == null ? 'modal Z' : x.renorm + ' Ω');
+        row('Modes', editRow('Modes', x.modes, v => editP({ modes: v }), { type: 'number', attrs: { min: 1, max: 8 } }));
+        row('De-embed', editRow('De-embed', fmtLen(x.deembed, U()), v => editP({ deembed: v })));
+        row('Renormalise [Ω]', editRow('Renorm', x.renorm == null ? '' : x.renorm, v => editP({ renorm: v }),
+          { attrs: { placeholder: 'blank = modal Z' } }));
       } else {
-        row('Impedance', Array.isArray(x.impedance)
-          ? x.impedance[0].toFixed(3) + ' Ω' : x.impedance);
+        row('Impedance [Ω]', editRow('Impedance', Array.isArray(x.impedance)
+          ? x.impedance[0] : x.impedance, v => editP({ impedance: v })));
+        row('De-embed', editRow('De-embed', fmtLen(x.deembed, U()), v => editP({ deembed: v })));
       }
       row('Integration line', x.hasLine ? 'defined' : (x.kind === 'lumped' ? 'from field direction' : 'none'));
       if (x.kind === 'lumped') {
@@ -2904,6 +3215,8 @@ function renderProps() {
   } else if (t === 'setup' && d) {
     const st = d.setups.find(x => x.name === propTarget.name);
     if (st) {
+      row('Name', editRow('Name', st.name, v => rpc('analysis.editSetup', { name: st.name, newName: v })
+        .then(r => { propTarget.name = r.name; })));
       const f = inp('', fmtHz(st.frequency));
       f.onchange = () => guard(() => rpc('analysis.editSetup',
         { name: st.name, frequency: f.value }));
@@ -2935,6 +3248,14 @@ function renderProps() {
       bo.onchange = () => guard(() => rpc('analysis.editSetup',
         { name: st.name, basisOrder: bo.value }));
       row('Basis order', bo);
+      if (d.solutionType !== 'eigenmode') {
+        row('Minimum passes', editRow('Minimum passes', st.minPasses, v => rpc('analysis.editSetup',
+          { name: st.name, minPasses: v }), { type: 'number', attrs: { min: 1 } }));
+        row('Minimum converged', editRow('Minimum converged', st.minConverged, v => rpc('analysis.editSetup',
+          { name: st.name, minConverged: v }), { type: 'number', attrs: { min: 1 } }));
+        row('Refinement per pass [%]', editRow('Refinement', st.refinement, v => rpc('analysis.editSetup',
+          { name: st.name, refinement: v }), { type: 'number', attrs: { min: 1, max: 100 } }));
+      }
       row('Sweeps', st.sweeps.length);
       tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
         el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
@@ -2950,26 +3271,43 @@ function renderProps() {
     const st = d.setups.find(x => x.name === propTarget.setup);
     const sw = st && st.sweeps.find(x => x.name === propTarget.name);
     if (sw) {
-      row('Name', sw.name);
-      row('Type', sw.kind);
-      row('Range', `${fmtHz(sw.start)} – ${fmtHz(sw.stop)}`);
-      row('Spacing', sw.spacing);
+      const editS = (patch) => rpc('analysis.editSweep', Object.assign({ setup: st.name, name: sw.name }, patch));
+      row('Name', editRow('Name', sw.name, v => editS({ newName: v })
+        .then(r => { propTarget.name = r.name; })));
+      row('Sweep type', editSelect([['discrete', 'Discrete'], ['interpolating', 'Interpolating'], ['fast', 'Fast']],
+        sw.kind, v => editS({ kind: v })));
+      row('Frequency setup', editSelect([['linear', 'Linear count'], ['step', 'Linear step'], ['log', 'Log scale'],
+        ['single', 'Single point']], sw.spacing, v => editS(v === 'step'
+          ? { spacing: v, step: String((sw.stop - sw.start) / Math.max(1, sw.count - 1)) } : { spacing: v })));
+      row('Start', editRow('Start', fmtHz(sw.start), v => editS({ start: v })));
+      if (sw.spacing !== 'single')
+        row('Stop', editRow('Stop', fmtHz(sw.stop), v => editS({ stop: v })));
+      if (sw.spacing === 'linear' || sw.spacing === 'log')
+        row('Count', editRow('Count', sw.count, v => editS({ count: v }), { type: 'number', attrs: { min: 1 } }));
+      if (sw.spacing === 'step')
+        row('Step', editRow('Step', sw.step ? fmtHz(sw.step) : '', v => editS({ step: v })));
       row('Points', sw.points);
+      if (sw.kind !== 'discrete') {
+        row('Error tolerance', editRow('Tol', sw.tolerance == null ? '' : sw.tolerance, v => editS({ tolerance: v }),
+          { type: 'number', attrs: { min: 0, max: 1, step: 'any' } }));
+        row('Max solutions', editRow('Max', sw.maxPoints == null ? '' : sw.maxPoints, v => editS({ maxPoints: v }),
+          { type: 'number', attrs: { min: 4 } }));
+      }
+      row('Save fields', editCheck(sw.saveFields, v => editS({ saveFields: v })));
       tbl.appendChild(el('tr', {}, el('td', { colspan: 2 },
         el('button', { class: 'rbtn', style: 'flex-direction:row;gap:6px',
           onclick: () => guard(() => rpc('analysis.deleteSweep',
             { setup: st.name, name: sw.name })) }, 'Delete sweep'))));
     }
   } else {
-    row('Project', STATE.project.name);
+    row('Project', editRow('Project', STATE.project.name, v => rpc('project.rename', { name: v })));
     row('File', STATE.project.path || '(unsaved)');
     row('Designs', STATE.project.designs.length);
     if (d) {
-      row('Design', d.name);
+      row('Design', editRow('Design', d.name, v => rpc('project.renameDesign', { name: d.name, newName: v })));
       row('Solution type', d.solutionType.replace('_', ' '));
-      const us = sel('', ['mm', 'cm', 'm', 'um', 'mil', 'in'], d.units);
-      us.onchange = () => { d.units = us.value; renderAll(); };
-      row('Model units', us);
+      row('Model units', editSelect(['mm', 'cm', 'm', 'um', 'mil', 'in'], d.units,
+        v => rpc('design.setUnits', { units: v })));
       row('Objects', d.objects.length);
       row('Excitations', d.excitations.length);
       const [lo, hi] = d.bbox;
@@ -3046,7 +3384,7 @@ function initViewport() {
     const b = mk(label, ic, () => setSelectMode(m), 'vt-sel-' + m);
     b.classList.toggle('on', SEL_MODE === m);
   }
-  mk('Box select — drag a rectangle (Ctrl+drag)', 'i-rect', armBandSelect,
+  mk('Box select — drag a rectangle (Ctrl+drag): left→right touches, right→left only what is inside', 'i-rect', armBandSelect,
     'vt-band');
   tools.appendChild(el('span', { class: 'vt-sep' }));
   mk('Move selection by two points', 'i-move', () => startInteractiveMove(),
@@ -3138,6 +3476,7 @@ function heldGeometry() {
 }
 
 async function refreshGeometry(fit) {
+  PRIM_CACHE = {};
   if (!VP) return;
   let g;
   try {
@@ -4399,7 +4738,7 @@ async function commitDraw() {
    the same panel, without the model being hidden behind a dialog. */
 let MOVE = null;   // { names, stage: 'p1'|'p2'|'ready', p1, p2, plane, snap }
 
-function startInteractiveMove(names) {
+function startInteractiveMove(names, opts = {}) {
   if (!VP) return toastError('3-D viewport is unavailable.');
   const want = (names && names.length) ? names : (STATE?.selection || []);
   if (!want.length)
@@ -4412,13 +4751,17 @@ function startInteractiveMove(names) {
     : [0, 0, 0];
   MOVE = {
     names: want.slice(), stage: 'p1', p1: null, p2: null, snap: true,
-    plane: { normal: [0, 0, 1], point: start.slice() }, box
+    plane: { normal: [0, 0, 1], point: start.slice() }, box,
+    mode: opts.mode || 'move', copy: !!opts.copy
   };
   buildMovePanel();
   updateMovePanel();
-  setStatus(`Move ${want.join(', ')}: click the point to move from`, 'busy');
-  $('#vp-hint').textContent =
-    'click a base point, then the destination · or type ΔX/ΔY/ΔZ · Esc backs out';
+  const mir = MOVE.mode === 'mirror';
+  setStatus(mir ? `Mirror ${want.join(', ')}: click a point on the mirror plane`
+    : `${MOVE.copy ? 'Copy' : 'Move'} ${want.join(', ')}: click the point to ${MOVE.copy ? 'copy' : 'move'} from`, 'busy');
+  $('#vp-hint').textContent = mir
+    ? 'click a point on the mirror plane, then a point along its normal · or type the normal · Esc backs out'
+    : 'click a base point, then the destination · or type ΔX/ΔY/ΔZ · Esc backs out';
 }
 
 function cancelInteractiveMove() {
@@ -4447,7 +4790,8 @@ function buildMovePanel() {
   const box = $('#vp-draw');
   if (!box) return;
   box.innerHTML = '';
-  box.appendChild(el('h4', {}, 'Move ' +
+  const mirror = MOVE.mode === 'mirror';
+  box.appendChild(el('h4', {}, (mirror ? 'Mirror ' : MOVE.copy ? 'Copy & Move ' : 'Move ') +
     (MOVE.names.length > 1 ? MOVE.names.length + ' objects' : MOVE.names[0]),
     el('span', { class: 'step', id: 'mv-step' }, '')));
 
@@ -4470,12 +4814,12 @@ function buildMovePanel() {
     }
   };
   row('Cursor', 'mv-c', true);
-  row('From', 'mv-a', false);
-  row('To', 'mv-b', false);
-  row('Delta', 'mv-d', false);
+  row(mirror ? 'Plane point' : 'From', 'mv-a', false);
+  row(mirror ? 'Normal to' : 'To', 'mv-b', false);
+  row(mirror ? 'Normal' : 'Delta', 'mv-d', false);
   box.appendChild(grid);
 
-  const dist = el('div', { class: 'row' }, el('label', {}, 'Distance'),
+  const dist = el('div', { class: 'row' }, el('label', {}, mirror ? 'Plane offset' : 'Distance'),
     el('input', { id: 'mv-len', type: 'text', spellcheck: 'false' }));
   dist.querySelector('input').addEventListener('input', () => moveLengthEdited());
   dist.querySelector('input').addEventListener('keydown', e => {
@@ -4484,10 +4828,24 @@ function buildMovePanel() {
 
   const copy = el('input', { type: 'checkbox', id: 'mv-copy',
     style: 'width:auto' });
+  copy.checked = MOVE.copy;
+  copy.onchange = () => { MOVE.copy = copy.checked; const n = $('#mv-count-row'); if (n) n.style.display = (copy.checked && !mirror) ? '' : 'none'; };
   box.appendChild(el('div', { class: 'row' },
     el('label', { for: 'mv-copy' }, 'Copy'), copy,
     el('span', { class: 'note', style: 'margin:0' },
-      'leave a duplicate behind')));
+      mirror ? 'keep the original, add the mirror image' : 'leave a duplicate behind')));
+  if (!mirror) {
+    const cnt = el('div', { class: 'row', id: 'mv-count-row', style: MOVE.copy ? '' : 'display:none' },
+      el('label', {}, 'Total number'),
+      el('input', { id: 'mv-count', type: 'number', min: '2', step: '1', value: '2', style: 'width:70px' }),
+      el('span', { class: 'note', style: 'margin:0' }, 'original + copies, one step apart'));
+    box.appendChild(cnt);
+  }
+  const att = el('input', { type: 'checkbox', id: 'mv-assign', style: 'width:auto' });
+  att.checked = true;
+  box.appendChild(el('div', { class: 'row', id: 'mv-assign-row' },
+    el('label', { for: 'mv-assign' }, 'With boundaries'), att,
+    el('span', { class: 'note', style: 'margin:0' }, 'copies keep ports / boundaries / mesh ops')));
 
   const snap = el('input', { type: 'checkbox', id: 'mv-snap',
     style: 'width:auto' });
@@ -4626,7 +4984,18 @@ function updateMovePreview() {
   if (!MOVE.p1 || !d) { VP.setDraft(null); if (lab) lab.style.display = 'none'; return; }
   const strip = [MOVE.p1, MOVE.p2];
   const box = MOVE.box;
-  if (box) {
+  if (box && MOVE.mode === 'mirror') {
+    // the mirror image of the selection's extent
+    const n = d.map(v => v / Math.hypot(...d));
+    const refl = c => { const t = 2 * [0, 1, 2].reduce((a, k) => a + (c[k] - MOVE.p1[k]) * n[k], 0);
+      return [0, 1, 2].map(k => c[k] - t * n[k]); };
+    const cs = [];
+    for (const x of [box[0][0], box[1][0]]) for (const y of [box[0][1], box[1][1]])
+      for (const z of [box[0][2], box[1][2]]) cs.push(refl([x, y, z]));
+    const lo = [0, 1, 2].map(k => Math.min(...cs.map(c => c[k])));
+    const hi = [0, 1, 2].map(k => Math.max(...cs.map(c => c[k])));
+    strip.push(...ghostBox(lo, hi));
+  } else if (box) {
     // the selection's own extent, drawn where it would land
     const lo = [0, 1, 2].map(k => box[0][k] + d[k]);
     const hi = [0, 1, 2].map(k => box[1][k] + d[k]);
@@ -4657,12 +5026,22 @@ async function commitMove() {
   const d = moveDelta();
   const names = MOVE.names.slice();
   const copy = !!($('#mv-copy') && $('#mv-copy').checked);
+  const count = Math.max(2, parseInt(($('#mv-count') || {}).value, 10) || 2);
+  const withAssign = !($('#mv-assign') && !$('#mv-assign').checked);
+  const mode = MOVE.mode, p1 = MOVE.p1.slice();
   cancelInteractiveMove();
   const m = v => String(v) + 'm';
   await guard(async () => {
-    if (copy) {
-      await rpc('modeler.duplicate', { names, mode: 'line', count: 2,
-        params: { vector: d.map(m) }, attach: false });
+    if (mode === 'mirror') {
+      const ln = Math.hypot(...d);
+      const normal = d.map(v => v / ln);
+      if (copy) await rpc('modeler.duplicate', { names, mode: 'mirror', count: 2,
+        params: { normal, origin: p1.map(m) }, attach: false, withAssignments: withAssign });
+      else await rpc('modeler.transform', { names, op: 'mirror',
+        params: { normal, origin: p1.map(m) } });
+    } else if (copy) {
+      await rpc('modeler.duplicate', { names, mode: 'line', count,
+        params: { vector: d.map(m) }, attach: false, withAssignments: withAssign });
     } else {
       await rpc('modeler.transform', { names, op: 'move',
         params: { dx: m(d[0]), dy: m(d[1]), dz: m(d[2]) } });
@@ -4911,6 +5290,10 @@ function viewportContext(hit, ev) {
     ['Move Faces…', () => dlgFaceOp('move'), hasFaces],
     null,
     ['Move by Two Points…', () => startInteractiveMove(), hasSel],
+    ['Copy & Move by Two Points…', () => startInteractiveMove(null, { copy: true }), hasSel],
+    ['Mirror by Two Points…', () => startInteractiveMove(null, { mode: 'mirror' }), hasSel],
+    ['Mirror Copy by Two Points…', () => startInteractiveMove(null, { mode: 'mirror', copy: true }), hasSel],
+    ['Split…', dlgSplit, hasSel],
     ['Arrange ▸ Move…', () => dlgTransform('move'), hasSel],
     ['Arrange ▸ Rotate…', () => dlgTransform('rotate'), hasSel],
     ['Duplicate ▸ Along Line…', () => dlgDuplicate('line'), hasSel],
@@ -4919,7 +5302,8 @@ function viewportContext(hit, ev) {
     ...visibilityMenuItems(STATE.selection || []),
     null,
     ['Copy', () => editCopy(false), hasSel],
-    ['Paste', editPaste, !!STATE.history?.clipboard],
+    ['Paste', () => editPaste(), !!STATE.history?.clipboard],
+    ['Paste & Move', () => editPaste(true), !!STATE.history?.clipboard],
     ['Delete', deleteSelection, hasSel],
     null,
     ['Fit All', fitView],
@@ -5025,8 +5409,8 @@ function treeContext(ev, type, name, extra) {
     if (name === 'Global') items.push(['Work in Global', () => setWorkingCs('Global')],
       null, ['New Relative CS from Picked Point…', () => startCsPick()]);
     else items.push(['Work in ' + name, () => setWorkingCs(name)],
-      ['Rename…', () => { const n = prompt('Coordinate system name', name);
-        if (n && n.trim()) guard(() => rpc('cs.rename', { name, newName: n.trim() })).then(() => { updateCsLabel(); renderTree(); }); }],
+      ['Rename…', () => askText('Rename coordinate system', 'Name', name).then(n => {
+        if (n && n.trim()) guard(() => rpc('cs.rename', { name, newName: n.trim() })).then(() => { updateCsLabel(); renderTree(); }); })],
       ['Delete', () => guard(() => rpc('cs.delete', { name })).then(() => { updateCsLabel(); renderTree(); })],
       null, ['New Relative CS from Picked Point…', () => startCsPick()]);
   } else if (type === 'result') {
@@ -5034,8 +5418,8 @@ function treeContext(ev, type, name, extra) {
     if (it) items.push(['Open', () => openResult(it)],
       ['Duplicate', () => { const c = addResult(it.kind, it.sub, JSON.parse(JSON.stringify(it.state)));
         c.plots = JSON.parse(JSON.stringify(it.plots)); renderTree(); openResult(c); }],
-      ['Rename…', () => { const n = prompt('Result name', it.title);
-        if (n && n.trim()) { it.title = n.trim(); renderTree(); renderTabs(); } }],
+      ['Rename…', () => askText('Rename result', 'Name', it.title).then(n => {
+        if (n && n.trim()) { it.title = n.trim(); renderTree(); renderTabs(); } })],
       null, ['Delete', () => removeResult(it)]);
   } else if (type === 'boundary') {
     items.push(['Properties…', () => showProps('boundary', name)],
@@ -5204,8 +5588,67 @@ function setSelectMode(m) {
 
 /* What a rubber band selected, in whichever pick mode is active.
    Shift keeps the existing selection; without it the band replaces it. */
+/* Select by Area filters (Edit ▸ Select by Area Filter…): what a rubber band is
+   allowed to pick. Names take * wildcards; types are solids / sheets / lines. */
+let AREA_FILTER = (() => {
+  const d = { include: '', exclude: '', solids: true, sheets: true, lines: true,
+    materials: [], materialMode: 'exclude', front: false };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem('aether.areaFilter') || '{}')); }
+  catch (e) { return d; }
+})();
+function areaFilterActive() {
+  const f = AREA_FILTER;
+  return !!(f.include || f.exclude || !f.solids || !f.sheets || !f.lines || f.materials.length || f.front);
+}
+function passesAreaFilter(name, box) {
+  const f = AREA_FILTER;
+  const d = STATE.design || {};
+  const solid = (d.objects || []).find(o => o.name === name);
+  const sheet = (d.sheets || []).find(o => o.name === name);
+  const o = solid || sheet;
+  if (!o) return true;
+  const type = solid ? 'solids' : (sheet && sheet.referenceOnly ? 'lines' : 'sheets');
+  if (!f[type]) return false;
+  const rx = pat => new RegExp('^' + pat.trim().split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i');
+  if (f.include.trim() && !f.include.split(/[,;]/).some(p => p.trim() && rx(p).test(name))) return false;
+  if (f.exclude.trim() && f.exclude.split(/[,;]/).some(p => p.trim() && rx(p).test(name))) return false;
+  if (f.materials.length) {
+    const listed = f.materials.includes(o.material);
+    if (f.materialMode === 'include' ? !listed : listed) return false;
+  }
+  if (f.front && VP && !VP.frontIn(name, box)) return false;
+  return true;
+}
+function dlgAreaFilter() {
+  const f = AREA_FILTER;
+  const body = el('div');
+  body.appendChild(field('Include names', inp('af-inc', f.include, 'text', { placeholder: 'e.g. *via*, patch*' })));
+  body.appendChild(field('Exclude names', inp('af-exc', f.exclude, 'text', { placeholder: 'e.g. air, sub*' })));
+  const chk = (id, label, v) => el('label', { style: 'margin-right:14px' },
+    el('input', { type: 'checkbox', id, style: 'width:auto', checked: v ? 'checked' : null }), ' ' + label);
+  body.appendChild(field('Object types', el('div', {}, chk('af-s', 'Solids', f.solids),
+    chk('af-h', 'Sheets', f.sheets), chk('af-l', 'Lines', f.lines))));
+  const mats = materialNames();
+  const ml = el('select', { id: 'af-mat', multiple: 'multiple', size: Math.min(6, Math.max(3, mats.length)) });
+  mats.forEach(m => { const o = el('option', { value: m }, m); if (f.materials.includes(m)) o.selected = true; ml.appendChild(o); });
+  body.appendChild(field('Materials', ml));
+  body.appendChild(field('…listed materials are', sel('af-mm', [['exclude', 'excluded'], ['include', 'the only ones allowed']], f.materialMode)));
+  body.appendChild(el('div', { class: 'check' }, el('input', { type: 'checkbox', id: 'af-front', checked: f.front ? 'checked' : null }),
+    el('label', { for: 'af-front' }, 'Select front entities only (not what is hidden behind)')));
+  body.appendChild(el('div', { class: 'hint' }, 'The filter applies to Box select and to Ctrl+drag. '
+    + 'Drag left → right to take everything the rectangle touches, right → left for only what lies completely inside.'));
+  dialog({ title: 'Select by Area Filter', body, ok: 'Apply', buttons: undefined, onOk: async () => {
+    AREA_FILTER = { include: gv('af-inc'), exclude: gv('af-exc'), solids: $('#af-s').checked, sheets: $('#af-h').checked,
+      lines: $('#af-l').checked, materials: Array.from($('#af-mat').selectedOptions).map(o => o.value),
+      materialMode: gv('af-mm'), front: $('#af-front').checked };
+    try { localStorage.setItem('aether.areaFilter', JSON.stringify(AREA_FILTER)); } catch (e) { /* ignore */ }
+    setStatus(areaFilterActive() ? 'Select-by-area filter on' : 'Select-by-area filter off', '');
+  } });
+}
+
 function applyBandSelection(box, add) {
   const got = VP.selectInBox(box, SEL_MODE);
+  if (SEL_MODE === 'object' && areaFilterActive()) got.objects = got.objects.filter(n => passesAreaFilter(n, box));
   const btn = $('#vt-band');
   if (btn) btn.classList.remove('on');
   if (SEL_MODE === 'object') {
@@ -6739,7 +7182,7 @@ async function boot() {
       else if (k === 'y') { e.preventDefault(); editRedo(); }
       else if (k === 'x') { e.preventDefault(); editCopy(true); }
       else if (k === 'c') { e.preventDefault(); editCopy(false); }
-      else if (k === 'v') { e.preventDefault(); editPaste(); }
+      else if (k === 'v') { e.preventDefault(); editPaste(e.shiftKey === true); }
       else if (k === 'd') { e.preventDefault();
         e.shiftKey ? fitSelection() : fitView(); }
     }

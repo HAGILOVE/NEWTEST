@@ -27,7 +27,7 @@ import numpy as np
 
 from ..core.logging import get_logger
 from .primitives import (Boolean, Box, Circle, Cone, Cylinder, Extrude,
-                         FaceOperation, ImportedShape, Polygon, Revolve, Shape,
+                         FaceOperation, ImportedShape, PathSweep, Polygon, Revolve, Shape,
                          Sphere, Torus)
 
 log = get_logger("geometry.kernel")
@@ -305,6 +305,9 @@ def _build_node(s: Shape, gmsh, occ) -> List[DimTag]:
         out = occ.revolve(base, o[0], o[1], o[2], a[0], a[1], a[2], s.angle)
         return [dt for dt in out if dt[0] == 3] or [dt for dt in out if dt[0] == 2]
 
+    if isinstance(s, PathSweep):
+        return _build_path_sweep(s, gmsh, occ)
+
     if isinstance(s, ImportedShape):
         from .brep_io import import_into_occ
         b = getattr(s, "body", -1)
@@ -334,6 +337,105 @@ def _build_node(s: Shape, gmsh, occ) -> List[DimTag]:
         return list(out)
 
     raise TypeError(f"cannot build geometry node of type {type(s).__name__}")
+
+
+def _profile_normal(shape) -> Optional[np.ndarray]:
+    """Normal of a flat profile, when it can be read off the shape itself."""
+    if isinstance(shape, Circle):
+        n = np.array(shape.axis, float)
+    elif isinstance(shape, Polygon):
+        p = np.array(shape.points, float)
+        n = np.zeros(3)
+        for i in range(1, len(p) - 1):
+            n = np.cross(p[i] - p[0], p[i + 1] - p[0])
+            if np.linalg.norm(n) > 1e-18:
+                break
+    else:
+        return None
+    ln = float(np.linalg.norm(n))
+    return n / ln if ln > 1e-18 else None
+
+
+def _profile_centre(shape) -> Optional[np.ndarray]:
+    if isinstance(shape, Circle):
+        return np.array(shape.center, float)
+    if isinstance(shape, Polygon):
+        return np.array(shape.points, float).mean(axis=0)
+    return None
+
+
+def _build_path_sweep(s, gmsh, occ):
+    """
+    A flat profile swept along a polyline.
+
+    The profile is first stood on the start of the path, square to its first
+    direction (so the modeller does not have to draw it there). A path that bends
+    gently -- a helix, a spiral, a smooth feed -- becomes one smooth sweep; a
+    path with sharp corners is built as one straight bar per segment, with a
+    ball at each corner when the profile is round.
+    """
+    P = np.array(s.path, float)
+    d = np.diff(P, axis=0)
+    ln = np.linalg.norm(d, axis=1)
+    keep = ln > 1e-12
+    d, ln = d[keep] / ln[keep, None], ln[keep]
+    if not len(d):
+        raise ModelBuildError("the sweep path has no length")
+    base = build_shape(s.profile, gmsh)
+    n0 = _profile_normal(s.profile)
+    c0 = _profile_centre(s.profile)
+    if n0 is not None and c0 is not None:
+        cross = np.cross(n0, d[0])
+        sin, cos = float(np.linalg.norm(cross)), float(n0 @ d[0])
+        if sin > 1e-9:
+            ang = math.atan2(sin, cos)
+            base = occ.copy(base)
+            occ.rotate(base, c0[0], c0[1], c0[2], *(cross / sin), ang)
+        elif cos < 0:
+            base = occ.copy(base)
+            ref = np.cross(n0, [1.0, 0.0, 0.0]) if abs(n0[0]) < 0.9 else np.cross(n0, [0.0, 1.0, 0.0])
+            occ.rotate(base, c0[0], c0[1], c0[2], *(ref / np.linalg.norm(ref)), math.pi)
+        shift = P[0] - c0
+        if np.linalg.norm(shift) > 1e-12:
+            if base is not None and sin <= 1e-9 and cos > 0:
+                base = occ.copy(base)
+            occ.translate(base, *shift)
+    turns = [math.acos(max(-1.0, min(1.0, float(d[i] @ d[i + 1])))) for i in range(len(d) - 1)]
+    smooth = len(P) >= 4 and (not turns or max(turns) < math.radians(35))
+    if smooth:
+        pts = [occ.addPoint(*p) for p in P]
+        wire = occ.addWire([occ.addSpline(pts)])
+        out = occ.addPipe(base, wire)
+        return [dt for dt in out if dt[0] == 3] or [dt for dt in out if dt[0] == 2]
+    # straight bars
+    solids: List[DimTag] = []
+    start = P[np.nonzero(keep)[0][0]]
+    corners = [start]
+    for k, length in zip(np.nonzero(keep)[0], ln):
+        corners.append(P[k + 1])
+    for i, (seg, length) in enumerate(zip(d, ln)):
+        face = occ.copy(base)
+        if i:
+            # carry the profile onto this segment: to the corner, then turned
+            # from the first direction to this one about that corner
+            occ.translate(face, *(corners[i] - start))
+            cross = np.cross(d[0], seg)
+            sin, cos = float(np.linalg.norm(cross)), float(d[0] @ seg)
+            if sin > 1e-9:
+                occ.rotate(face, *corners[i], *(cross / sin), math.atan2(sin, cos))
+            elif cos < 0:
+                ref = np.cross(d[0], [1.0, 0.0, 0.0]) if abs(d[0][0]) < 0.9 else np.cross(d[0], [0.0, 1.0, 0.0])
+                occ.rotate(face, *corners[i], *(ref / np.linalg.norm(ref)), math.pi)
+        out = occ.extrude(face, *(seg * length))
+        solids += [dt for dt in out if dt[0] == 3]
+    if isinstance(s.profile, Circle):
+        r = float(s.profile.radius)
+        for c in corners[1:-1]:
+            solids.append((3, occ.addSphere(*c, r)))
+    if len(solids) == 1:
+        return solids
+    out, _ = occ.fuse(solids[:1], solids[1:], removeObject=True, removeTool=True)
+    return list(out)
 
 
 def _align_axis(tags, src, dst, origin, occ):

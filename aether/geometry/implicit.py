@@ -16,7 +16,7 @@ from typing import Sequence
 import numpy as np
 
 from .primitives import (Boolean, Box, Circle, Cone, Cylinder, Extrude,
-                         ImportedShape, Polygon, Revolve, Shape, Sphere, Torus)
+                         ImportedShape, PathSweep, Polygon, Revolve, Shape, Sphere, Torus)
 
 
 def contains(shape: Shape, pts: np.ndarray, tol: float = 0.0) -> np.ndarray:
@@ -135,6 +135,9 @@ def _contains_local(s: Shape, p: np.ndarray, tol: float) -> np.ndarray:
         u, v = _basis(a)
         q = o + np.outer(rho, u) + np.outer(z, a)
         return _contains_local(s.profile, q, tol)
+
+    if isinstance(s, PathSweep):
+        raise NotImplementedError("point membership of a swept-along-path body needs the OCC kernel")
 
     if isinstance(s, ImportedShape):
         raise NotImplementedError(

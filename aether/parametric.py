@@ -155,6 +155,15 @@ class Scope:
                     return Quantity(math.sqrt(a.value), tuple(x / 2 for x in a.dim))
                 if f in ("sin", "cos", "tan") and a.dim in (D0, ANGLE):
                     return Quantity(getattr(math, f)(a.value))
+                if f in ("exp", "ln", "log10", "asin", "acos", "atan", "sinh", "cosh",
+                         "tanh", "floor", "ceil") and a.dim == D0:
+                    fn = {"ln": math.log}.get(f) or getattr(math, f)
+                    try:
+                        return Quantity(float(fn(a.value)))
+                    except (ValueError, OverflowError) as e:
+                        raise ValueError(f"{f}() is not defined at {a.value}") from e
+            if f == "atan2" and len(args) == 2 and args[0].dim == args[1].dim:
+                return Quantity(math.atan2(args[0].value, args[1].value))
         raise ValueError(
             "Unsupported expression; use arithmetic, variables, sqrt, abs, min/max or sin/cos/tan"
         )

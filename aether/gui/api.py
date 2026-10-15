@@ -140,6 +140,7 @@ def _design_json(s: Session) -> Optional[dict]:
             "colorOverridden": sh.display_color is not None,
             "transparencyOverridden": sh.display_transparency is not None,
             "visible": bool(getattr(sh, "visible", True)),
+            "referenceOnly": bool(getattr(sh.shape, "reference_only", False)),
         }, **_cad_json(sh.shape)) for sh in d.sheets],
         "boundaries": [{"name": b.name, "type": b.btype,
                         "selector": _selector_json(b.selector),
@@ -944,6 +945,9 @@ def _apply_transform(shape, op: str, p: dict):
         raise ValueError(f"unknown transform {op!r}")
 
 
+from .carry import carry_assignments, duplicate_assignments      # noqa: E402
+
+
 @command("modeler.transform")
 def _transform(s: Session, name: str = "", names: Optional[List[str]] = None,
                op: str = "move", params: Optional[dict] = None, **_):
@@ -953,13 +957,18 @@ def _transform(s: Session, name: str = "", names: Optional[List[str]] = None,
     if not targets:
         raise ValueError("select an object first")
     p = params or {}
+    carried = 0
     for o in _entities(d, targets):
+        n0 = len(o.shape._xform)
         _apply_transform(o.shape, op, p)
+        if carry_assignments is not None:
+            carried += carry_assignments(d, o, o.shape._xform[n0:])
     d.mesh = None
     s.dirty = True
-    s.messages.add(f"{op.capitalize()}: {', '.join(targets)}", "info",
-                   "modeler")
-    return {"ok": True, "names": targets}
+    s.messages.add(f"{op.capitalize()}: {', '.join(targets)}"
+                   + (f" (with {carried} boundary / port assignment(s))" if carried else ""),
+                   "info", "modeler")
+    return {"ok": True, "names": targets, "carried": carried}
 
 
 # --------------------------------------------------------------------------
@@ -995,7 +1004,10 @@ def _resize(s: Session, name: str = "", size=None, anchor: str = "center", **_):
     if anchor not in ("center", "min"):
         raise ValueError("Choose center or min anchor")
     origin = (lo+hi)/2 if anchor == "center" else lo
+    n0 = len(obj.shape._xform)
     obj.shape.scale(*scale, origin=origin)
+    if carry_assignments is not None:
+        carry_assignments(d, obj, obj.shape._xform[n0:])
     d.mesh = None
     return {"ok": True, "size": target.tolist(), "scale": scale.tolist()}
 
@@ -1025,36 +1037,46 @@ def _copy(s: Session, names: Optional[List[str]] = None, cut: bool = False, **_)
 
 
 @command("modeler.paste")
-def _paste(s: Session, offset: Optional[Sequence] = None, **_):
+def _paste(s: Session, offset: Optional[Sequence] = None,
+           withAssignments: bool = True, **_):
     """Paste the clipboard as new objects, named to avoid collisions."""
     d = s.require_design()
     if not s.clipboard:
         raise RuntimeError("the clipboard is empty")
     import copy as _c
     made = []
+    copied_assign = 0
     for item in s.clipboard:
         shape = _c.deepcopy(item["shape"])
+        n0 = len(shape._xform)
         if offset:
             shape.translate(*offset)
         nm = naming.unique_name(naming.model_names(d), item["base"])
         shape.name = nm
         if item["sheet"]:
-            d.add_sheet(nm, shape, item["material"])
+            ent = d.add_sheet(nm, shape, item["material"])
         else:
-            d.add_solid(nm, shape, item["material"] or "vacuum",
-                        item["solve_inside"])
+            ent = d.add_solid(nm, shape, item["material"] or "vacuum",
+                              item["solve_inside"])
         made.append(nm)
+        orig = next((o for o in list(d.solids) + list(d.sheets)
+                     if o.name == item["base"] and o is not ent), None)
+        if orig is not None and withAssignments:
+            copied_assign += len(duplicate_assignments(d, orig, ent, shape._xform[n0:]))
     d.mesh = None
     s.dirty = True
     s.selection = made
-    s.messages.add(f"Pasted {', '.join(made)}.", "info", "modeler")
+    s.messages.add(f"Pasted {', '.join(made)}"
+                   + (f" with {copied_assign} boundary / port assignment(s)" if copied_assign else "")
+                   + ".", "info", "modeler")
     return {"ok": True, "names": made}
 
 
 @command("modeler.duplicate")
 def _duplicate(s: Session, names: Optional[List[str]] = None,
                mode: str = "line", count: int = 2,
-               params: Optional[dict] = None, attach: bool = False, **_):
+               params: Optional[dict] = None, attach: bool = False,
+               withAssignments: bool = True, **_):
     """
     Duplicate ▸ Along Line / Around Axis / Mirror.
 
@@ -1070,6 +1092,8 @@ def _duplicate(s: Session, names: Optional[List[str]] = None,
     import copy as _c
     total = max(int(count), 2) if mode != "mirror" else 2
     made: List[str] = []
+    for_assign: list = []
+    with_assignments = bool(withAssignments)
 
     for o in _entities(d, targets):
         is_sheet = o in d.sheets
@@ -1096,10 +1120,12 @@ def _duplicate(s: Session, names: Optional[List[str]] = None,
             nm = naming.unique_name(naming.model_names(d), o.name)
             shape.name = nm
             if is_sheet:
-                d.add_sheet(nm, shape, getattr(o, "material", None))
+                ent = d.add_sheet(nm, shape, getattr(o, "material", None))
             else:
-                d.add_solid(nm, shape, o.material, o.solve_inside)
+                ent = d.add_solid(nm, shape, o.material, o.solve_inside)
             made.append(nm)
+            if with_assignments and not attach:
+                for_assign.append((o, ent, shape._xform[len(o.shape._xform):]))
 
     if attach and made and mode != "mirror":
         base = d.get_solid(targets[0])
@@ -1109,11 +1135,15 @@ def _duplicate(s: Session, names: Optional[List[str]] = None,
         d.solids = [x for x in d.solids if x.name not in made]
         made = []
 
+    dup_assign = 0
+    for o, ent, ts in for_assign:
+        dup_assign += len(duplicate_assignments(d, o, ent, ts))
     d.mesh = None
     s.dirty = True
     s.selection = made or targets
     s.messages.add(
         f"Duplicate {mode}: {len(made)} new object(s)" +
+        (f", {dup_assign} boundary / port / mesh assignment(s) copied with them" if dup_assign else "") +
         (f" — {', '.join(made[:6])}{' …' if len(made) > 6 else ''}"
          if made else " (united into the original)"), "info", "modeler")
     return {"ok": True, "names": made}
@@ -1745,6 +1775,88 @@ def _auto_rlc(s: Session, name: str = "", signal: Optional[list] = None,
             "width": plan["width"]}
 
 
+@command("boundary.edit")
+def _edit_boundary(s: Session, name: str = "", newName: str = "", params: Optional[dict] = None, **_):
+    """Rename a boundary and/or change its values (what the properties panel edits)."""
+    d = s.require_design()
+    b = next((x for x in d.boundaries if x.name == name), None)
+    if b is None:
+        raise KeyError(f"no boundary named {name!r}")
+    p = dict(params or {})
+    if b.btype == "finite_cond":
+        if "material" in p:
+            b.params["material"] = d.materials.get(p["material"]) if hasattr(d.materials, "get") else p["material"]
+        for k in ("thickness", "roughness"):
+            if k in p and p[k] not in (None, ""):
+                b.params[k] = to_si(p[k])
+    elif b.btype == "impedance":
+        zs = complex(b.params.get("Zs", 0))
+        b.params["Zs"] = complex(_num(p.get("R", zs.real)), _num(p.get("X", zs.imag)))
+    elif b.btype == "lumped_rlc":
+        for k in ("R", "L", "C"):
+            if k in p:
+                b.params[k] = _num(p[k])
+        if "parallel" in p:
+            b.params["parallel"] = bool(p["parallel"])
+        if "direction" in p:
+            b.params["direction"] = list(p["direction"]) if p["direction"] else None
+    elif p:
+        raise ValueError(f"a {b.btype} boundary has no values to edit")
+    if newName and newName != b.name:
+        b.name = naming.unique_name([x.name for x in d.boundaries if x is not b], str(newName))
+    d.mesh = None
+    s.dirty = True
+    return {"ok": True, "name": b.name}
+
+
+@command("excitation.edit")
+def _edit_port(s: Session, name: str = "", newName: str = "", impedance: Any = None,
+               modes: Any = None, deembed: Any = None, renorm: Any = None, **_):
+    d = s.require_design()
+    p = next((x for x in d.ports if x.name == name), None)
+    if p is None:
+        raise KeyError(f"no port named {name!r}")
+    if impedance not in (None, "") and p.kind == "lumped":
+        z = _num(impedance)
+        if z <= 0:
+            raise ValueError("the port impedance must be positive")
+        p.impedance = complex(z)
+    if modes not in (None, "") and p.kind == "wave":
+        if not 1 <= int(modes) <= 8:
+            raise ValueError("a wave port carries 1 to 8 modes")
+        p.num_modes = int(modes)
+    if deembed not in (None, ""):
+        p.deembed = to_si(deembed)
+    if renorm is not None:
+        p.renormalize_z = None if renorm in ("", 0, "0") else float(_num(renorm))
+    if newName and newName != p.name:
+        p.name = naming.unique_name([x.name for x in d.ports if x is not p], str(newName))
+    d.mesh = None
+    s.dirty = True
+    return {"ok": True, "name": p.name}
+
+
+@command("project.rename")
+def _rename_project(s: Session, name: str = "", **_):
+    new = str(name).strip()
+    if not new:
+        raise ValueError("give the project a name")
+    s.project.name = new
+    s.dirty = True
+    return {"ok": True, "name": new}
+
+
+@command("design.setUnits")
+def _set_units(s: Session, units: str = "mm", **_):
+    from .measurement import UNITS
+    d = s.require_design()
+    if units not in UNITS:
+        raise ValueError(f"unknown unit {units!r}")
+    d.units = units
+    s.dirty = True
+    return {"ok": True, "units": units}
+
+
 @command("boundary.delete")
 def _del_bnd(s: Session, name: str = "", **_):
     d = s.require_design()
@@ -2270,26 +2382,52 @@ def _add_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discret
 
 
 @command("analysis.editSweep")
-def _edit_sweep(s: Session, setup: str = "", name: str = "", kind: str = "discrete",
-                start: Any = "1GHz", stop: Any = "10GHz", count: int = 101,
-                spacing: str = "linear", tolerance: Any = None,
-                maxPoints: Any = None, step: Any = None,
-                saveFields: bool = False, **_):
+def _edit_sweep(s: Session, setup: str = "", name: str = "", newName: str = "",
+                kind: Any = None, start: Any = None, stop: Any = None, count: Any = None,
+                spacing: Any = None, tolerance: Any = "keep", maxPoints: Any = "keep",
+                step: Any = "keep", saveFields: Any = None, **_):
+    """Change any of a sweep's fields; fields not given keep their value."""
     d = s.require_design()
     st = d.get_setup(setup or None)
     sw = next((x for x in st.sweeps if x.name == name), None)
     if sw is None:
         raise KeyError(f"no sweep named {name!r}")
-    tol, mp = _sweep_args(kind, spacing, tolerance, maxPoints, step)
-    sw.kind, sw.spacing = kind, spacing
-    sw.start, sw.stop = to_si(start, "frequency"), to_si(stop, "frequency")
-    sw.count = int(count)
+    kind = kind or sw.kind
+    spacing = spacing or sw.spacing
+    tol_in = sw.tolerance if tolerance == "keep" else tolerance
+    mp_in = sw.max_points if maxPoints == "keep" else maxPoints
+    step_in = sw.step if step == "keep" else step
+    tol, mp = _sweep_args(kind, spacing, tol_in, mp_in, step_in)
+    a = to_si(start, "frequency") if start not in (None, "") else sw.start
+    b = to_si(stop, "frequency") if stop not in (None, "") else sw.stop
+    if spacing == "single":
+        b = a
+    if not (b >= a > 0):
+        raise ValueError("the sweep needs 0 < start <= stop")
+    old = (sw.kind, sw.spacing, sw.start, sw.stop, sw.count, sw.tolerance, sw.max_points, sw.step,
+           sw.save_fields, sw.points)
+    sw.kind, sw.spacing, sw.start, sw.stop = kind, spacing, a, b
+    if count not in (None, ""):
+        sw.count = int(count)
     sw.tolerance, sw.max_points = tol, mp
-    sw.step = to_si(step, "frequency") if step else None
-    sw.save_fields = bool(saveFields)
+    sw.step = to_si(step_in, "frequency") if step_in not in (None, "") else None
+    if saveFields is not None:
+        sw.save_fields = bool(saveFields)
     sw.points = None
+    try:
+        n = len(sw.frequencies())
+    except Exception:
+        (sw.kind, sw.spacing, sw.start, sw.stop, sw.count, sw.tolerance, sw.max_points, sw.step,
+         sw.save_fields, sw.points) = old
+        raise
+    if n > 20001:
+        (sw.kind, sw.spacing, sw.start, sw.stop, sw.count, sw.tolerance, sw.max_points, sw.step,
+         sw.save_fields, sw.points) = old
+        raise ValueError("maximum 20001 frequency points per sweep")
     if spacing == "step":
-        sw.count = len(sw.frequencies())
+        sw.count = n
+    if newName and newName != sw.name:
+        sw.name = naming.unique_name([x.name for x in st.sweeps if x is not sw], str(newName))
     d.mesh = None
     s.dirty = True
     return {"ok": True, "name": sw.name}
@@ -2377,10 +2515,12 @@ def _del_mesh_op(s: Session, name: str = "", **_):
 
 @command("mesh.setOperation")
 def _set_mesh_op(s: Session, name: str = "", maxLength: Any = None,
-                 enabled: Optional[bool] = None, **_):
+                 enabled: Optional[bool] = None, newName: str = "", **_):
     d = s.require_design()
     for m in d.mesh_ops:
         if m.name == name:
+            if newName and newName != m.name:
+                m.name = naming.unique_name([x.name for x in d.mesh_ops if x is not m], str(newName))
             if maxLength is not None:
                 m.max_length = to_si(maxLength)
             if enabled is not None:
@@ -3714,3 +3854,6 @@ def dispatch(s: Session, method: str,
 
 
 __all__ = ["COMMANDS", "dispatch", "state_json", "MUTATING"]
+
+from .modeling2 import register as _register_modeling2
+_register_modeling2(command)

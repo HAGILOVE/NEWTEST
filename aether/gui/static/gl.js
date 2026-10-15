@@ -339,6 +339,24 @@ class Viewport {
     for (const o of this.objects) {
       if (o.visible === false) continue;
       if (mode === 'object') {
+        // The way HFSS reads a rubber band: dragged right-to-left it takes only
+        // what lies completely inside; left-to-right it also takes whatever the
+        // rectangle merely crosses. The object's extent on screen is that of
+        // its bounding box.
+        const crossing = box.x1 >= box.x0;
+        const bb = this._objectBox(o);
+        if (bb) {
+          const sc = bb.map(c => this.project(c)).filter(Boolean);
+          if (sc.length) {
+            const bx0 = Math.min(...sc.map(q => q.x)), bx1 = Math.max(...sc.map(q => q.x));
+            const by0 = Math.min(...sc.map(q => q.y)), by1 = Math.max(...sc.map(q => q.y));
+            const fully = bx0 >= lo.x && bx1 <= hi.x && by0 >= lo.y && by1 <= hi.y;
+            const apart = bx1 < lo.x || bx0 > hi.x || by1 < lo.y || by0 > hi.y;
+            if (!crossing) { if (fully && sc.length === 8) out.objects.push(o.name); continue; }
+            if (apart) continue;
+            if (fully) { out.objects.push(o.name); continue; }
+          }
+        }
         // sample the triangles rather than every vertex: a hit anywhere in
         // the rectangle is a hit, and a million-vertex body must not cost a
         // million projections
@@ -375,6 +393,39 @@ class Viewport {
       }
     }
     return out;
+  }
+
+  /* Is any part of the object, inside this screen rectangle, the thing a click
+     there would actually hit (not hidden behind another object)? */
+  frontIn(name, box) {
+    const o = this.objects.find(x => x.name === name);
+    if (!o || !o.cpu) return false;
+    const lo = { x: Math.min(box.x0, box.x1), y: Math.min(box.y0, box.y1) };
+    const hi = { x: Math.max(box.x0, box.x1), y: Math.max(box.y0, box.y1) };
+    const n = o.cpu.length / 9, step = Math.max(1, Math.floor(n / 120));
+    for (let t = 0; t < n; t += step) {
+      const i = t * 9;
+      const q = this.project([(o.cpu[i] + o.cpu[i + 3] + o.cpu[i + 6]) / 3,
+        (o.cpu[i + 1] + o.cpu[i + 4] + o.cpu[i + 7]) / 3, (o.cpu[i + 2] + o.cpu[i + 5] + o.cpu[i + 8]) / 3]);
+      if (!q || q.x < lo.x || q.x > hi.x || q.y < lo.y || q.y > hi.y) continue;
+      const h = this.pick(q.x, q.y);
+      if (h && h.name === name) return true;
+    }
+    return false;
+  }
+
+  /* the eight corners of an object's bounding box (cached) */
+  _objectBox(o) {
+    if (o._bb !== undefined) return o._bb;
+    const c = o.cpu;
+    if (!c || !c.length) return (o._bb = null);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < c.length; i += 3) for (let a = 0; a < 3; a++) {
+      const v = c[i + a]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v;
+    }
+    const pts = [];
+    for (const x of [lo[0], hi[0]]) for (const y of [lo[1], hi[1]]) for (const z of [lo[2], hi[2]]) pts.push([x, y, z]);
+    return (o._bb = pts);
   }
 
   setSelection(names) { this.selection = new Set(names || []); }
@@ -740,8 +791,15 @@ class Viewport {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       drag.x = e.clientX; drag.y = e.clientY;
       if (drag.mode === 'rot') {
-        this.yaw -= dx * 0.0085;
-        this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch + dy * 0.0085));
+        // A free orbit: the pitch goes on past the poles (the view simply turns
+        // upside down) instead of stopping at the vertical, and when it is
+        // upside down a horizontal drag still turns the model the way the
+        // hand moves.
+        const flipped = Math.cos(this.pitch) < 0;
+        this.yaw -= dx * 0.0085 * (flipped ? -1 : 1);
+        this.pitch += dy * 0.0085;
+        const TAU = 2 * Math.PI;
+        this.pitch -= TAU * Math.round(this.pitch / TAU);
       } else {
         const k = this.dist * 0.0016;
         this.pan[0] -= dx * k; this.pan[1] += dy * k;
@@ -795,8 +853,11 @@ class Viewport {
   _camera() {
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     const dir = [Math.cos(this.yaw)*cp, Math.sin(this.yaw)*cp, sp];
-    const right = V3.norm(V3.cross(dir, [0,0,1]));
-    const up = V3.cross(right, dir);
+    // Both are continuous through the poles (unlike a fixed world "up"), which
+    // is what lets the orbit go all the way round.
+    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+    const right = [sy, -cy, 0];
+    const up = [-cy*sp, -sy*sp, cp];
     const ctr = V3.add(this.center,
       V3.add(V3.scale(right, this.pan[0]), V3.scale(up, this.pan[1])));
     const eye = V3.add(ctr, V3.scale(dir, this.dist));

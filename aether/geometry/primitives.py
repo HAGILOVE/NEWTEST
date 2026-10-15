@@ -438,6 +438,35 @@ class Revolve(Shape):
 
 
 @dataclass
+class PathSweep(Shape):
+    """A planar profile swept along a polyline path (Draw > Sweep > Along Path)."""
+    profile: Shape = None       # type: ignore
+    path: List[Vec] = field(default_factory=list)
+
+    def __init__(self, profile: Shape, path, name: str = ""):
+        super().__init__(name=name or profile.name)
+        self.profile = profile
+        self.path = [_v(p) for p in path]
+        if len(self.path) < 2:
+            raise ValueError("a sweep path needs at least two points")
+
+    def children(self):
+        return [self.profile]
+
+    def _params(self):
+        return {"path": self.path}
+
+    def _local_bounds(self):
+        lo, hi = (np.array(v, float) for v in self.profile.bounds())
+        p = np.array(self.path, float)
+        shift = p - p[0]
+        corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                            for z in (lo[2], hi[2])])
+        pts = np.vstack([corners + d for d in shift])
+        return tuple(pts.min(axis=0)), tuple(pts.max(axis=0))  # type: ignore
+
+
+@dataclass
 class FaceOperation(Shape):
     """
     A modelling operation applied to picked faces of a body.
