@@ -23,7 +23,7 @@ import scipy.sparse as sp
 
 from ..core.constants import eta0
 from ..core.logging import get_logger
-from .assembly import assemble_surface_mass
+from .assembly import assemble_directional_mass, assemble_surface_mass
 from .elements import DofMap
 
 log = get_logger("fem.boundary")
@@ -42,6 +42,8 @@ class BoundaryTerms:
         self.matrices: Dict[str, sp.csr_matrix] = {}
         self.kinds: Dict[str, str] = {}
         self.eta_rel: Dict[str, complex] = {}
+        self.sheet_scale: Dict[str, float] = {}       # width / length of lumped RLC sheets
+        self.directions: Dict[str, np.ndarray] = {}
         self._pec_dofs = None
         self._build()
 
@@ -61,6 +63,16 @@ class BoundaryTerms:
                 pec_tris.append(tris)
             elif b.btype in NATURAL_FREE:
                 pass                                   # natural: nothing to do
+            elif b.btype == "lumped_rlc":
+                # A lumped element conducts along its own direction only, and a
+                # sheet of width w and length L around a total impedance Z has
+                # the surface impedance Z * w / L.
+                d, L, w = sheet_geometry(mesh.nodes, tris, b.params.get("direction"))
+                self.matrices[b.name] = assemble_directional_mass(mesh, dm, tris, d)
+                self.kinds[b.name] = b.btype
+                self.eta_rel[b.name] = _relative_eta(mesh, tris)
+                self.sheet_scale[b.name] = w / L
+                self.directions[b.name] = d
             else:
                 self.matrices[b.name] = assemble_surface_mass(mesh, dm, tris)
                 self.kinds[b.name] = b.btype
@@ -99,11 +111,51 @@ class BoundaryTerms:
                 y = 1.0 / self.eta_rel[name]
             else:
                 Zs = b.surface_impedance(freq)
-                if abs(Zs) < 1e-30:
+                if b.btype == "lumped_rlc":
+                    Zs = Zs * self.sheet_scale.get(name, 1.0)
+                    if abs(Zs) < 1e-12:                       # a short: very conductive, not "nothing"
+                        Zs = 1e-12
+                elif abs(Zs) < 1e-30:
                     continue
                 y = eta0 / Zs
             A = A + (1j * k0 * y) * B
         return A.tocsr()
+
+
+def sheet_geometry(nodes, tris, direction=None):
+    """
+    ``(unit direction, length L, width w)`` of a flat sheet.
+
+    *direction* is the way the current runs; without one it is the sheet's
+    shorter in-plane side, which is how a lumped element bridges a gap. L is
+    the extent along it and w = area / L.
+    """
+    tris = np.asarray(tris, np.int64)
+    pts = nodes[np.unique(tris)]
+    tri = nodes[tris]
+    area = 0.5 * float(np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum())
+    c = pts - pts.mean(axis=0)
+    _, sv, vt = np.linalg.svd(c, full_matrices=False)
+    normal = vt[2] if len(sv) > 2 else np.array([0.0, 0.0, 1.0])
+    d = None
+    if direction is not None and np.linalg.norm(np.asarray(direction, float)) > 1e-12:
+        d = np.asarray(direction, float)
+        d = d - np.dot(d, normal) * normal                  # in the sheet's plane
+        if np.linalg.norm(d) > 1e-9:
+            d = d / np.linalg.norm(d)
+        else:
+            d = None
+    if d is None:
+        # the axes of the sheet's own outline: principal directions, shorter one
+        e1, e2 = vt[0], vt[1]
+        ext = [float(np.ptp(pts @ e1)), float(np.ptp(pts @ e2))]
+        d = e1 if ext[0] <= ext[1] else e2
+        # snap to a coordinate axis when it is (nearly) one
+        k = int(np.argmax(np.abs(d)))
+        if abs(d[k]) > 0.999:
+            d = np.eye(3)[k] * np.sign(d[k])
+    L = float(np.ptp(pts @ d)) or 1.0
+    return d, L, area / L
 
 
 def _relative_eta(mesh, tris) -> complex:

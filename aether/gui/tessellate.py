@@ -374,7 +374,7 @@ def tessellate_occ(shape: Shape, deflection: Optional[float] = None) -> Dict:
 
     lo, hi = shape.bounds()
     diag = float(np.linalg.norm(np.asarray(hi) - np.asarray(lo))) or 1.0
-    h = deflection or diag / 22.0
+    h = deflection or diag  # planar faces need no interior points; curvature sizing refines the round ones
     with GmshSession("tess") as gmsh:
         dts = build_shape(shape, gmsh)
         gmsh.model.occ.synchronize()
@@ -432,6 +432,7 @@ def _frame(axis) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def tessellate_analytic(shape: Shape, n_seg: int = 128) -> Dict:
     from ..geometry.primitives import _apply_xform_points
+    owner = None
 
     if isinstance(shape, Box):
         p = np.asarray(shape.position, float)
@@ -439,6 +440,7 @@ def tessellate_analytic(shape: Shape, n_seg: int = 128) -> Dict:
         v = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
                       [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], float)
         verts, tris = p + v * s, _BOX_FACES
+        owner = np.repeat(np.arange(6, dtype=np.int64), 2)       # two triangles per face
 
     elif isinstance(shape, Sphere):
         verts, tris = _uv_sphere(np.asarray(shape.center, float),
@@ -451,6 +453,9 @@ def tessellate_analytic(shape: Shape, n_seg: int = 128) -> Dict:
         r2 = shape.radius if isinstance(shape, Cylinder) else shape.r2
         sweep = getattr(shape, "angle", 2 * math.pi)
         verts, tris = _tube(c, a, u, w, r1, r2, shape.height, n_seg, sweep)
+        if sweep >= 2 * math.pi - 1e-9:
+            # four triangles per segment: two of the side, one of each cap
+            owner = np.tile(np.array([0, 0, 1, 2], np.int64), len(tris) // 4)
 
     elif isinstance(shape, Torus):
         a, u, w = _frame(shape.axis)
@@ -474,7 +479,7 @@ def tessellate_analytic(shape: Shape, n_seg: int = 128) -> Dict:
 
     for t in shape._xform:
         verts = _apply_xform_points(verts, t)
-    return _pack(verts, tris)
+    return _pack(verts, tris, owner)
 
 
 def _uv_sphere(c, r, nu, nv):
@@ -789,6 +794,20 @@ def _harvest_entity(gmsh, dim: int, tag: int, xform, node_table=None) -> Dict:
     return out
 
 
+_ANALYTIC_SEGMENTS = 64
+
+
+def _analytic_is_exact(shape: Shape) -> bool:
+    """Shapes whose display mesh needs no CAD kernel."""
+    if getattr(shape, "_cad_unreadable", ""):
+        return False
+    if isinstance(shape, (Box, Sphere, Torus)):
+        return True
+    if isinstance(shape, (Cylinder, Cone)):
+        return getattr(shape, "angle", 2 * math.pi) >= 2 * math.pi - 1e-9
+    return False
+
+
 def tessellate(shape: Shape, prefer_occ: bool = True) -> Dict:
     """
     Triangulate one solid for display, OCC first, analytic as fallback.
@@ -827,6 +846,14 @@ def tessellate(shape: Shape, prefer_occ: bool = True) -> Dict:
             whole = None
         if whole is not None:
             return dict(whole)
+    if _analytic_is_exact(shape):
+        # A box, cylinder, cone, sphere or torus is a formula, not a CAD body:
+        # triangulating it directly takes microseconds, where building it in
+        # the CAD kernel and meshing it costs tens of milliseconds *each*, which
+        # is what made a project of a few hundred parts open so slowly.
+        buf = tessellate_analytic(shape, n_seg=_ANALYTIC_SEGMENTS)
+        _cache_put(key, dict(buf))
+        return buf
     if prefer_occ:
         try:
             from ..geometry.kernel import available

@@ -139,6 +139,8 @@ class Viewport {
     // drawn inside it; it is available on request, not by default
     this.showRadiation = false;
     this.opaque = false;
+    this.solidParts = false;          // parts opaque, regions (air, vacuum) left see-through
+    this.userAlpha = new Set();       // objects whose transparency the user set by hand
     this.mode = 'shaded';          // shaded | wireframe | shadedEdges
     this.showGrid = true;
     this.showTriad = true;
@@ -849,7 +851,8 @@ class Viewport {
       // Solid Display: air, vacuum and PML regions carry a material
       // transparency near 1, so a model made mostly of them renders as an
       // almost empty window. This forces every body opaque instead.
-      const alpha = this.opaque ? Math.max(o.alpha, 0.94) : o.alpha;
+      const solid = this.opaque || (this.solidParts && o.alpha >= 0.2 && !this.userAlpha.has(o.name));
+      const alpha = solid ? Math.max(o.alpha, 0.94) : o.alpha;
       gl.depthMask(alpha > 0.985);
       gl.uniform3fv(gl.getUniformLocation(P, 'uColor'), o.color);
       gl.uniform1f(gl.getUniformLocation(P, 'uAlpha'),

@@ -386,6 +386,9 @@ def _write_boundary(parent: WarpBlock, b, d) -> WarpBlock:
         blk.add_prop("Resistance", f"{b.params.get('R', 0.0):.10g}")
         blk.add_prop("Inductance", f"{b.params.get('L', 0.0):.10g}")
         blk.add_prop("Capacitance", f"{b.params.get('C', 0.0):.10g}")
+        blk.add_prop("UseResist", bool(b.params.get("parallel", True)))
+        if b.params.get("direction") is not None:
+            blk.add_prop("Direction", [float(x) for x in b.params["direction"]])
     return blk
 
 

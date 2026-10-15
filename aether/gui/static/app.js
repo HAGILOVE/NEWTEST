@@ -1021,7 +1021,7 @@ function selectorFields(prefix, opts = {}) {
   return wrap;
 }
 
-function dlgBoundary() {
+function dlgBoundary(preset) {
   const body = el('div');
   body.appendChild(field('Name', inp('bn-name', '', 'text',
     { placeholder: 'auto' })));
@@ -1030,7 +1030,7 @@ function dlgBoundary() {
     ['radiation', 'Radiation'], ['finite_cond', 'Finite Conductivity'],
     ['impedance', 'Impedance'], ['lumped_rlc', 'Lumped RLC'],
     ['symmetry_e', 'Symmetry — Perfect E'], ['symmetry_h', 'Symmetry — Perfect H']],
-    'pec')));
+    typeof preset === 'string' ? preset : 'pec')));
   const s = selectorFields('bs-', { default: 'outerExceptPorts' });
   body.appendChild(s);
   const extra = el('div', { id: 'bn-extra' });
@@ -1061,6 +1061,11 @@ function dlgBoundary() {
       extra.appendChild(el('div', { class: 'check' },
         el('input', { type: 'checkbox', id: 'bn-par', checked: 'checked' }),
         el('label', { for: 'bn-par' }, 'Parallel combination')));
+      extra.appendChild(field('Current direction', sel('bn-dir', [['', 'Automatic (across the gap)'],
+        ['1,0,0', '+X'], ['0,1,0', '+Y'], ['0,0,1', '+Z']], '')));
+      extra.appendChild(el('div', { class: 'hint' },
+        'Values take engineering suffixes (2.2n, 0.5p, 1k). The element is Z · w/L per square, so '
+        + 'its impedance across the gap is the one typed here.'));
     }
   };
   setTimeout(() => { $('#bn-type').onchange = build; build(); }, 0);
@@ -1072,8 +1077,9 @@ function dlgBoundary() {
       p.roughness = gv('bn-ro') || 0;
     } else if (t === 'impedance') { p.R = gn('bn-R'); p.X = gn('bn-X'); }
     else if (t === 'lumped_rlc') {
-      p.R = gn('bn-R'); p.L = gn('bn-L'); p.C = gn('bn-C');
+      p.R = gv('bn-R'); p.L = gv('bn-L'); p.C = gv('bn-C');
       p.parallel = $('#bn-par').checked;
+      if (gv('bn-dir')) p.direction = gv('bn-dir').split(',').map(Number);
     }
     await guard(() => rpc('boundary.assign',
       { type: t, name: gv('bn-name'), selector: s.read(), params: p }));
@@ -1271,7 +1277,98 @@ async function dlgPolarity(name) {
   setTimeout(prev, 50);
 }
 
-function dlgExcitation(kind) {
+/* Two metals selected, then Port: the signal and the ground are known, so the
+   port is worked out from them -- sheet or plane, size from the signal's width
+   where it is fed, signal -> ground -- and the dialog only asks what is left. */
+function twoSelectedMetals() {
+  const sel = (STATE && STATE.selection) || [];
+  if (sel.length !== 2 || FACE_PICKS.length || EDGE_PICKS.length) return null;
+  const objs = ((STATE.design && STATE.design.objects) || []).concat((STATE.design && STATE.design.sheets) || []);
+  const metal = n => { const o = objs.find(x => x.name === n); return !!o && o.isMetal !== false; };
+  return sel.every(metal) ? sel.slice() : null;
+}
+function dlgPortBetween(kind, names) {
+  const body = el('div');
+  const mk = (n) => [{ kind: 'object', name: n }];
+  body.appendChild(field('Signal', sel('pb-sig', names.map(n => [n, n]), names[0])));
+  body.appendChild(field('Ground', sel('pb-gnd', names.map(n => [n, n]), names[1])));
+  body.appendChild(el('div', { class: 'row' }, el('button', { id: 'pb-swap', onclick: () => {
+    const a = $('#pb-sig'), b = $('#pb-gnd'); const t = a.value; a.value = b.value; b.value = t;
+    preview(); } }, 'Swap signal / ground')));
+  body.appendChild(field('Port type', sel('pb-kind', [['lumped', 'Lumped port'], ['wave', 'Wave port'],
+    ['auto', 'Automatic (wave if the line reaches the model boundary)']], kind)));
+  body.appendChild(field('Name', inp('pb-name', '', 'text', { placeholder: 'auto' })));
+  body.appendChild(field('Impedance [Ω]', inp('pb-z', '50')));
+  body.appendChild(field('Modes (wave)', inp('pb-modes', '1', 'number', { min: 1, max: 8 })));
+  const info = el('div', { class: 'hint', id: 'pb-info' }, '…');
+  body.appendChild(info);
+  body.appendChild(el('div', { class: 'row' }, el('button', { onclick: () => {
+    closeTopDialog(); dlgExcitation(kind, true); } }, 'Advanced dialog…')));
+  let seq = 0;
+  const preview = async () => {
+    const me = ++seq;
+    try {
+      const r = await rpc('excitation.autoPort', { preview: true, kind: gv('pb-kind'),
+        signal: mk(gv('pb-sig')), ground: mk(gv('pb-gnd')) });
+      if (me === seq) { info.textContent = r.text; info.style.color = ''; }
+    } catch (e) { if (me === seq) { info.textContent = e.message; info.style.color = 'var(--err, #c0392b)'; } }
+  };
+  setTimeout(() => { for (const id of ['pb-sig', 'pb-gnd', 'pb-kind']) $('#' + id).onchange = preview; preview(); }, 0);
+  dialog({ title: 'Assign Port between two metals', body, ok: 'Assign', onOk: async () => {
+    const r = await guard(() => rpc('excitation.autoPort', { kind: gv('pb-kind'), name: gv('pb-name'),
+      signal: mk(gv('pb-sig')), ground: mk(gv('pb-gnd')),
+      impedance: parseFloat(gv('pb-z')) || 50, modes: parseInt(gv('pb-modes')) || 1 }));
+    clearPicks();
+    await refreshGeometry(false);
+    await refreshAssignments();
+    renderTree();
+  } });
+}
+
+/* A lumped R / L / C between two metals: a bridging sheet, sized from the
+   signal where it ends, carrying the element -- no coordinates. */
+function dlgRlc() {
+  const two = twoSelectedMetals();
+  const useMarks = PORT_MARK_COUNT.signal > 0 && PORT_MARK_COUNT.ground > 0;
+  if (!two && !useMarks) return dlgBoundary('lumped_rlc');
+  const body = el('div');
+  const mk = (n) => [{ kind: 'object', name: n }];
+  if (two) {
+    body.appendChild(field('Signal (+)', sel('rl-sig', two.map(n => [n, n]), two[0])));
+    body.appendChild(field('Ground (−)', sel('rl-gnd', two.map(n => [n, n]), two[1])));
+  } else {
+    body.appendChild(el('div', { class: 'hint' }, 'Between the marked signal and ground conductors.'));
+  }
+  body.appendChild(field('Name', inp('rl-name', '', 'text', { placeholder: 'auto' })));
+  body.appendChild(field('R [Ω]', inp('rl-R', '50')));
+  body.appendChild(field('L [H]', inp('rl-L', '0')));
+  body.appendChild(field('C [F]', inp('rl-C', '0')));
+  body.appendChild(el('div', { class: 'check' },
+    el('input', { type: 'checkbox', id: 'rl-par', checked: 'checked' }),
+    el('label', { for: 'rl-par' }, 'Parallel combination (clear for series)')));
+  const info = el('div', { class: 'hint', id: 'rl-info' }, '…');
+  body.appendChild(info);
+  const ends = () => two ? { signal: mk(gv('rl-sig')), ground: mk(gv('rl-gnd')) } : {};
+  const preview = async () => {
+    try { info.textContent = (await rpc('boundary.autoRlc', Object.assign({ preview: true }, ends()))).text; }
+    catch (e) { info.textContent = e.message; }
+  };
+  setTimeout(() => { if (two) for (const id of ['rl-sig', 'rl-gnd']) $('#' + id).onchange = preview; preview(); }, 0);
+  dialog({ title: 'Assign Lumped RLC', body, ok: 'Assign', onOk: async () => {
+    await guard(() => rpc('boundary.autoRlc', Object.assign({ name: gv('rl-name'), R: gv('rl-R'), L: gv('rl-L'),
+      C: gv('rl-C'), parallel: $('#rl-par').checked }, ends())));
+    clearPicks();
+    await refreshGeometry(false);
+    await refreshAssignments();
+    renderTree();
+  } });
+}
+
+function dlgExcitation(kind, classic) {
+  if (!classic) {
+    const two = twoSelectedMetals();
+    if (two) return dlgPortBetween(kind, two);
+  }
   const u = U();
   const body = el('div');
   body.appendChild(field('Name', inp('ex-name', '', 'text',
@@ -1724,6 +1821,7 @@ async function openProjectFile(path) {
     catch (e) { toastError('Materials: ' + e.message); }
     try { await refreshGeometry(true); }
     catch (e) { toastError('Display: ' + e.message); }
+    solidOnLoad();
     try {
       const status = await rpc('project.importStatus');
       if (status.errors.length) setTimeout(() => dlgImportStatus(status), 0);
@@ -2085,7 +2183,7 @@ const RIBBON = {
   Simulation: [
     ['Engineering', [['i-check','Diagnostics',dlgDiagnostics],['i-setup','Controls',dlgControls],['i-box','Air Region',dlgAirRegion]]],
     ['Studies', [['i-run','Optimize',dlgOptimize],['i-sweep','Parameter Study',dlgStudy],['i-report','Study Results',dlgStudyResults],['i-run','Cancel',()=>guard(()=>rpc('analysis.cancel'))]]],
-    ['Boundaries', [['i-bnd', 'Assign', dlgBoundary]]],
+    ['Boundaries', [['i-bnd', 'Assign', () => dlgBoundary()], ['i-bnd', 'Lumped RLC', dlgRlc]]],
     ['Excitations', [['i-port', 'Lumped Port (pick)', () => startPortPick('lumped')],
       ['i-port', 'Wave Port (pick)', () => startPortPick('wave')],
       ['i-port', 'Wave Port…', () => dlgExcitation('wave')],
@@ -2212,6 +2310,7 @@ async function dlgImportCad() {
         name: gv('ic-name'), material: gv('ic-mat'), unit: gv('ic-unit'),
         separate: sepBox ? sepBox.checked : true }));
       await refreshGeometry(true);
+      solidOnLoad();
     } finally { hideBusyOverlay(true); }
   }});
 }
@@ -2555,6 +2654,7 @@ function showProps(type, name) { propTarget = { type, name }; renderProps(); }
 function displayProps(row, o) {
   const set = (prop, value) => guard(async () => {
     await rpc('modeler.setProperty', { name: o.name, prop, value });
+    if (prop === 'transparency') noteUserTransparency([o.name], value);
     await refreshGeometry(false);
   });
 
@@ -2654,6 +2754,7 @@ function multiProps(row) {
   }
   const apply = (prop, value) => guard(async () => {
     await rpc('modeler.setProperty', { names: objs.map(o => o.name), prop, value });
+    if (prop === 'transparency') noteUserTransparency(objs.map(o => o.name), value);
     await refreshGeometry(false);
   });
   row('Selected', el('span', {}, objs.length + ' objects'));
@@ -3428,10 +3529,34 @@ async function plotField() {
    looking at air". Solid Display ignores material transparency. */
 function toggleOpaque() {
   if (!VP) return;
-  VP.opaque = !VP.opaque;
+  // "on" is either state of solid drawing: everything forced solid, or just the
+  // parts (what a freshly opened file shows)
+  const on = !(VP.opaque || VP.solidParts);
+  VP.opaque = on;
+  VP.solidParts = on;
   const b = $('#vt-solid');
-  if (b) b.classList.toggle('on', VP.opaque);
-  setStatus('Solid display ' + (VP.opaque ? 'on' : 'off'), '');
+  if (b) b.classList.toggle('on', on);
+  setStatus('Solid display ' + (on ? 'on' : 'off'), '');
+}
+
+/* A file opens solid: the parts are drawn opaque, as the CAD tool that made
+   them would, while air / vacuum / radiation regions (almost fully
+   transparent by nature) stay see-through so the parts inside can be seen.
+   A transparency the user sets on an object afterwards is honoured. */
+function solidOnLoad() {
+  if (!VP) return;
+  VP.solidParts = true;
+  VP.userAlpha = new Set();
+  const b = $('#vt-solid');
+  if (b) b.classList.toggle('on', true);
+}
+function noteUserTransparency(names, value) {
+  if (!VP) return;
+  VP.userAlpha = VP.userAlpha || new Set();
+  for (const n of names) {
+    if (value === '' || value === null) VP.userAlpha.delete(n);
+    else VP.userAlpha.add(n);
+  }
 }
 
 /* "It loaded and nothing appeared" has several different causes. Rather than
@@ -3492,7 +3617,8 @@ async function checkDisplayAfterOpen() {
     const r = await rpc('view.displayReport');
     const drawn = r.rows.filter(x => x.state === 'displayed');
     if (drawn.length && r.faint.length === drawn.length && VP && !VP.opaque) {
-      toggleOpaque();
+      VP.opaque = true;                  // every body is a region: show them anyway
+      const sb = $('#vt-solid'); if (sb) sb.classList.add('on');
       setStatus('All bodies are near-transparent regions — Solid Display '
         + 'turned on (View ▸ Solid Display to undo)', '');
     }
@@ -3509,7 +3635,7 @@ function updateOverlay() {
   const boxed = currentBuffers.filter(o => o.placeholder).length;
   info.innerHTML = d ? `${d.name}<br>${drawn} of ${d.objects.length + d.sheets.length}`
     + ` object(s) drawn · ${VP.mode}<br>units ${d.units}`
-    + (VP && VP.opaque ? '<br>solid display' : '')
+    + (VP && (VP.opaque || VP.solidParts) ? '<br>solid display' : '')
     + (MISSING_GEOMETRY.length
       ? `<br><span style="color:var(--err)">${MISSING_GEOMETRY.length}` +
         ' object(s) have no readable geometry</span>'
@@ -3523,7 +3649,7 @@ function updateOverlay() {
   const btn = $('#vt-mode');
   if (btn) btn.classList.toggle('on', VP.mode !== 'shaded');
   const sb = $('#vt-solid');
-  if (sb) sb.classList.toggle('on', !!(VP && VP.opaque));
+  if (sb) sb.classList.toggle('on', !!(VP && (VP.opaque || VP.solidParts)));
 }
 
 /* ------------------------------------------------------- drawing by point */
@@ -3652,7 +3778,7 @@ async function startPointDraw(kind) {
   const z = (VP.bbox && VP.bbox[0]) ? VP.bbox[0][2] : 0;
   DRAW = {
     kind, stage: 'p1', p1: null, p2: null, height: 0, topRadius: 0,
-    plane: (DRAW && DRAW.plane) || 'xy', offset: 0, faceSnap: true,
+    plane: (DRAW && DRAW.plane) || 'xy', offset: 0, faceSnap: true, geomSnap: true,
     typing: false, snap: true, name: '', material: 'vacuum'
   };
   if (DRAW.plane === 'xy') DRAW.offset = z;
@@ -3670,6 +3796,7 @@ async function startPointDraw(kind) {
 function cancelPointDraw() {
   DRAW = null;
   VP && VP.setDraft(null);
+  VP && VP.setHover(null);
   const box = $('#vp-draw');
   if (box) { box.classList.remove('on'); box.innerHTML = ''; }
   const lab = $('#vp-dim');
@@ -3739,6 +3866,12 @@ function buildDrawPanel() {
   box.appendChild(el('div', { class: 'row' },
     el('label', { for: 'dw-facesnap' }, 'Plane from face'), fsn,
     el('span', { class: 'note', style: 'margin:0' }, 'hover a flat face')));
+  const gsn = el('input', { type: 'checkbox', id: 'dw-geosnap', style: 'width:auto' });
+  gsn.checked = DRAW.geomSnap !== false;
+  gsn.onchange = () => { DRAW.geomSnap = gsn.checked; if (VP) VP.setHover(null); };
+  box.appendChild(el('div', { class: 'row' },
+    el('label', { for: 'dw-geosnap' }, 'Snap to model'), gsn,
+    el('span', { class: 'note', style: 'margin:0' }, 'vertex · edge middle · face centre')));
 
   const grid = el('div', { class: 'dgrid' });
   grid.appendChild(el('span', {}));
@@ -4041,19 +4174,40 @@ function drawResolvePoint(px, py) {
   return onPlane(h.point, nval);
 }
 
+/* Snap to the model: a vertex, an edge mid-point or a face centre of any
+   visible object within a few pixels of the cursor beats the grid. The point
+   stays on the drawing plane after the first one, so it is the *projection*
+   of the feature that is used -- which is what lets a rectangle start at the
+   middle of an edge or run to the centre of a face. */
+function geometrySnap(px, py, flat) {
+  if (!VP || (DRAW && DRAW.geomSnap === false)) return null;
+  let hit = null;
+  try { hit = VP.pickFeature(px, py, 'point'); } catch (e) { hit = null; }
+  VP.setHover(hit, 'point');
+  if (!hit) return null;
+  const q = hit.point.slice();
+  if (flat !== null && flat !== undefined) { const P = planeOf(); q[P.n] = flat; }
+  const hint = $('#vp-hint');
+  if (hint) hint.textContent = `snap: ${hit.snapKind} of ${hit.name}`;
+  return { point: q, kind: hit.snapKind };
+}
+
 function drawPickHover(px, py) {
   if (!DRAW) return;
   updateCursorReadout(px, py);
   if (DRAW.typing) return;                     // the keyboard owns the numbers
   if (DRAW.stage === 'h') {
     const h = heightFromCursor(px, py);
+    const g = geometrySnap(px, py, null);
+    if (g && DRAW.p1) { DRAW.height = g.point[planeOf().n] - DRAW.p1[planeOf().n]; updateDrawPanel(); return; }
     if (h !== null) { DRAW.height = snapScalar(h); updateDrawPanel(); }
     return;
   }
   if (DRAW.stage === 'ready') return;
-  const raw = drawResolvePoint(px, py);
+  const g = geometrySnap(px, py, DRAW.stage === 'p1' || !DRAW.p1 ? null : DRAW.p1[planeOf().n]);
+  const raw = g ? g.point : drawResolvePoint(px, py);
   if (!raw) return;
-  const p = snapPoint(raw);
+  const p = g ? raw : snapPoint(raw);
   if (DRAW.stage === 'p1') DRAW.p1 = p;
   else if (DRAW.stage === 'p2') DRAW.p2 = p;
   updateDrawPanel(p);
@@ -4072,15 +4226,18 @@ function drawPickClick(px, py) {
   }
   if (DRAW.stage === 'h') {
     const h = heightFromCursor(px, py);
-    if (h !== null) DRAW.height = snapScalar(h);
+    const g = geometrySnap(px, py, null);
+    if (g && DRAW.p1) DRAW.height = g.point[planeOf().n] - DRAW.p1[planeOf().n];
+    else if (h !== null) DRAW.height = snapScalar(h);
     DRAW.stage = 'ready';
     updateDrawPanel();
     if (drawIsComplete()) commitDraw();
     return true;
   }
-  const raw = drawResolvePoint(px, py);
+  const g = geometrySnap(px, py, DRAW.stage === 'p1' || !DRAW.p1 ? null : DRAW.p1[planeOf().n]);
+  const raw = g ? g.point : drawResolvePoint(px, py);
   if (!raw) return true;
-  const p = snapPoint(raw);
+  const p = g ? raw : snapPoint(raw);
   if (DRAW.stage === 'p1') {
     DRAW.p1 = p;
     DRAW.offset = p[planeOf().n];
@@ -4422,9 +4579,10 @@ function moveLengthEdited(advance) {
 function movePickHover(px, py) {
   if (!MOVE) return;
   updateCursorReadout(px, py);
-  const hit = VP.planePoint(px, py, MOVE.stage === 'p1' ? null : MOVE.plane);
+  const g = geometrySnap(px, py, null);
+  const hit = g ? { point: g.point } : VP.planePoint(px, py, MOVE.stage === 'p1' ? null : MOVE.plane);
   if (!hit) return;
-  const p = MOVE.snap && MOVE.stage !== 'p1' ? snapPointFor(MOVE, hit.point)
+  const p = !g && MOVE.snap && MOVE.stage !== 'p1' ? snapPointFor(MOVE, hit.point)
     : hit.point;
   if (MOVE.stage === 'p1') MOVE.p1 = p;
   else if (MOVE.stage === 'p2') MOVE.p2 = p;
@@ -4433,9 +4591,10 @@ function movePickHover(px, py) {
 
 function movePickClick(px, py) {
   if (!MOVE) return false;
-  const hit = VP.planePoint(px, py, MOVE.stage === 'p1' ? null : MOVE.plane);
+  const g = geometrySnap(px, py, null);
+  const hit = g ? { point: g.point } : VP.planePoint(px, py, MOVE.stage === 'p1' ? null : MOVE.plane);
   if (!hit) return true;
-  const p = MOVE.snap && MOVE.stage !== 'p1' ? snapPointFor(MOVE, hit.point)
+  const p = !g && MOVE.snap && MOVE.stage !== 'p1' ? snapPointFor(MOVE, hit.point)
     : hit.point;
   if (MOVE.stage === 'p1') {
     MOVE.p1 = p;
@@ -4691,6 +4850,28 @@ function contextMenu(x, y, items) {
   return m;
 }
 
+/* Hide / Show for whatever is selected -- the same commands from the viewport
+   and from the project tree. */
+async function setObjectsVisible(names, value) {
+  await guard(async () => {
+    for (const n of names)
+      await rpc('modeler.setProperty', { name: n, prop: 'visible', value });
+    await refreshGeometry(false);
+    renderTree();
+  });
+}
+function visibilityMenuItems(names) {
+  const objs = ((STATE.design && STATE.design.objects) || []).concat((STATE.design && STATE.design.sheets) || []);
+  const vis = (n) => { const o = objs.find(x => x.name === n); return !o || o.visible !== false; };
+  const others = objs.filter(o => !names.includes(o.name) && o.visible !== false).map(o => o.name);
+  const hiddenAll = objs.filter(o => o.visible === false).map(o => o.name);
+  return [
+    ['Hide', () => setObjectsVisible(names.filter(vis), false), names.some(vis)],
+    ['Show', () => setObjectsVisible(names.filter(n => !vis(n)), true), names.some(n => !vis(n))],
+    ['Hide Others', () => setObjectsVisible(others, false), names.length > 0 && others.length > 0],
+    ['Show All', () => setObjectsVisible(hiddenAll, true), hiddenAll.length > 0]];
+}
+
 /* The viewport menu depends on what was hit and on the pick mode. */
 function viewportContext(hit, ev) {
   const name = hit && hit.name;
@@ -4734,6 +4915,8 @@ function viewportContext(hit, ev) {
     ['Arrange ▸ Rotate…', () => dlgTransform('rotate'), hasSel],
     ['Duplicate ▸ Along Line…', () => dlgDuplicate('line'), hasSel],
     ['Boolean…', dlgBoolean, hasSel],
+    null,
+    ...visibilityMenuItems(STATE.selection || []),
     null,
     ['Copy', () => editCopy(false), hasSel],
     ['Paste', editPaste, !!STATE.history?.clipboard],
@@ -4795,6 +4978,7 @@ function portMenuItems() {
     ['Assign Lumped Port  (auto)', () => autoPort('lumped'), both],
     ['Assign Wave Port  (auto)', () => autoPort('wave'), both],
     ['Assign Port  (auto type)', () => autoPort('auto'), both],
+    ['Assign Lumped RLC…  (between the two)', dlgRlc, both || !!twoSelectedMetals()],
     ['Clear Signal / Ground Marks', clearPortMarks, PORT_MARK_COUNT.signal + PORT_MARK_COUNT.ground > 0]];
   if (two) items.splice(5, 0,
     ['Lumped Port between the two selected  (1st = signal)', async () => {
@@ -4833,18 +5017,7 @@ function treeContext(ev, type, name, extra) {
       ['Assign Lumped Port…', () => dlgExcitation('lumped')],
       ['Add Mesh Operation…', dlgMeshOp],
       null,
-      ['Hide', () => guard(async () => {
-        await rpc('modeler.setProperty',
-          { name, prop: 'visible', value: false });
-        await refreshGeometry(false);
-      })],
-      ['Show All', () => guard(async () => {
-        for (const o of STATE.design.objects)
-          if (o.visible === false)
-            await rpc('modeler.setProperty',
-              { name: o.name, prop: 'visible', value: true });
-        await refreshGeometry(false);
-      })],
+      ...visibilityMenuItems((STATE.selection || []).length ? STATE.selection : [name]),
       null,
       ['Delete', () => guard(() => rpc('modeler.delete', { names: [name] })
         .then(() => refreshGeometry(false)))]);

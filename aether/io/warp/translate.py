@@ -996,6 +996,8 @@ def _read_one_boundary(b, btype, btype_raw, name, sc, design, lib, report):
             L=float(evaluate(b.get("Inductance", 0.0), sc)),
             C=float(evaluate(b.get("Capacitance", 0.0), sc)),
             parallel=bool(b.get("UseResist", True)))
+        if b.get("Direction") is not None:
+            params["direction"] = [float(x) for x in b.get("Direction")]
     design.assign_boundary(name, btype, sel, **params)
     report.boundaries.append(f"{name} [{btype}]")
 

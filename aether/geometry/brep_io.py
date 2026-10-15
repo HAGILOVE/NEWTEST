@@ -621,7 +621,8 @@ def tight_bounds_each(gmsh, dim_tags, harvest=None,
         prune_to_bodies(gmsh, dim_tags)
         if harvest is not None:
             from ..gui.tessellate import display_mesh_options
-            h = fit_mesh_size(gmsh, diag / 22.0)
+            # flat faces need no interior points; the curvature option sizes the round ones
+            h = fit_mesh_size(gmsh, diag)
             display_mesh_options(gmsh, h)
         else:
             h = fit_mesh_size(gmsh, diag / 12.0, budget=budget)

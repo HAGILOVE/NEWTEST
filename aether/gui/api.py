@@ -1673,9 +1673,10 @@ def _assign_bnd(s: Session, type: str = "pec", name: str = "",
     elif type == "impedance":
         d.assign_impedance(nm, sel, complex(p.get("R", 0.0), p.get("X", 0.0)))
     elif type == "lumped_rlc":
-        d.assign_lumped_rlc(nm, sel, R=p.get("R", 0.0), L=p.get("L", 0.0),
-                            C=p.get("C", 0.0),
-                            parallel=bool(p.get("parallel", True)))
+        d.assign_lumped_rlc(nm, sel, R=_num(p.get("R", 0.0)), L=_num(p.get("L", 0.0)),
+                            C=_num(p.get("C", 0.0)),
+                            parallel=bool(p.get("parallel", True)),
+                            direction=p.get("direction"))
     else:
         d.assign_boundary(nm, type, sel)
     s.dirty = True
@@ -1684,6 +1685,64 @@ def _assign_bnd(s: Session, type: str = "pec", name: str = "",
                    + (f" — {n} face triangles." if n > 0 else "."),
                    "info", "boundary")
     return {"ok": True, "name": nm, "faces": n}
+
+
+def _num(v) -> float:
+    """A number typed with an engineering suffix (``2.2n``, ``0.5p``, ``1k``)."""
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).strip().replace("Ω", "").replace("ohm", "").replace("H", "").replace("F", "")
+    if not t:
+        return 0.0
+    mult = {"T": 1e12, "G": 1e9, "M": 1e6, "k": 1e3, "K": 1e3, "m": 1e-3, "u": 1e-6, "µ": 1e-6,
+            "n": 1e-9, "p": 1e-12, "f": 1e-15}
+    if t[-1] in mult and not t[-1].isdigit():
+        return float(t[:-1]) * mult[t[-1]]
+    return float(t)
+
+
+@command("boundary.autoRlc")
+def _auto_rlc(s: Session, name: str = "", signal: Optional[list] = None,
+              ground: Optional[list] = None, R: Any = 0.0, L: Any = 0.0, C: Any = 0.0,
+              parallel: bool = True, end: str = "", preview: bool = False, **_):
+    """
+    A lumped R / L / C element between two conductors: a sheet that bridges
+    the gap (sized from the signal where it ends, like an automatic lumped
+    port) carrying a Lumped RLC boundary whose current runs signal -> ground.
+    """
+    from . import autoport as ap
+    d = s.require_design()
+    pm = _marks(s)
+    S = ap.marks_from_picks(d, signal if signal is not None else pm["signal"], "signal")
+    G = ap.marks_from_picks(d, ground if ground is not None else pm["ground"], "ground")
+    D_lo, D_hi = (np.asarray(v, float) for v in d.bounding_box())
+    plan = ap.plan_lumped(S, G, D_lo, D_hi, [], end)
+    text = (f"Lumped RLC: {plan['width'] * 1e3:.4g} mm wide x {plan['gap'] * 1e3:.4g} mm gap "
+            f"along {'XYZ'[plan['axis']]} ({plan['note']}).")
+    if preview:
+        return {"ok": True, "preview": True, "text": text}
+    r_, l_, c_ = _num(R), _num(L), _num(C)
+    if not (r_ or l_ or c_):
+        raise ValueError("enter a resistance, an inductance or a capacitance")
+    nm = (naming.unique_name([b.name for b in d.boundaries], name) if name
+          else naming.suggest_boundary(d, "lumped_rlc"))
+    sheet_name = naming.unique_name([o.name for o in d.solids] + [o.name for o in d.sheets], nm + "_sheet")
+    sheet = prim.Polygon([[float(v) for v in q] for q in plan["corners"]], name=sheet_name)
+    d.add_sheet(sheet_name, sheet)
+    sel = ShapeSelector(sheet, tol=1e-7)
+    d.assign_lumped_rlc(nm, sel, R=r_, L=l_, C=c_, parallel=bool(parallel),
+                        direction=[float(v) for v in plan["direction"]])
+    d.mesh = None
+    s.dirty = True
+    n = _warn_if_empty(s, d, sel, nm, "Lumped RLC")
+    s.messages.add(f"Lumped RLC {nm!r}: " + ", ".join(
+        f"{lab} = {v:g}" for lab, v in (("R", r_), ("L", l_), ("C", c_)) if v)
+        + (" in parallel" if parallel and sum(bool(v) for v in (r_, l_, c_)) > 1 else
+           " in series" if sum(bool(v) for v in (r_, l_, c_)) > 1 else "") + f". {text}",
+        "info", "boundary")
+    pm["signal"], pm["ground"] = [], []
+    return {"ok": True, "name": nm, "sheet": sheet_name, "faces": n, "gap": plan["gap"],
+            "width": plan["width"]}
 
 
 @command("boundary.delete")
@@ -1779,12 +1838,26 @@ def _assign_port_between(s: Session, kind: str = "lumped", name: str = "",
           else naming.suggest_port(d, kind))
 
     sc, sn, slo, shi = _pick_geometry(sig)
+    if kind != "wave":
+        # The sheet is sized from the signal where it is fed and put against the
+        # ground: see aether.gui.autoport. (Centre-to-centre of two faces only
+        # works when they happen to be stacked.)
+        return _auto_port(s, kind="lumped", name=name, signal=sig, ground=gnd,
+                          impedance=p.get("impedance", 50.0))
     if kind == "wave":
         sel = _make_selector(d, {"kind": "faces", "faces": sig})
         line = None
         if gnd:
-            gc = _pick_geometry(gnd)[0]
-            line = (tuple(sc), tuple(gc))         # signal -> ground
+            from . import autoport as ap
+            try:
+                S_ = ap.marks_from_picks(d, sig, "signal")
+                G_ = ap.marks_from_picks(d, gnd, "ground")
+                D_lo, D_hi = (np.asarray(v, float) for v in d.bounding_box())
+                plan = ap.plan_wave(S_, G_, D_lo, D_hi)
+                line = (tuple(float(v) for v in plan["signal"]), tuple(float(v) for v in plan["ground"]))
+            except Exception:                                     # noqa: BLE001
+                gc = _pick_geometry(gnd)[0]
+                line = (tuple(sc), tuple(gc))     # signal -> ground
         d.add_wave_port(nm, selector=sel, num_modes=int(p.get("modes", 1)),
                         deembed=p.get("deembed", 0.0),
                         renormalize_z=p.get("renorm"), integration_line=line)
@@ -1993,7 +2066,7 @@ def _port_marks_clear(s: Session, **_):
 @command("excitation.autoPort")
 def _auto_port(s: Session, kind: str = "auto", name: str = "",
                signal: Optional[list] = None, ground: Optional[list] = None,
-               impedance: Any = 50.0, modes: int = 1, end: str = "", **_):
+               impedance: Any = 50.0, modes: int = 1, end: str = "", preview: bool = False, **_):
     """
     A port made from the marked signal and ground: no coordinates.
 
@@ -2011,6 +2084,11 @@ def _auto_port(s: Session, kind: str = "auto", name: str = "",
     axname = "XYZ"
     if chosen == "lumped":
         plan = ap.plan_lumped(S, G, D_lo, D_hi, ap.taken_planes(d), end)
+        if preview:
+            return {"ok": True, "preview": True, "kind": "lumped", "text": (
+                f"Lumped port: {plan['width'] * 1e3:.4g} mm wide x {plan['gap'] * 1e3:.4g} mm gap "
+                f"along {axname[plan['axis']]} at {axname[plan['plane_axis']]} = {plan['plane_at'] * 1e3:.4g} mm "
+                f"({plan['note']}); field from signal to ground.")}
         sheet_name = naming.unique_name([o.name for o in d.solids] + [o.name for o in d.sheets],
                                         nm + "_sheet")
         sheet = prim.Polygon([[float(v) for v in q] for q in plan["corners"]], name=sheet_name)
@@ -2037,6 +2115,10 @@ def _auto_port(s: Session, kind: str = "auto", name: str = "",
                "width": plan["width"]}
     else:
         plan = ap.plan_wave(S, G, D_lo, D_hi, ap.taken_planes(d), end)
+        if preview:
+            return {"ok": True, "preview": True, "kind": "wave", "text": (
+                f"Wave port on the {axname[plan['axis']]} = {plan['at'] * 1e3:.4g} mm plane: {plan['note']}."
+                + ("" if plan["on_boundary"] else " (not on the model boundary)"))}
         sel = PlaneSelector(axname[plan["axis"]].lower(), plan["at"], tol=1e-7,
                             window=plan["window"])
         d.add_wave_port(nm, selector=sel, num_modes=int(modes),

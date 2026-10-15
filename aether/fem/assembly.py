@@ -175,6 +175,38 @@ def assemble_surface_mass(mesh, dofmap: DofMap, tris: np.ndarray,
                          shape=(n_dof, n_dof)).tocsr().astype(np.complex128)
 
 
+def assemble_directional_mass(mesh, dofmap: DofMap, tris: np.ndarray, direction,
+                              order: Optional[int] = None) -> sp.csr_matrix:
+    """
+    ``B_ij = int_S (d . N_i)(d . N_j) dS`` over the given triangles: the
+    surface mass matrix of only the tangential field component along the unit
+    vector *d*. A lumped element conducts current along its own direction only.
+    """
+    from .elements import tri_basis, tri_geometry
+    from .quadrature import tri_rule
+    order = order or dofmap.order
+    n_dof = dofmap.n_dof
+    if len(tris) == 0:
+        return sp.csr_matrix((n_dof, n_dof), dtype=np.complex128)
+    d = np.asarray(direction, float)
+    d = d / max(float(np.linalg.norm(d)), 1e-300)
+    tris = np.sort(np.asarray(tris, dtype=np.int64), axis=1)
+    area, g2, nrm = tri_geometry(mesh.nodes, tris)
+    dofs, signs = surface_dofs(mesh, dofmap, tris)
+    nbt = dofs.shape[1]
+    qp, qw = tri_rule(2 if order == 1 else 4)
+    Be = np.zeros((len(tris), nbt, nbt))
+    for q in range(len(qw)):
+        N, _ = tri_basis(order, g2, qp[q])
+        nd = N @ d                                    # (tris, basis)
+        Be += (qw[q] * area)[:, None, None] * nd[:, :, None] * nd[:, None, :]
+    Be *= signs[:, :, None] * signs[:, None, :]
+    rows = np.repeat(dofs, nbt, axis=1).ravel()
+    cols = np.tile(dofs, (1, nbt)).ravel()
+    return sp.coo_matrix((Be.ravel(), (rows, cols)),
+                         shape=(n_dof, n_dof)).tocsr().astype(np.complex128)
+
+
 def surface_dofs(mesh, dofmap: DofMap, tris: np.ndarray
                  ) -> Tuple[np.ndarray, np.ndarray]:
     """
