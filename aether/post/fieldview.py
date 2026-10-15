@@ -368,3 +368,40 @@ def to_unit_scale(values: np.ndarray, scale: str = "linear",
 __all__ = ["COMPONENTS", "FieldPatch", "surface_patch", "cut_plane_patch", "conductor_faces",
            "surface_vectors", "cut_vectors",
            "to_unit_scale", "QUANTITIES"]
+
+
+def locate_points(mesh, pts, candidates: int = 24):
+    """
+    The tetrahedron that contains each point, and whether it was found inside.
+
+    The nearest element centroids are tried in turn (barycentric test); a point
+    outside the mesh gets the nearest element and ``inside = False``.
+    """
+    from scipy.spatial import cKDTree
+    pts = np.atleast_2d(np.asarray(pts, float))
+    X = np.asarray(mesh.nodes, float)
+    T = np.asarray(mesh.tets, np.int64)
+    cen = X[T].mean(axis=1)
+    k = min(candidates, len(T))
+    _, near = cKDTree(cen).query(pts, k=k)
+    near = near.reshape(len(pts), -1)
+    best = near[:, 0].copy()
+    inside = np.zeros(len(pts), bool)
+    for c in range(near.shape[1]):
+        todo = ~inside
+        if not todo.any():
+            break
+        ti = near[todo, c]
+        V = X[T[ti]]                                           # (m,4,3)
+        A = np.stack([V[:, 1] - V[:, 0], V[:, 2] - V[:, 0], V[:, 3] - V[:, 0]], axis=2)
+        det = np.linalg.det(A)
+        ok = np.abs(det) > 1e-300
+        lam = np.zeros((len(ti), 3))
+        if ok.any():
+            lam[ok] = np.einsum("mij,mj->mi", np.linalg.inv(A[ok]), (pts[todo] - V[:, 0])[ok])
+        bary = np.column_stack([1.0 - lam.sum(axis=1), lam])
+        hit = ok & (bary.min(axis=1) >= -1e-9)
+        idx = np.nonzero(todo)[0]
+        best[idx[hit]] = ti[hit]
+        inside[idx[hit]] = True
+    return best, inside

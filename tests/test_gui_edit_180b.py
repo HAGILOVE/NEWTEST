@@ -407,3 +407,115 @@ def test_the_area_filter_limits_what_a_band_takes(tab):
     band(pg, (min(cx, dx_), min(cy, dy_)), (max(cx, dx_), max(cy, dy_)))
     assert pg.evaluate("()=>STATE.selection") == ["b"]
     pg.evaluate("()=>{AREA_FILTER=Object.assign(AREA_FILTER,{exclude:'',include:''});}")
+
+
+# -------------------------------------------------------------- move edge
+def test_the_move_edge_dialog_slides_an_edge_of_a_rectangle(tab):
+    pg, session = tab
+    from aether.gui.api import dispatch
+    dispatch(session, "modeler.draw", dict(shape="rectangle", name="R", params={"position": ["0mm", "10mm", "0mm"],
+                                                                                 "size": ["4mm", "2mm"], "plane": "xy"}))
+    refresh(pg)
+    pg.evaluate("()=>{EDGE_PICKS=[{object:'R',a:[4e-3,10e-3,0],b:[4e-3,12e-3,0],length:2e-3}];dlgMoveEdge();}")
+    pg.wait_for_selector("#me-d")
+    pg.fill("#me-d", "1.5mm")
+    pg.click(".dialog button.pri:has-text('Apply')")
+    pg.wait_for_timeout(800)
+    sheet = next(x for x in session.design.sheets if x.name == "R")
+    lo, hi = sheet.shape.bounds()
+    assert hi[0] - lo[0] == pytest.approx(5.5e-3)
+    assert not pg.errs
+
+
+# ------------------------------------------------------ keyboard shortcuts
+def test_a_shortcut_can_be_assigned_used_and_removed(tab):
+    pg, session = tab
+    pg.evaluate("()=>{SHORTCUTS={};saveShortcuts();}")
+    pg.evaluate("()=>dlgShortcuts()")
+    pg.wait_for_selector("#ks-list")
+    pg.fill("#ks-filter", "Split")
+    pg.click(".ks-set >> nth=0")
+    pg.keyboard.press("Alt+Shift+S")
+    pg.wait_for_timeout(300)
+    assert pg.evaluate("()=>Object.keys(SHORTCUTS)") == ["Alt+Shift+S"]
+    assert "Alt+Shift+S" in pg.inner_text("#ks-list")
+    pg.fill("#ks-filter", "")
+    pg.click(".dialog button:text-is('Close')")
+    pg.wait_for_timeout(200)
+    pg.evaluate("()=>setSelection(['a'])")
+    pg.locator("#gl").click(position={"x": 5, "y": 5})                # focus the viewport, not a field
+    pg.keyboard.press("Alt+Shift+S")
+    pg.wait_for_selector("#sp-plane", timeout=5000)                    # Split… opened
+    pg.keyboard.press("Escape")
+    # reserved keys are refused
+    pg.evaluate("()=>dlgShortcuts()")
+    pg.wait_for_selector("#ks-list")
+    pg.click(".ks-set >> nth=0")
+    pg.keyboard.press("Control+C")
+    pg.wait_for_timeout(200)
+    assert "reserved" in pg.inner_text("#ks-note")
+    pg.evaluate("()=>{SHORTCUTS={};saveShortcuts();}")
+    assert not pg.errs
+
+
+# --------------------------------------------------------------- results
+@pytest.fixture()
+def solved_tab(desktop, browser):
+    import aether as ae
+    H, W, LEN = 1e-3, 10e-3, 20e-3
+    z0 = ae.eta0 * H / W
+    d = ae.Design("pp", units="mm")
+    d.add_box("air", (0, 0, 0), (LEN, W, H), "vacuum")
+    d.assign_boundary("PMC_y0", "pmc", ae.PlaneSelector("y", 0))
+    d.assign_boundary("PMC_y1", "pmc", ae.PlaneSelector("y", W))
+    d.add_lumped_port("p1", axis="x", value=0, impedance=z0, direction=(0, 0, 1))
+    d.add_lumped_port("p2", axis="x", value=LEN, impedance=z0, direction=(0, 0, 1))
+    st = d.add_setup("S", frequency="5GHz")
+    st.add_sweep("sw", "4GHz", "6GHz", 3, kind="discrete", save_fields=True)
+    d.generate_mesh(5e9, force=True, size=0.0015)
+    pg, session = open_page(desktop, browser, d)
+    session.solution = d.solve(adaptive=False, progress=False, save_fields=True)
+    session.solution_serial += 1
+    pg.evaluate("async()=>{STATE=await (await fetch('/api/state?token='+encodeURIComponent(window.AETHER_TOKEN))).json();renderAll();}")
+    pg.wait_for_function("()=>STATE.hasSolution", timeout=30000)
+    yield pg, session
+    pg.close()
+
+
+def test_field_on_line_report_plots_and_can_be_changed(solved_tab):
+    pg, _ = solved_tab
+    pg.evaluate("()=>openReport('fieldline')")
+    pg.wait_for_selector(".doc-page.active .plot-area svg", timeout=30000)
+    assert pg.locator("#fl-err").count() == 0
+    txt = pg.inner_text(".doc-page.active .report-body > .hint")
+    assert "line length" in txt and "outside" not in txt
+    pg.select_option("#fl-c", "z")
+    pg.wait_for_selector(".doc-page.active .plot-area svg", timeout=30000)
+    pg.select_option("#fl-q", "H")
+    pg.wait_for_timeout(1200)
+    assert "|H" in pg.inner_text(".doc-page.active .plot-area")
+    assert pg.evaluate("()=>RESULTS.items.some(i=>i.kind==='fieldline')")
+    assert not pg.errs
+
+
+def test_expression_plot_and_output_variables(solved_tab):
+    pg, session = solved_tab
+    pg.evaluate("()=>openReport('expr')")
+    pg.wait_for_selector("#ex-text", timeout=30000)
+    pg.wait_for_selector(".doc-page.active .plot-area svg", timeout=30000)
+    pg.fill("#ex-text", "Lin = 1e9*im(Z(1,1))/2/pi/Freq\nratio = abs(S(1,1))/abs(S(2,1))")
+    pg.click("#ex-go")
+    pg.wait_for_function("()=>/Lin/.test(document.querySelector('.doc-page.active .plot-area')?.textContent||'')", timeout=20000)
+    # an error is shown, not swallowed
+    pg.fill("#ex-text", "S(9,1)")
+    pg.click("#ex-go")
+    pg.wait_for_selector("#ex-err", timeout=20000)
+    assert "no port 9" in pg.inner_text("#ex-err")
+    # output variables are edited in a dialog and kept on the design
+    pg.evaluate("()=>dlgOutputVariables()")
+    pg.wait_for_selector("#ov-text")
+    pg.fill("#ov-text", "Zin = Z(1,1)\nLin = 1e9*im(Zin)/2/pi/Freq")
+    pg.click(".dialog button.pri:has-text('Save')")
+    pg.wait_for_timeout(600)
+    assert session.design.output_variables == {"Zin": "Z(1,1)", "Lin": "1e9*im(Zin)/2/pi/Freq"}
+    assert not pg.errs

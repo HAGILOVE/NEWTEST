@@ -1087,6 +1087,27 @@ function dlgSplit() {
   } });
 }
 
+/* Edit ▸ Move Edges: pick an edge of a flat polygon (E), give a distance, and it slides
+   sideways in its plane; positive is outwards. */
+function dlgMoveEdge() {
+  if (!EDGE_PICKS.length) return toastError('Pick an edge first: press E, then click an edge of a flat shape');
+  const e = EDGE_PICKS[0];
+  const u = U();
+  const body = el('div');
+  body.appendChild(field('Edge', el('div', { class: 'hint', style: 'margin:0' },
+    `${e.object} · length ${fmtLen(e.length || 0, u)}`)));
+  body.appendChild(field('Distance', inp('me-d', '1' + u)));
+  body.appendChild(el('div', { class: 'hint' }, 'Positive moves the edge outwards, negative inwards. The neighbouring edges '
+    + 'follow, so a gap or a trace width becomes a number you can change.'));
+  dialog({ title: 'Move Edge', body, ok: 'Apply', onOk: async () => {
+    const m = v => v.map(x => x + 'm');
+    await guard(() => rpc('modeler.moveEdge', { name: e.object, a: m(e.a), b: m(e.b), distance: gv('me-d') }));
+    EDGE_PICKS = []; VP && VP.setEdgeSelection([]);
+    await refreshGeometry(false);
+    refreshStatus();
+  } });
+}
+
 /* --------------------------------------------------------- clipboard ops */
 async function editCopy(cut) {
   const names = STATE.selection || [];
@@ -1346,7 +1367,7 @@ function pickPortLine(onDone, opts) {
   box = el('div', { id: 'vp-pline', class: 'vp-panel' });
   $('#viewport').appendChild(box);
   applyMoved(box);
-  box.appendChild(el('h4', {}, 'New Line — port polarity'));
+  box.appendChild(el('h4', {}, (opts && opts.title) || 'New Line — port polarity'));
   const rowFor = (label, pre) => {
     const r = el('div', { class: 'row' }, el('label', {}, label),
       ...['x', 'y', 'z'].map(c => inp(pre + c, '', 'text', { placeholder: c.toUpperCase(), spellcheck: 'false' })));
@@ -1355,7 +1376,8 @@ function pickPortLine(onDone, opts) {
   box.appendChild(el('div', { class: 'row' }, el('label', {}, 'Origin'), csSelect('plp-cs', () => {
     for (let i = 0; i < 2; i++) if (PLP_ABS[i]) PLP.write(i, PLP_ABS[i]);   // same points, new origin
   })));
-  rowFor('Signal +', 'plp-s'); rowFor('Ground −', 'plp-g');
+  const lab = (opts && opts.labels) || ['Signal +', 'Ground −'];
+  rowFor(lab[0], 'plp-s'); rowFor(lab[1], 'plp-g');
   const hint = el('div', { class: 'note', id: 'plp-note' });
   box.appendChild(hint);
   box.appendChild(el('div', { class: 'acts' },
@@ -2273,6 +2295,7 @@ const MENUS = [
     null,
     ['Sweep Face Along Normal\u2026', () => dlgFaceOp('sweep')],
     ['Move Faces\u2026', () => dlgFaceOp('move')],
+    ['Move Edges\u2026', dlgMoveEdge],
     null, ['Delete Selected', deleteSelection]]],
   ['Simulation', [
     ['Assign Boundary…', dlgBoundary],
@@ -2292,6 +2315,9 @@ const MENUS = [
     ['Eigenmode Data', () => openReport('eigen')],
     ['Far Field Radiation Pattern…', () => openReport('farfield')],
     ['Antenna Parameters vs Frequency…', () => openReport('antenna')],
+    ['Expression Plot (Output Variables)…', () => openReport('expr')],
+    ['Output Variables…', dlgOutputVariables],
+    ['Field on Line…', () => openReport('fieldline')],
     ['3D Radiation Pattern', () => showPattern(true)],
     ['Convergence Table', () => openReport('convergence')],
     null,
@@ -2315,6 +2341,7 @@ const MENUS = [
     ['Optimization…', dlgOptimize],
     ['Optimization Results…', dlgOptimizeResults],
     ['Cancel Running Analysis', () => guard(() => rpc('analysis.cancel'))],
+    ['Keyboard Shortcuts…', dlgShortcuts],
     ['Scripting Console', () => selectBottom('console')],
     ['Clear Messages', clearMessages]]],
   ['Help', [['About Aether Desktop', dlgAbout]]]
@@ -2382,7 +2409,8 @@ const RIBBON = {
     ['Dimensions', [['i-rect', 'Measure', dlgMeasure], ['i-box', 'Resize', dlgResize], ['i-setup', 'Parameters', dlgPrimitive]]],
     ['Parametric', [['i-setup', 'Variables', dlgVariables], ['i-export', 'Export CAD', dlgCadExport]]],
     ['Faces', [['i-import', 'Sweep Face', () => dlgFaceOp('sweep')],
-      ['i-move', 'Move Faces', () => dlgFaceOp('move')]]],
+      ['i-move', 'Move Faces', () => dlgFaceOp('move')],
+      ['i-move', 'Move Edges', dlgMoveEdge]]],
     ['Materials', [['i-mat', 'Add Material', dlgMaterial]]],
     ['Object', [['i-box', 'Delete', deleteSelection]]]
   ],
@@ -2407,6 +2435,8 @@ const RIBBON = {
       ['i-report', 'Eigenmodes', () => openReport('eigen')],
       ['i-report', 'Radiation', () => openReport('farfield')],
       ['i-report', 'Antenna', () => openReport('antenna')],
+      ['i-report', 'Expression', () => openReport('expr')],
+      ['i-field', 'Field on Line', () => openReport('fieldline')],
       ['i-report', 'Convergence', () => openReport('convergence')]]],
     ['Fields', [['i-field', 'E / H Field', () => showField(true)],
       ['i-field', 'Surface Current', () => showField(true, { quantity: 'J' })],
@@ -2646,6 +2676,103 @@ function dlgAbout() {
     '<p class="hint">Warps is independent software, not affiliated with, endorsed ' +
     'by or sponsored by any commercial simulation vendor.</p>' });
   dialog({ title: 'About', body, ok: null, cancel: 'Close' });
+}
+
+/* Keyboard shortcuts for any menu command (HFSS: Tools ▸ Keyboard Shortcuts).
+   Assigned keys are kept in this browser and can be exported / imported as a
+   file, so a set of favourites travels with the engineer. */
+const SHORTCUT_STORE = 'aether.shortcuts';
+const SHORTCUT_RESERVED = new Set(['Ctrl+C', 'Ctrl+V', 'Ctrl+X', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+A', 'Ctrl+S', 'Ctrl+O',
+  'Ctrl+N', 'Ctrl+W', 'Ctrl+D', 'Ctrl+M', 'Escape', 'Tab', 'Enter', 'Delete', 'Ctrl+Shift+V', 'Ctrl+Shift+Z', 'Ctrl+Shift+S']);
+let SHORTCUTS = (() => { try { return JSON.parse(localStorage.getItem(SHORTCUT_STORE) || '{}') || {}; } catch (e) { return {}; } })();
+function saveShortcuts() { try { localStorage.setItem(SHORTCUT_STORE, JSON.stringify(SHORTCUTS)); } catch (e) { /* ignore */ } }
+function comboOf(e) {
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return '';
+  let k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  if (k === ' ') k = 'Space';
+  return [(e.ctrlKey || e.metaKey) ? 'Ctrl' : '', e.altKey ? 'Alt' : '', e.shiftKey ? 'Shift' : '', k].filter(Boolean).join('+');
+}
+function shortcutCommands() {
+  const out = [];
+  for (const [menu, items] of MENUS) for (const it of items) {
+    if (!it) continue;
+    const label = typeof it[0] === 'function' ? it[0]() : it[0];
+    out.push({ id: menu + '|' + String(label).replace(/…|\.\.\./g, '').trim(), label: `${menu} ▸ ${String(label).replace(/…/g, '…')}`, fn: it[1], enabled: it[3] });
+  }
+  return out;
+}
+function runShortcut(combo) {
+  const id = SHORTCUTS[combo];
+  if (!id) return false;
+  const c = shortcutCommands().find(x => x.id === id);
+  if (!c) return false;
+  if (c.enabled && !c.enabled()) { setStatus('That command is not available right now', ''); return true; }
+  c.fn();
+  return true;
+}
+document.addEventListener('keydown', e => {
+  if (!Object.keys(SHORTCUTS).length) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (DIALOG_STACK.length || window.__capturingShortcut) return;
+  const combo = comboOf(e);
+  if (combo && SHORTCUTS[combo] && runShortcut(combo)) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+
+function dlgShortcuts() {
+  const body = el('div');
+  const filter = inp('ks-filter', '', 'text', { placeholder: 'filter commands…' });
+  const list = el('div', { id: 'ks-list', style: 'max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:6px' });
+  const note = el('div', { class: 'hint', id: 'ks-note' }, 'Click Set, then press the keys (Esc cancels). Ctrl+C / V / X / Z / S … stay as they are.');
+  const keyOf = (id) => Object.keys(SHORTCUTS).find(k => SHORTCUTS[k] === id) || '';
+  const draw = () => {
+    list.innerHTML = '';
+    const q = filter.value.trim().toLowerCase();
+    for (const c of shortcutCommands()) {
+      if (q && !c.label.toLowerCase().includes(q)) continue;
+      const key = keyOf(c.id);
+      const setb = el('button', { class: 'ks-set', onclick: () => {
+        note.textContent = `Press the key combination for “${c.label}”…`;
+        window.__capturingShortcut = true;
+        const h = ev => {
+          ev.preventDefault(); ev.stopPropagation();
+          const combo = comboOf(ev);
+          if (!combo) return;
+          document.removeEventListener('keydown', h, true);
+          window.__capturingShortcut = false;
+          if (ev.key === 'Escape') { note.textContent = 'Cancelled.'; return; }
+          if (SHORTCUT_RESERVED.has(combo)) { note.textContent = `${combo} is reserved by the application.`; return; }
+          const other = SHORTCUTS[combo];
+          for (const k of Object.keys(SHORTCUTS)) if (SHORTCUTS[k] === c.id) delete SHORTCUTS[k];
+          SHORTCUTS[combo] = c.id;
+          saveShortcuts();
+          note.textContent = `${combo} → ${c.label}` + (other && other !== c.id ? ' (moved from another command)' : '');
+          draw();
+        };
+        document.addEventListener('keydown', h, true);
+      } }, key ? 'Change' : 'Set');
+      const clr = key ? el('button', { class: 'ks-clear', onclick: () => { delete SHORTCUTS[key]; saveShortcuts(); draw(); } }, 'Clear') : null;
+      list.appendChild(el('div', { class: 'row', style: 'display:flex;gap:8px;align-items:center;padding:3px 8px' },
+        el('span', { style: 'flex:1' }, c.label), el('code', { style: 'min-width:96px' }, key || '—'), setb, clr));
+    }
+  };
+  filter.oninput = draw;
+  body.append(filter, list, note);
+  body.appendChild(el('div', { style: 'display:flex;gap:8px;margin-top:8px' },
+    el('button', { id: 'ks-export', onclick: () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(SHORTCUTS, null, 2)], { type: 'application/json' }));
+      el('a', { href: url, download: 'aether-shortcuts.json' }).click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } }, 'Export…'),
+    el('button', { id: 'ks-import', onclick: () => {
+      const f = el('input', { type: 'file', accept: '.json,application/json' });
+      f.onchange = async () => { try { const j = JSON.parse(await f.files[0].text());
+        if (j && typeof j === 'object') { SHORTCUTS = j; saveShortcuts(); draw(); note.textContent = 'Shortcuts loaded.'; } }
+        catch (e) { note.textContent = 'That file is not a shortcut list.'; } };
+      f.click();
+    } }, 'Import…'),
+    el('button', { id: 'ks-reset', onclick: () => { SHORTCUTS = {}; saveShortcuts(); draw(); note.textContent = 'All shortcuts removed.'; } }, 'Reset')));
+  dialog({ title: 'Keyboard Shortcuts', body, width: 'wide', ok: null, cancel: 'Close' });
+  draw();
 }
 
 function buildMenus() {
@@ -5288,6 +5415,7 @@ function viewportContext(hit, ev) {
     null,
     ['Sweep Face Along Normal…', () => dlgFaceOp('sweep'), hasFaces],
     ['Move Faces…', () => dlgFaceOp('move'), hasFaces],
+    ['Move Edges…', dlgMoveEdge, EDGE_PICKS.length > 0],
     null,
     ['Move by Two Points…', () => startInteractiveMove(), hasSel],
     ['Copy & Move by Two Points…', () => startInteractiveMove(null, { copy: true }), hasSel],
@@ -5826,7 +5954,7 @@ function ensurePage(id, title) {
 const RESULTS = { items: [], active: null, seq: {}, id: 0, key: '', loose: {},
                   serial: -1, busy: false };
 const RESULT_BASE = { sparam: 'S Parameter Plot', farfield: 'Radiation Pattern',
-  antenna: 'Antenna Parameters',
+  antenna: 'Antenna Parameters', expr: 'Expression Plot', fieldline: 'Field on Line',
   modes: 'Port Modes', convergence: 'Convergence', eigen: 'Eigenmode Data',
   E: 'E Field', H: 'H Field', J: 'Surface Current', P: '3D Radiation Pattern' };
 const FIELD_KEYS = ['quantity', 'where', 'axis', 'pos', 'excitation', 'freq',
@@ -5836,6 +5964,8 @@ function resultState(kind) {
   if (kind === 'sparam') return { form: reportForm, traces: reportTraces };
   if (kind === 'farfield') return Object.assign({}, ffState);
   if (kind === 'antenna') return JSON.parse(JSON.stringify(antState));
+  if (kind === 'expr') return JSON.parse(JSON.stringify(exprState));
+  if (kind === 'fieldline') return JSON.parse(JSON.stringify(lineState));
   if (kind === 'field') { const o = {}; for (const k of FIELD_KEYS) o[k] = FIELD[k]; return o; }
   return {};
 }
@@ -5844,6 +5974,8 @@ function applyResultState(item) {
   if (item.kind === 'sparam') { reportForm = st.form || 'db'; reportTraces = st.traces || null; }
   else if (item.kind === 'farfield') Object.assign(ffState, st);
   else if (item.kind === 'antenna') Object.assign(antState, JSON.parse(JSON.stringify(st)));
+  else if (item.kind === 'expr') Object.assign(exprState, JSON.parse(JSON.stringify(st)));
+  else if (item.kind === 'fieldline') Object.assign(lineState, JSON.parse(JSON.stringify(st)));
   else if (item.kind === 'field') for (const k of FIELD_KEYS) if (k in st) FIELD[k] = st[k];
 }
 function captureResult() {
@@ -5881,6 +6013,8 @@ async function openResult(item) {
     else if (item.kind === 'sparam') await reportSParam();
     else if (item.kind === 'farfield') await reportFarField();
     else if (item.kind === 'antenna') await reportAntenna();
+    else if (item.kind === 'expr') await reportExpr();
+    else if (item.kind === 'fieldline') await reportFieldLine();
     else if (item.kind === 'modes') await reportModes();
     else if (item.kind === 'convergence') await reportConvergence();
     else if (item.kind === 'eigen') await reportEigen();
@@ -6077,6 +6211,153 @@ async function reportEigen() {
     body.appendChild(el('div', { class: 'chart-wrap', style: 'margin-top:12px' },
       chart(ds.map(c => c.pass), [{ label: 'max Δf', y: ds.map(c => c.delta_f) }],
         'Adaptive pass', 'max relative Δf')));
+}
+
+/* Output variables and expression traces (HFSS "Output Variables" /
+   Calculator): any expression of S(i,j), Y(i,j), Z(i,j) and Freq plotted against
+   frequency — the inductance of a pad as 1e9*im(Z(1,1))/2/pi/Freq, a ratio of
+   two S-parameters, a dB of a difference. Variables defined once can be used
+   in any expression and are saved with the design. */
+let exprState = { text: 'L [nH] = 1e9*im(Z(1,1))/2/pi/Freq\nS21 [dB] = db(S(2,1))' };
+
+function parseExprLines(text) {
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue;
+    const i = line.indexOf('=');
+    if (i < 0) out.push({ name: line.trim(), expr: line.trim() });
+    else out.push({ name: line.slice(0, i).trim() || line.slice(i + 1).trim(), expr: line.slice(i + 1).trim() });
+  }
+  return out;
+}
+async function reportExpr() {
+  const page = ensurePage(pageIdFor('rep-x'), pageTitleFor('Expression Plot'));
+  const wrap = el('div', { class: 'report' });
+  const bar = el('div', { class: 'report-toolbar', style: 'flex-wrap:wrap;align-items:flex-start' });
+  const body = el('div', { class: 'report-body' });
+  wrap.append(bar, body);
+  page.appendChild(wrap);
+  const ta = el('textarea', { id: 'ex-text', rows: 3, spellcheck: 'false',
+    style: 'min-width:420px;font-family:monospace', title: 'one trace per line:  name = expression' }, exprState.text);
+  bar.append(el('label', {}, 'Traces'), ta,
+    el('button', { class: 'pri', id: 'ex-go', onclick: () => { exprState.text = ta.value; captureResult(); reportExpr(); } }, 'Plot'),
+    el('button', { id: 'ex-vars', onclick: () => dlgOutputVariables() }, 'Output variables…'));
+  const exprs = parseExprLines(exprState.text);
+  let data;
+  try { data = await rpc('results.expression', { exprs }); }
+  catch (e) { body.appendChild(el('p', { class: 'hint', id: 'ex-err', style: 'color:var(--err)' }, String(e.message || e))); return; }
+  body.appendChild(el('div', { class: 'chart-wrap' },
+    chart(data.freq.map(f => f / 1e9), data.traces.map(t => ({ label: t.label, y: t.y })), 'Frequency [GHz]', 'value',
+      { xUnit: ' GHz', state: plotState('expr'), onChange: captureResult })));
+  const tbl = el('table', { class: 'grid', style: 'margin-top:12px' });
+  tbl.appendChild(el('tr', {}, el('th', {}, 'Freq [GHz]'), ...data.traces.map(t => el('th', {}, t.label))));
+  const step = Math.max(1, Math.ceil(data.freq.length / 25));
+  for (let k = 0; k < data.freq.length; k += step)
+    tbl.appendChild(el('tr', {}, el('td', { class: 'num' }, (data.freq[k] / 1e9).toFixed(5)),
+      ...data.traces.map(t => el('td', { class: 'num' }, Number(t.y[k]).toPrecision(6)))));
+  body.appendChild(el('details', { class: 'data-table' }, el('summary', {}, 'Data table'), tbl));
+  captureResult();
+}
+async function dlgOutputVariables() {
+  await guard(async () => {
+    const r = await rpc('results.variables');
+    const ta = el('textarea', { id: 'ov-text', rows: 8, spellcheck: 'false', style: 'width:100%;font-family:monospace' },
+      r.variables.map(v => `${v.name} = ${v.expression}`).join('\n'));
+    const body = el('div', {}, field('name = expression, one per line', ta),
+      el('div', { class: 'hint' }, 'Available: Freq, pi, S(i,j), Y(i,j), Z(i,j), Z0(i), re im abs db ang_deg sqrt exp ln log10 sin cos tan atan, '
+        + 'and other variables by name. Example:  Lind = 1e9*im(Z(1,1))/2/pi/Freq'));
+    dialog({ title: 'Output Variables', body, ok: 'Save', onOk: async () => {
+      const variables = {};
+      for (const line of ta.value.split('\n')) {
+        if (!line.trim()) continue;
+        const m = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$/);
+        if (!m) throw new Error('Use name = expression: ' + line);
+        variables[m[1]] = m[2];
+      }
+      await rpc('results.setVariables', { variables });
+      if (RESULTS.active && RESULTS.active.kind === 'expr') reportExpr();
+    } });
+  });
+}
+
+/* The field along a straight line (HFSS: draw a line, then "Fields report"). The
+   line is typed or picked with two clicks; |E| or one component, the peak value
+   or an instant of the RF cycle, at any saved frequency and excitation. */
+let lineState = { start: null, end: null, points: 201, quantity: 'E', comp: 'mag', freq: null, excitation: 0, phase: 0 };
+async function reportFieldLine() {
+  const page = ensurePage(pageIdFor('rep-fl'), pageTitleFor('Field on Line'));
+  const wrap = el('div', { class: 'report' });
+  const bar = el('div', { class: 'report-toolbar', style: 'flex-wrap:wrap' });
+  const body = el('div', { class: 'report-body' });
+  wrap.append(bar, body);
+  page.appendChild(wrap);
+  let info;
+  try { info = await rpc('view.fieldInfo'); }
+  catch (e) { body.appendChild(el('p', { class: 'hint', style: 'color:var(--err)' }, String(e.message || e))); return; }
+  const u = U(), o = csOrigin();
+  if (!lineState.start) {
+    const [lo, hi] = info.bounds;
+    const mid = [0, 1, 2].map(k => (lo[k] + hi[k]) / 2);
+    lineState.start = [lo[0], mid[1], mid[2]];
+    lineState.end = [hi[0], mid[1], mid[2]];
+  }
+  if (lineState.freq == null || !info.freqs.includes(lineState.freq)) lineState.freq = info.freqs[info.freqs.length - 1];
+  const fld = (pt, k) => inp(`fl-${pt}${k}`, fmtLen(lineState[pt === 's' ? 'start' : 'end'][k] - o[k], u), 'text', { style: 'width:78px' });
+  const sI = [0, 1, 2].map(k => fld('s', k)), eI = [0, 1, 2].map(k => fld('e', k));
+  const read = (ins) => ins.map((x, k) => toMeters(x.value) + o[k]);
+  const go = () => { lineState.start = read(sI); lineState.end = read(eI); lineState.points = parseInt($('#fl-n').value) || 201;
+    captureResult(); reportFieldLine(); };
+  bar.append(el('label', {}, 'From'), ...sI, el('label', {}, 'To'), ...eI,
+    el('button', { id: 'fl-pick', title: 'click the two end points in the 3-D view', onclick: () => {
+      selectPage('modeler');
+      pickPortLine(pts => { lineState.start = pts[0]; lineState.end = pts[1]; selectPage('rep-' + (RESULTS.active ? RESULTS.active.id : 'fl')); captureResult(); reportFieldLine(); }, { current: () => null, title: 'Field on Line — pick the line', labels: ['From', 'To'] });
+    } }, 'Pick…'));
+  bar.appendChild(el('label', {}, 'Points'));
+  bar.appendChild(inp('fl-n', lineState.points, 'number', { min: 2, max: 5000, style: 'width:70px' }));
+  bar.appendChild(el('label', {}, 'Quantity'));
+  const sq = sel('fl-q', [['E', 'E'], ['H', 'H']], lineState.quantity);
+  sq.onchange = () => { lineState.quantity = sq.value; captureResult(); reportFieldLine(); };
+  bar.appendChild(sq);
+  bar.appendChild(el('label', {}, 'Value'));
+  const sc = sel('fl-c', [['mag', '|vector| (peak)'], ['x', '|X|'], ['y', '|Y|'], ['z', '|Z|'],
+    ['ix', 'X at phase'], ['iy', 'Y at phase'], ['iz', 'Z at phase']], lineState.comp);
+  sc.onchange = () => { lineState.comp = sc.value; captureResult(); reportFieldLine(); };
+  bar.appendChild(sc);
+  if (lineState.comp.startsWith('i')) {
+    bar.appendChild(el('label', {}, 'Phase [°]'));
+    const ph = inp('fl-ph', lineState.phase, 'number', { style: 'width:70px' });
+    ph.onchange = () => { lineState.phase = parseFloat(ph.value) || 0; captureResult(); reportFieldLine(); };
+    bar.appendChild(ph);
+  }
+  if (info.freqs.length > 1) {
+    bar.appendChild(el('label', {}, 'Frequency'));
+    const sf = sel('fl-f', info.freqs.map(f => [f, fmtHz(f)]), lineState.freq);
+    sf.onchange = () => { lineState.freq = parseFloat(sf.value); captureResult(); reportFieldLine(); };
+    bar.appendChild(sf);
+  }
+  if (info.excitations.length > 1) {
+    bar.appendChild(el('label', {}, 'Excitation'));
+    const se = sel('fl-ex', info.excitations.map((n, i) => [i, n]), lineState.excitation);
+    se.onchange = () => { lineState.excitation = parseInt(se.value); captureResult(); reportFieldLine(); };
+    bar.appendChild(se);
+  }
+  bar.appendChild(el('button', { class: 'pri', id: 'fl-go', onclick: go }, 'Plot'));
+  const toStr = (p) => p.map(v => v + 'm');
+  let d;
+  try {
+    d = await rpc('results.fieldOnLine', { start: toStr(lineState.start), end: toStr(lineState.end), points: lineState.points,
+      quantity: lineState.quantity, freq: lineState.freq, excitation: lineState.excitation,
+      phase: lineState.comp.startsWith('i') ? lineState.phase : null });
+  } catch (e) { body.appendChild(el('p', { class: 'hint', id: 'fl-err', style: 'color:var(--err)' }, String(e.message || e))); return; }
+  const q = lineState.quantity, unit = q === 'E' ? 'V/m' : 'A/m';
+  const y = lineState.comp === 'mag' ? d.mag : lineState.comp.startsWith('i') ? d.instant[lineState.comp[1]] : d[lineState.comp];
+  const name = lineState.comp === 'mag' ? `|${q}|` : lineState.comp.startsWith('i') ? `${q}${lineState.comp[1]}(${lineState.phase}°)` : `|${q}${lineState.comp}|`;
+  body.appendChild(el('div', { class: 'chart-wrap' },
+    chart(d.distance.map(v => v * 1e3), [{ label: name, y }], 'Distance along the line [mm]', `${name} [${unit}]`,
+      { xUnit: ' mm', state: plotState('fieldline'), onChange: captureResult })));
+  body.appendChild(el('div', { class: 'hint' }, `${fmtHz(d.frequency)} · line length ${fmtLen(d.length, u)} · `
+    + `max ${Math.max(...y.map(Math.abs)).toPrecision(5)} ${unit}` + (d.inside.every(Boolean) ? '' : ' · part of the line is outside the mesh (shown as 0)')));
+  captureResult();
 }
 
 /* Antenna figures of merit against frequency: directivity, gain, realized

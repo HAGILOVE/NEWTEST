@@ -113,6 +113,31 @@ def test_a_closed_curve_is_covered_with_a_face(session):
         call(session, "modeler.coverLines", name="Open")
 
 
+# ------------------------------------------------------------- move edge
+def test_moving_an_edge_of_a_rectangle_changes_its_width(session):
+    rect(session, size=("4mm", "2mm"))
+    call(session, "modeler.moveEdge", name="R", a=["4mm", "0mm", "0mm"], b=["4mm", "2mm", "0mm"], distance="1mm")
+    assert bounds_mm(next(x for x in session.design.sheets if x.name == "R").shape) == [0, 0, 0, 5, 2, 0]
+    call(session, "modeler.moveEdge", name="R", a=["5mm", "0mm", "0mm"], b=["5mm", "2mm", "0mm"], distance="-3mm")
+    assert bounds_mm(next(x for x in session.design.sheets if x.name == "R").shape) == [0, 0, 0, 2, 2, 0]
+
+
+def test_moving_an_edge_of_an_l_shape_stretches_its_neighbours(session):
+    from aether.geometry.primitives import Polygon
+    pts = [(0, 0, 0), (6e-3, 0, 0), (6e-3, 2e-3, 0), (2e-3, 2e-3, 0), (2e-3, 5e-3, 0), (0, 5e-3, 0)]
+    session.design.add_sheet("L", Polygon(pts, name="L"), None)
+    # the inner vertical edge x = 2 (from y 2 to y 5) moves out to x = 3: the edge at y = 2 shortens, y = 5 lengthens
+    call(session, "modeler.moveEdge", name="L", a=["2mm", "2mm", "0mm"], b=["2mm", "5mm", "0mm"], distance="1mm")
+    got = np.round(np.asarray(next(x for x in session.design.sheets if x.name == "L").shape.points) * 1e3, 6)
+    assert [3, 2, 0] in got.tolist() and [3, 5, 0] in got.tolist() and [6, 2, 0] in got.tolist()
+    # a stretch of a longer straight side can be picked too
+    call(session, "modeler.moveEdge", name="L", a=["0mm", "0mm", "0mm"], b=["3mm", "0mm", "0mm"], distance="-1mm")
+    got = np.round(np.asarray(next(x for x in session.design.sheets if x.name == "L").shape.points) * 1e3, 6)
+    assert got[:, 1].min() == 1.0
+    with pytest.raises(ValueError, match="does not belong"):
+        call(session, "modeler.moveEdge", name="L", a=["20mm", "20mm", "0mm"], b=["21mm", "20mm", "0mm"], distance="1mm")
+
+
 # ----------------------------------------------------- lines with a width
 def test_a_line_becomes_a_trace_of_the_given_width(session):
     from aether.geometry.primitives import Sketch

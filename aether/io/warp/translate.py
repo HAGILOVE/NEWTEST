@@ -1375,6 +1375,12 @@ def read_design(doc: WarpDocument, index: int = 0,
             wk = str(cs_blk.get("Working", "") or "").strip("'")
             if wk and any(c["name"] == wk for c in design.coordinate_systems):
                 design.working_cs = wk
+        for ov in blk.find("AetherOutputVariables"):
+            for item in ov.blocks:
+                nm = str(item.get("Name", "")).strip("'")
+                ex = str(item.get("Expression", "")).strip("'")
+                if nm and ex:
+                    design.output_variables[nm] = ex
         for mesh in blk.find("AetherMeshOperations"):
             for item in mesh.blocks:
                 selector = item.block("AetherSelector")

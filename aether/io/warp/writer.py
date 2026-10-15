@@ -173,6 +173,12 @@ def _write_design(root: WarpBlock, d) -> WarpBlock:
             item.add_prop("Origin", [float(x) for x in c["origin"]])
         if d.working_cs:
             cs.add_prop("Working", d.working_cs)
+    if getattr(d, "output_variables", None):
+        ov = blk.add_block("AetherOutputVariables")
+        for k, v in d.output_variables.items():
+            item = ov.add_block("Variable")
+            item.add_prop("Name", k)
+            item.add_prop("Expression", v)
     if d.mesh_ops:
         mesh = blk.add_block("AetherMeshOperations")
         for op in d.mesh_ops:

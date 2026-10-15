@@ -165,6 +165,17 @@ SuperLU는 단일 스레드이고 3D 메시용 정렬이 약해서 미지수가 
 
 `Draw ▸ Coordinate System ▸ Relative CS…`에서 객체의 **꼭짓점 / 모서리 중점 / 면 중심**을 클릭(스냅)하거나 좌표를 직접 입력하면 그 점이 원점인 작업 CS가 됨. 이후 그리기·포트·New Line의 입력값과 상태바 좌표가 모두 이 CS 기준으로 표시·입력되고, 모델과 파일은 전역 좌표(m)로 저장됨. 상태바 칩에서 작업 CS 변경, 이름 변경, 삭제, Global 복귀. `.warp`에 저장됨. **한계: 평행이동만 지원** (회전 CS, Face CS 없음).
 
+### HFSS 100 Tips 반영 · 속성 패널 편집 · 자유 회전 · 저장 문제
+
+자세한 표는 [HFSS_TIPS_COVERAGE_KO.md](HFSS_TIPS_COVERAGE_KO.md). 요약:
+
+- **모델링**: Sweep(축/벡터/경로), Equation Based Curve(타원·헬릭스·스파이럴), Cover Lines, Line Pattern, Split, Move Edges, **Copy & Move / Mirror / Mirror Copy**(두 점 클릭), Paste & Move.
+- **경계/포트가 형상을 따라감**: 이동·회전·대칭·크기 변경 시 함께 이동, 복사/붙여넣기/Duplicate 시 함께 복사(기본 켜짐).
+- **영역 선택**: 왼→오 드래그는 걸친 개체까지, 오→왼은 완전히 포함된 것만. Edit ▸ Select by Area Filter…
+- **결과**: Expression Plot / Output Variables(`1e9*im(Z(1,1))/2/pi/Freq` 등), Field on Line. **단축키**: Tools ▸ Keyboard Shortcuts…
+- **3D 회전**이 극점에서 멈추지 않음. **three.js 저장**이 기존 파일 위에 덮어쓸 때 조용히 취소되던 문제 수정(브라우저 `confirm()` 의존 제거).
+- **좌측 속성 패널**에서 Sweep 주파수 범위를 포함해 수정 가능한 값은 모두 입력란으로 수정.
+
 ## 5. 예제
 
 | 프로젝트 | 확인한 결과 |

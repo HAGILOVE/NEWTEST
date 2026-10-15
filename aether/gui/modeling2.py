@@ -321,3 +321,81 @@ def register(command) -> None:
         s.messages.add(f"Split {', '.join(targets)} at {plane.upper()} = {at * 1e3:.4g} mm, kept {keep}.",
                        "info", "modeler")
         return {"ok": True, "names": made}
+
+    # ---------------------------------------------------------- move edge
+    @command("modeler.moveEdge")
+    def _move_edge(s, name: str = "", a=None, b=None, distance: Any = "0mm", **_):
+        """
+        Modeler > Edge > Move Edges: slide one edge of a flat polygon sideways, in its
+        plane. A positive distance moves it outwards, a negative one inwards, and the
+        two neighbouring edges are lengthened or shortened to meet it -- so the
+        gap between two patterns, or the width of a trace, is a number to change.
+        """
+        d = s.require_design()
+        ent = _entity(d, name or (s.selection[0] if s.selection else ""))
+        shape = ent.shape
+        if ent not in d.sheets or not isinstance(shape, Polygon):
+            raise ValueError("Move Edges works on the edges of a flat polygon or rectangle (a sheet)")
+        A = np.asarray(_vec3(a, d, "edge start"), float)
+        B = np.asarray(_vec3(b, d, "edge end"), float)
+        dist = api.to_si(distance) if isinstance(distance, str) else float(distance)
+        P = np.asarray(shape.points, float)
+        for t in shape._xform:
+            P = prim._apply_xform_points(P, t)
+        n = len(P)
+        tol = 1e-7 * max(1.0, float(np.abs(P).max())) + 1e-9
+        k = None
+        for i in range(n):
+            p, q = P[i], P[(i + 1) % n]
+            if (np.linalg.norm(p - A) < tol and np.linalg.norm(q - B) < tol) or \
+                    (np.linalg.norm(p - B) < tol and np.linalg.norm(q - A) < tol):
+                k = i
+                break
+            # an edge that was picked as a stretch of a longer straight side
+            e = q - p
+            L = float(np.linalg.norm(e))
+            if L > 0:
+                u = e / L
+                da = np.linalg.norm(np.cross(A - p, u)); db = np.linalg.norm(np.cross(B - p, u))
+                ta, tb = float((A - p) @ u), float((B - p) @ u)
+                if da < tol and db < tol and -tol <= ta <= L + tol and -tol <= tb <= L + tol:
+                    k = i
+                    break
+        if k is None:
+            raise ValueError("that edge does not belong to this polygon")
+        c, u, v, normal = _plane_basis(P)
+        Q = np.column_stack([(P - c) @ u, (P - c) @ v])            # work in the plane
+        p, q = Q[k], Q[(k + 1) % n]
+        e = q - p
+        L = float(np.linalg.norm(e))
+        te = e / L
+        out = np.array([te[1], -te[0]])
+        area2 = sum(Q[i, 0] * Q[(i + 1) % n, 1] - Q[(i + 1) % n, 0] * Q[i, 1] for i in range(n))
+        if area2 < 0:                                              # clockwise: the other way is outside
+            out = -out
+        new_p, new_q = p + out * dist, q + out * dist
+        # the two vertices move to where the shifted edge line meets the neighbouring edge lines
+        def meet(point, direction, other, other_dir):
+            M = np.array([direction, -other_dir]).T
+            if abs(np.linalg.det(M)) < 1e-12:
+                return point                                       # parallel neighbour: slide only
+            ts = np.linalg.solve(M, other - point)
+            return point + ts[0] * direction
+        prev = Q[(k - 1) % n]
+        nxt = Q[(k + 2) % n]
+        dprev = Q[k] - prev
+        dnext = nxt - Q[(k + 1) % n]
+        Q2 = Q.copy()
+        Q2[k] = meet(new_p, te, prev, dprev / max(np.linalg.norm(dprev), 1e-300))
+        Q2[(k + 1) % n] = meet(new_q, te, Q[(k + 1) % n], dnext / max(np.linalg.norm(dnext), 1e-300))
+        W = c + np.outer(Q2[:, 0], u) + np.outer(Q2[:, 1], v)
+        ent.shape = Polygon(W.tolist(), name=ent.name)
+        # a boundary or a port on this sheet follows the new outline
+        for old_sel_owner in list(d.boundaries) + list(d.ports):
+            sel = old_sel_owner.selector
+            if getattr(sel, "shape", None) is shape:
+                sel.shape = ent.shape
+        d.mesh = None
+        s.dirty = True
+        s.messages.add(f"Moved an edge of {ent.name!r} by {dist * 1e3:.4g} mm.", "info", "modeler")
+        return {"ok": True, "name": ent.name}

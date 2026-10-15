@@ -3857,3 +3857,6 @@ __all__ = ["COMMANDS", "dispatch", "state_json", "MUTATING"]
 
 from .modeling2 import register as _register_modeling2
 _register_modeling2(command)
+
+from .results2 import register as _register_results2
+_register_results2(command)

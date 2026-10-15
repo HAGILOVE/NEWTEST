@@ -340,6 +340,8 @@ class Design:
         #: Offset-only (axes stay parallel to the global ones), like an
         #: "Offset" relative CS: coordinates typed in one are measured from its origin.
         self.coordinate_systems: List[Dict[str, Any]] = []
+        #: named post-processing expressions (Results > Output Variables)
+        self.output_variables: Dict[str, str] = {}
         #: the coordinate system new coordinates are read in ("" = Global)
         self.working_cs: str = ""
         self.variables: Dict[str, Any] = {}
@@ -640,6 +642,7 @@ class Design:
             "config": self.config, "default_boundary": getattr(self, "default_boundary", "pec"),
             "name": self.name, "materials": self.materials,
             "coordinate_systems": self.coordinate_systems,
+            "output_variables": self.output_variables,
         })
 
     def restore(self, snap: dict) -> "Design":
@@ -661,6 +664,7 @@ class Design:
         self.name = s["name"]
         self.materials = s["materials"]
         self.coordinate_systems = s.get("coordinate_systems", [])
+        self.output_variables = s.get("output_variables", {})
         if self.working_cs and not any(c["name"] == self.working_cs
                                        for c in self.coordinate_systems):
             self.working_cs = ""
