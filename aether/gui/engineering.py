@@ -3,6 +3,7 @@
 from __future__ import annotations
 import copy
 import math
+import os
 import threading
 import time
 import numpy as np
@@ -104,10 +105,14 @@ def _clone(d):
 
 def study_worker(s, base, variable, values, setup, backend, adaptive):
     from ..fem.control import checkpoint, SolveCancelled
+    from . import worker
+
+    cancel = s.cancel_event
+    worker.limit_native_threads(worker.default_threads())
 
     try:
         for i, value in enumerate(values):
-            checkpoint(s.cancel_event)
+            checkpoint(cancel)
             work = _clone(base)
             variables = dict(work.variables)
             variables[variable] = str(value)
@@ -119,7 +124,7 @@ def study_worker(s, base, variable, values, setup, backend, adaptive):
                 backend=backend,
                 adaptive=adaptive,
                 save_fields=False,
-                cancel=s.cancel_event,
+                cancel=cancel,
             )
             summary = metrics(sol.sparams)
             row = {
@@ -137,10 +142,12 @@ def study_worker(s, base, variable, values, setup, backend, adaptive):
                 s.job.freq_done = i + 1
         with s._lock:
             s.job.stage = "complete"
+            s.job.outcome = "complete"
     except Exception as exc:
         with s._lock:
             s.job.error = str(exc)
             s.job.stage = "cancelled" if isinstance(exc, SolveCancelled) else "failed"
+            s.job.outcome = "stopped" if isinstance(exc, SolveCancelled) else "failed"
         s.messages.add(
             f"Parameter study: {exc}",
             "warning" if isinstance(exc, SolveCancelled) else "error",
@@ -157,6 +164,10 @@ def optimize_worker(s, base, spec, goals):
     """Run an optimisation on a copy of the design; progress goes to ``s``."""
     from ..fem.control import SolveCancelled
     from ..optimize import optimize
+    from . import worker
+
+    cancel = s.cancel_event
+    worker.limit_native_threads(worker.default_threads())
 
     def on_point(rec):
         with s._lock:
@@ -179,7 +190,7 @@ def optimize_worker(s, base, spec, goals):
             adaptive=spec["adaptive"],
             backend=spec["backend"],
             callback=on_point,
-            cancel=s.cancel_event,
+            cancel=cancel,
         )
         with s._lock:
             s.opt_results["status"] = res.stopped
@@ -190,6 +201,7 @@ def optimize_worker(s, base, spec, goals):
                     "eval": min(res.history, key=lambda r: r["cost"])["eval"],
                     "cost": res.best_cost, "values": res.best}
             s.job.stage = "cancelled" if res.stopped == "cancelled" else "complete"
+            s.job.outcome = "stopped" if res.stopped == "cancelled" else "complete"
         s.messages.add(res.summary().replace("\n", "; "), "info", "optimize")
     except Exception as exc:
         with s._lock:
@@ -197,6 +209,7 @@ def optimize_worker(s, base, spec, goals):
             s.opt_results["error"] = str(exc)
             s.job.error = str(exc)
             s.job.stage = "cancelled" if isinstance(exc, SolveCancelled) else "failed"
+            s.job.outcome = "stopped" if isinstance(exc, SolveCancelled) else "failed"
         s.messages.add(f"Optimization: {exc}", "error", "optimize")
     finally:
         with s._lock:
@@ -308,16 +321,40 @@ def register(command):
         d.mesh = None
         return {"ok": True}
 
+    @command("analysis.performance")
+    def performance(s, **_):
+        from . import worker
+        return {"threads": int(s.perf.get("threads", 0)),
+                "isolate": bool(s.perf.get("isolate", True)),
+                "auto": worker.default_threads(),
+                "cpus": os.cpu_count() or 1,
+                "available": worker.can_spawn()}
+
+    @command("analysis.setPerformance")
+    def set_performance(s, threads=0, isolate=True, **_):
+        threads = int(threads or 0)
+        if not 0 <= threads <= 256:
+            raise ValueError("Solver threads must be 0 (automatic) to 256")
+        s.perf = {"threads": threads, "isolate": bool(isolate)}
+        return {"ok": True}
+
     @command("analysis.cancel")
     def cancel(s, **_):
-        if not s.job.running:
+        """Stop: finish the current step and keep the results so far."""
+        if not s.request_stop():
             return {"ok": True, "running": False}
-        s.cancel_event.set()
         s.messages.add(
-            "Cancellation requested; waiting for the current solver stage to finish.",
-            "warning",
-            "analysis",
-        )
+            "Stop requested; the solver finishes its current step and keeps "
+            "the results computed so far. Use Abort to end it immediately.",
+            "warning", "analysis")
+        return {"ok": True, "running": True}
+
+    @command("analysis.abort")
+    def abort(s, **_):
+        """Abort: end the analysis immediately (the solver process is killed)."""
+        if not s.request_abort():
+            return {"ok": True, "running": False}
+        s.messages.add("Abort requested.", "warning", "analysis")
         return {"ok": True, "running": True}
 
     @command("analysis.study")
@@ -379,8 +416,9 @@ def register(command):
             "backend": backend,
             "adaptive": bool(adaptive),
         }
-        s.cancel_event.clear()
+        s.cancel_event = threading.Event()
         s.job = SolveJob(
+            kind="study",
             setup="Parameter study",
             running=True,
             started=time.time(),
@@ -440,8 +478,8 @@ def register(command):
         with s._lock:
             s.opt_results = {"spec": spec, "rows": [], "best": None,
                              "status": "running"}
-            s.cancel_event.clear()
-            s.job = SolveJob(setup="Optimization", running=True,
+            s.cancel_event = threading.Event()
+            s.job = SolveJob(kind="optimization", setup="Optimization", running=True,
                              started=time.time(), freq_total=maxEvals,
                              stage="starting")
         threading.Thread(target=optimize_worker,

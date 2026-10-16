@@ -127,6 +127,10 @@ Ctrl+Enter runs. Anything you change here appears in the tree immediately.
   <div id="statusbar">
     <span class="dot" id="status-dot"></span>
     <span id="status-text">Ready</span>
+    <span id="job-ctl" title="Analysis controls">
+      <button id="job-stop-sb" class="warn" title="Finish the current step, then stop (keeps results so far) — Shift+Esc">■ Stop</button>
+      <button id="job-abort-sb" class="danger" title="End the analysis immediately">✖ Abort</button>
+    </span>
     <span class="spacer"></span>
     <span id="status-cs" title="Working coordinate system — click to change" style="cursor:pointer">CS: Global</span>
     <span id="status-xyz" title="Cursor position on the work plane"></span>

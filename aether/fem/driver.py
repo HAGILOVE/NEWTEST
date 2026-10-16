@@ -21,7 +21,7 @@ from ..post.sparam import SParameters
 from .assembly import assemble_regions, assemble_surface_mass
 from .boundary import BoundaryTerms, constrain, expand
 from .elements import DofMap
-from .fields import FieldSolution
+from .fields import RegionLookup, FieldSolution
 from .linalg import LinearSolver
 from .ports import PortSolution, solve_port_modes
 
@@ -199,8 +199,8 @@ def compute_port_data(design, mesh, dofmap, freq: float) -> PortData:
     """Solve every port's modal problem at *freq* and assemble its terms."""
     k0 = 2.0 * math.pi * freq / c0
     eps, mu = _material_maps(design, mesh, freq)
-    eps_of = lambda r: eps.get(r, 1.0 + 0j)
-    mu_of = lambda r: mu.get(r, 1.0 + 0j)
+    eps_of = RegionLookup(eps)
+    mu_of = RegionLookup(mu)
     n = dofmap.n_dof
 
     port_sols: List[PortSolution] = []

@@ -296,12 +296,28 @@ table.grid td.num { font-family: var(--mono); text-align: right; }
 .msg.warning .m { color: var(--warn); }
 .msg.error .m { color: var(--err); font-weight: 600; }
 
-#progress { padding: 12px 14px; }
-.pbar { height: 16px; background: var(--panel-alt); border: 1px solid var(--border);
+#progress { padding: 10px 14px; overflow: auto; height: 100%; box-sizing: border-box; }
+.pbar { height: 12px; background: var(--panel-alt); border: 1px solid var(--border);
   border-radius: 3px; overflow: hidden; margin: 6px 0 10px; }
 .pbar > div { height: 100%; background: linear-gradient(90deg, var(--accent),
   var(--accent-line)); transition: width .25s; }
-.pgrid { display: grid; grid-template-columns: 130px 1fr; gap: 3px 12px;
+.pjob-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 2px; }
+.pjob-ctl { display: flex; gap: 6px; }
+.pjob-ctl button, #job-ctl button { font-size: 11.5px; padding: 3px 12px;
+  border-radius: 3px; border: 1px solid var(--border); cursor: pointer;
+  background: var(--panel-alt); color: var(--text); }
+.pjob-ctl button:disabled, #job-ctl button:disabled { opacity: .55; cursor: default; }
+button.warn { border-color: var(--warn) !important; }
+button.danger { border-color: var(--err) !important; color: var(--err) !important; }
+button.danger:hover:not(:disabled) { background: var(--err); color: #fff !important; }
+button.warn:hover:not(:disabled) { background: var(--warn); color: #000; }
+.pbar.stopping > div { background: var(--warn); }
+#progress .note { font-size: 11px; color: var(--text-dim); margin: -4px 0 8px; }
+#job-ctl { display: none; gap: 6px; }
+#job-ctl.on { display: inline-flex; }
+#job-ctl button { padding: 0 10px; height: 18px; line-height: 16px; }
+.pgrid {display: grid; grid-template-columns: 130px 1fr; gap: 2px 12px;
   font-size: 11.5px; }
 .pgrid .k { color: var(--text-dim); }
 .pgrid .v { font-family: var(--mono); }

@@ -111,9 +111,17 @@ def _check(cancel):
 POINT_HOOK = None
 
 
+#: seconds the most recent full solve took, appended to its log line so a slow
+#: machine shows *which* step is slow
+_LAST_DT = 0.0
+
+
 def _full_solve(res, i, design, mesh, dofmap, ops, bts, f, want_fields):
+    global _LAST_DT
+    t0 = time.perf_counter()
     S, z0, psols, flds, gam, zport = solve_frequency(
         design, mesh, dofmap, ops, bts, float(f), save_field=want_fields)
+    _LAST_DT = time.perf_counter() - t0
     res.S[i], res.gamma[i], res.zport[i] = S, gam, zport
     res.solved[i] = True
     res.ports[float(f)] = psols
@@ -128,8 +136,8 @@ def _full_solve(res, i, design, mesh, dofmap, ops, bts, f, want_fields):
 
 
 def _log_point(f, S, n_exc, tag=""):
-    log.info("  f = %10.6f GHz   |S11| = %7.4f  |S21| = %7.4f %s",
-             f / 1e9, abs(S[0, 0]), abs(S[min(1, n_exc - 1), 0]), tag)
+    log.info("  f = %10.6f GHz   |S11| = %7.4f  |S21| = %7.4f %s [%.2f s]",
+             f / 1e9, abs(S[0, 0]), abs(S[min(1, n_exc - 1), 0]), tag, _LAST_DT)
 
 
 # --------------------------------------------------------------------------

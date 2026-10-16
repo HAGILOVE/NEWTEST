@@ -2353,7 +2353,8 @@ const MENUS = [
     ['Parameter Study Results…', dlgStudyResults],
     ['Optimization…', dlgOptimize],
     ['Optimization Results…', dlgOptimizeResults],
-    ['Cancel Running Analysis', () => guard(() => rpc('analysis.cancel'))],
+    ['Stop Analysis (keep results)', jobStop, 'Shift+Esc'],
+    ['Abort Analysis (immediately)', jobAbort],
     ['Keyboard Shortcuts…', dlgShortcuts],
     ['Scripting Console', () => selectBottom('console')],
     ['Clear Messages', clearMessages]]],
@@ -2375,7 +2376,8 @@ const RIBBON = {
       ['i-port', 'Wave Port', () => dlgExcitation('wave')],
       ['i-setup', 'Setup', dlgSetup], ['i-sweep', 'Sweep', () => dlgSweep()]]],
     ['Analyze', [['i-check', 'Validate', dlgValidate],
-      ['i-run', 'Analyze', dlgAnalyze, 'primary']]],
+      ['i-run', 'Analyze', dlgAnalyze, 'primary'],
+      ['i-run', 'Stop', jobStop], ['i-run', 'Abort', jobAbort]]],
     ['Results', [['i-report', 'Report', () => openReport('sparam')],
       ['i-export', 'Export', dlgExport]]]
   ],
@@ -2429,7 +2431,7 @@ const RIBBON = {
   ],
   Simulation: [
     ['Engineering', [['i-check','Diagnostics',dlgDiagnostics],['i-setup','Controls',dlgControls],['i-box','Air Region',dlgAirRegion]]],
-    ['Studies', [['i-run','Optimize',dlgOptimize],['i-sweep','Parameter Study',dlgStudy],['i-report','Study Results',dlgStudyResults],['i-run','Cancel',()=>guard(()=>rpc('analysis.cancel'))]]],
+    ['Studies', [['i-run','Optimize',dlgOptimize],['i-sweep','Parameter Study',dlgStudy],['i-report','Study Results',dlgStudyResults],['i-run','Stop',jobStop],['i-run','Abort',jobAbort]]],
     ['Boundaries', [['i-bnd', 'Assign', () => dlgBoundary()], ['i-bnd', 'Lumped RLC', dlgRlc]]],
     ['Excitations', [['i-port', 'Lumped Port (pick)', () => startPortPick('lumped')],
       ['i-port', 'Wave Port (pick)', () => startPortPick('wave')],
@@ -2440,7 +2442,8 @@ const RIBBON = {
       ['i-mesh', 'Mesh Operation', dlgMeshOp],
       ['i-mesh', 'Generate Mesh', dlgMesh],
       ['i-check', 'Validate', dlgValidate],
-      ['i-run', 'Analyze All', dlgAnalyze, 'primary']]]
+      ['i-run', 'Analyze All', dlgAnalyze, 'primary'],
+      ['i-run', 'Stop', jobStop], ['i-run', 'Abort', jobAbort]]]
   ],
   Results: [
     ['Reports', [['i-report', 'S-Parameters', () => openReport('sparam')],
@@ -3464,7 +3467,9 @@ let currentBuffers = [];
 let MISSING_GEOMETRY = [];
 
 function initViewport() {
-  try { VP = window.VP = new Viewport($('#gl')); }
+  try { VP = window.VP = new Viewport($('#gl'));
+    VP.onContextLost = () => setStatus('The graphics driver reset the 3-D view — restoring…', 'err');
+    VP.onContextRestored = () => { setStatus('3-D view restored', ''); setTimeout(() => location.reload(), 300); }; }
   catch (e) { $('#viewport').innerHTML =
     `<div style="padding:30px;color:#c02626">3-D viewport unavailable: ${e.message}</div>`;
     return; }
@@ -7124,8 +7129,31 @@ async function pollMessages() {
       if (atEnd) box.parentElement.scrollTop = box.parentElement.scrollHeight;
     }
     if (j.job && !(j.task && j.task.active)) renderProgress(j.job);
+    if (j.job && j.job.running && !jobWatch) pollJob();
   } catch (e) { /* server not up yet */ }
   setTimeout(pollMessages, interval);
+}
+
+const STAGE_LABEL = { meshing: 'Meshing', adaptive: 'Adaptive refinement',
+  sweep: 'Frequency sweep', complete: 'Complete', cancelled: 'Stopped',
+  aborted: 'Aborted', failed: 'Failed' };
+
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + ' s';
+  const m = Math.floor(sec / 60), r = sec % 60;
+  return m + ' min ' + String(r).padStart(2, '0') + ' s';
+}
+
+async function jobStop() {
+  if (!STATE?.job?.running) return setStatus('No analysis is running', '');
+  STATE.job.stopping = true; renderProgress(STATE.job);
+  try { await rpc('analysis.cancel'); } catch (e) { toastError(e.message); }
+}
+async function jobAbort() {
+  if (!STATE?.job?.running) return setStatus('No analysis is running', '');
+  STATE.job.stopping = true; STATE.job.aborting = true; renderProgress(STATE.job);
+  try { await rpc('analysis.abort'); } catch (e) { toastError(e.message); }
 }
 
 function renderProgress(job) {
@@ -7137,49 +7165,139 @@ function renderProgress(job) {
   else if (job.stage === 'sweep')
     frac = 0.72 + 0.27 * (job.freqDone / Math.max(job.freqTotal, 1));
   else if (job.done && !job.error) frac = 1;
-  p.innerHTML = '';
-  p.appendChild(el('div', { style: 'font-weight:600;margin-bottom:2px' },
-    job.running ? `Solving — ${job.setup}` :
-      job.error ? 'Analysis failed' :
-      job.done ? `Analysis complete — ${job.setup}` : 'Idle'));
-  const bar = el('div', { class: 'pbar' });
+  else if (job.done) frac = Math.max(0.05, Math.min(0.98,
+    job.freqTotal ? 0.72 + 0.27 * (job.freqDone / job.freqTotal) : 0.5));
+  const outcome = job.outcome || (job.error ? 'failed' : '');
+  const title = job.running
+    ? (job.aborting ? `Aborting — ${job.setup}`
+       : job.stopping ? `Stopping — ${job.setup}` : `Solving — ${job.setup}`)
+    : outcome === 'stopped' ? `Analysis stopped — ${job.setup}`
+    : outcome === 'aborted' ? `Analysis aborted — ${job.setup}`
+    : job.error ? 'Analysis failed'
+    : job.done ? `Analysis complete — ${job.setup}` : 'Idle';
+  // build into a fragment and swap once: the panel never flashes empty
+  const frag = document.createDocumentFragment();
+  const head = el('div', { class: 'pjob-head' });
+  head.appendChild(el('div', { style: 'font-weight:600' }, title));
+  if (job.running) {
+    const ctl = el('div', { class: 'pjob-ctl' });
+    ctl.appendChild(el('button', { id: 'job-stop', class: 'warn', disabled: job.stopping ? '' : null,
+      title: 'Finish the current step, then stop. Results computed so far are kept (Shift+Esc).',
+      onclick: jobStop }, job.stopping ? 'Stopping…' : '■ Stop'));
+    ctl.appendChild(el('button', { id: 'job-abort', class: 'danger',
+      disabled: job.aborting ? '' : null,
+      title: 'End the analysis immediately. Use this when Stop is not responding.',
+      onclick: jobAbort }, job.aborting ? 'Aborting…' : '✖ Abort'));
+    head.appendChild(ctl);
+  }
+  frag.appendChild(head);
+  const bar = el('div', { class: 'pbar' + (job.running && job.stopping ? ' stopping' : '') });
   bar.appendChild(el('div', { style: `width:${Math.round(frac * 100)}%` }));
-  p.appendChild(bar);
+  frag.appendChild(bar);
+  if (job.running && job.stopping && !job.aborting)
+    frag.appendChild(el('div', { class: 'note' },
+      'Waiting for the current step to finish. A matrix factorization cannot ' +
+      'be interrupted part-way — press Abort to end it now.'));
   const g = el('div', { class: 'pgrid' });
   const kv = (k, v) => { g.appendChild(el('span', { class: 'k' }, k));
     g.appendChild(el('span', { class: 'v' }, String(v))); };
-  kv('Stage', job.stage || '—');
+  kv('Stage', STAGE_LABEL[job.stage] || job.stage || '—');
   kv('Adaptive pass', job.totalPasses ? `${job.pass} / ${job.totalPasses}` : '—');
   kv('Frequency points', job.freqTotal ? `${job.freqDone} / ${job.freqTotal}` : '—');
-  kv('Elapsed', job.elapsed.toFixed(1) + ' s');
-  if (job.error) kv('Error', job.error);
-  p.appendChild(g);
+  kv('Elapsed', fmtDur(job.elapsed));
+  // remaining time, from the pace of the sweep so far (needs a few points)
+  const sweepT = (job.phases || {}).sweep || 0;
+  if (job.running && job.stage === 'sweep' && job.freqDone >= 3 && sweepT > 3
+      && job.freqTotal > job.freqDone) {
+    const eta = sweepT / job.freqDone * (job.freqTotal - job.freqDone);
+    kv('Remaining (est.)', '≈ ' + fmtDur(eta) + `  (${(sweepT / job.freqDone).toFixed(1)} s per point)`);
+    if (eta > 600 && !job.stopping)
+      kv('Tip', 'Long sweep: an Interpolating or Fast sweep needs far fewer full solves.');
+  }
+  if (job.running && job.detail) kv('Now', job.detail);
+  if (job.dofs) kv('Problem size', `${job.dofs.toLocaleString()} unknowns` +
+    (job.tets ? ` · ${job.tets.toLocaleString()} tets` : '') +
+    (job.backend ? ` · ${job.backend}` : ''));
+  if (job.mode) kv('Solver', job.mode === 'process'
+    ? `isolated low-priority process${job.threads ? `, ${job.threads} thread${job.threads > 1 ? 's' : ''}` : ''}`
+    : 'inside the application');
+  const ph = Object.entries(job.phases || {}).filter(([, v]) => v >= 0.1);
+  if (ph.length) kv('Time spent', ph.map(([k, v]) =>
+    `${STAGE_LABEL[k] || k} ${fmtDur(v)}`).join(' · '));
+  if (job.partialPoints && (job.running || outcome === 'stopped' || outcome === 'aborted'))
+    kv('Results kept', `${job.partialPoints} frequency point(s) — see Results`);
+  if (job.error) kv(outcome === 'failed' ? 'Error' : 'Reason', job.error);
+  frag.appendChild(g);
+  p.replaceChildren(frag);
+
   const dot = $('#status-dot');
-  dot.className = 'dot' + (job.running ? ' busy' : job.error ? ' err' : '');
-  if (job.running) setStatus(`Solving ${job.setup} — ${job.stage}`, 'busy');
+  dot.className = 'dot' + (job.running ? ' busy' : outcome === 'failed' ? ' err' : '');
+  if (typeof VP !== 'undefined' && VP) VP.lowPower = !!job.running;
+  const jc = $('#job-ctl');
+  if (jc) jc.classList.toggle('on', !!job.running);
+  const jb = $('#job-stop-sb'), ja = $('#job-abort-sb');
+  if (jb) { jb.disabled = !!job.stopping; jb.textContent = job.stopping ? 'Stopping…' : '■ Stop'; }
+  if (ja) { ja.disabled = !!job.aborting; ja.textContent = job.aborting ? 'Aborting…' : '✖ Abort'; }
+  if (job.running) {
+    const sub = job.freqTotal && job.stage === 'sweep'
+      ? ` ${job.freqDone}/${job.freqTotal}` : '';
+    setStatus(`${job.aborting ? 'Aborting' : job.stopping ? 'Stopping' : 'Solving'} ${job.setup} — ${STAGE_LABEL[job.stage] || job.stage}${sub}`, 'busy');
+  }
 }
 
+/* While an analysis runs the browser asks one tiny endpoint for progress and
+   only fetches (and re-renders) the whole workspace when results actually
+   changed -- at most every 2.5 s -- or when the run ended. Re-rendering the
+   model tree and property panels every second was a real cost on a big
+   project, paid exactly when the solver needed the CPU. */
 let jobWatch = null;
+let JOB_WAS_RUNNING = false;
 function pollJob() {
-  clearInterval(jobWatch);
-  jobWatch = setInterval(async () => {
-    const r = await fetch('/api/state?token=' +
-      encodeURIComponent(window.AETHER_TOKEN));
-    const s = await r.json();
-    const wasRunning = STATE.job.running;
-    STATE = s; renderAll();
-    if (s.solutionSerial !== RESULTS.serial) {       // new partial / final data
-      RESULTS.serial = s.solutionSerial;
-      if (s.hasSolution) liveRefresh();
-    }
-    if (!s.job.running) {
-      clearInterval(jobWatch);
-      if (wasRunning && !s.job.error && s.hasSolution) {
-        setStatus('Analysis complete', '');
-        openReport('sparam', true);
+  if (jobWatch) return;
+  let lastFull = 0;
+  const tick = async () => {
+    let j;
+    try {
+      const r = await fetch('/api/job?token=' +
+        encodeURIComponent(window.AETHER_TOKEN));
+      j = await r.json();
+    } catch (e) { jobWatch = setTimeout(tick, 1500); return; }
+    const running = !!j.job.running;
+    if (STATE) STATE.job = j.job;
+    renderProgress(j.job);
+    const now = performance.now();
+    const changed = j.serial !== RESULTS.serial;
+    if (!running || (changed && now - lastFull > 2500)) {
+      lastFull = now;
+      const r = await fetch('/api/state?token=' +
+        encodeURIComponent(window.AETHER_TOKEN));
+      const s = await r.json();
+      STATE = s; renderAll();
+      if (s.solutionSerial !== RESULTS.serial) {
+        RESULTS.serial = s.solutionSerial;
+        if (s.hasSolution) liveRefresh();
       }
     }
-  }, 900);
+    if (!running) {
+      jobWatch = null;
+      const o = j.job.outcome;
+      if (JOB_WAS_RUNNING && o === 'complete' && j.hasSolution) {
+        setStatus('Analysis complete', '');
+        Promise.resolve(openReport('sparam', true)).catch(() => {});
+      } else if (JOB_WAS_RUNNING && (o === 'stopped' || o === 'aborted')) {
+        setStatus(o === 'stopped' ? 'Analysis stopped' : 'Analysis aborted'
+          + (j.hasSolution ? ' — partial results kept in Results' : ''), '');
+        if (j.hasSolution) Promise.resolve(openReport('sparam', true)).catch(() => {});
+      } else if (JOB_WAS_RUNNING && o === 'failed') {
+        setStatus('Analysis failed — see Messages', 'err');
+      }
+      JOB_WAS_RUNNING = false;
+      return;
+    }
+    JOB_WAS_RUNNING = true;
+    jobWatch = setTimeout(tick, 800);
+  };
+  jobWatch = setTimeout(tick, 0);
 }
 
 /* -------------------------------------------------------------- console */
@@ -7459,6 +7577,7 @@ async function boot() {
     if (e.key === 'Delete') deleteSelection();
     if (e.key === 'F5') { e.preventDefault(); dlgValidate(); }
     if (e.key === 'F9') { e.preventDefault(); dlgAnalyze(); }
+    if (e.key === 'Escape' && e.shiftKey && STATE?.job?.running) { e.preventDefault(); jobStop(); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       e.shiftKey ? saveProjectAs() : saveProject(false);
@@ -7491,6 +7610,9 @@ async function boot() {
   pollMessages();
   { const chip = $('#status-cs');
   if (chip) chip.onclick = e => contextMenu(e.clientX, Math.max(e.clientY - 150, 40), csMenuItems()); }
+  { const b1 = $('#job-stop-sb'), b2 = $('#job-abort-sb');
+    if (b1) b1.onclick = jobStop;
+    if (b2) b2.onclick = jobAbort; }
   window.__aetherReady = true;
 }
 boot();

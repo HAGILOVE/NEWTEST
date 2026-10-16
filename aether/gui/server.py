@@ -99,6 +99,16 @@ class _Handler(BaseHTTPRequestHandler):
                                         "seq": s.messages.seq,
                                         "job": s.job.to_json(),
                                         "task": s.progress.to_json()})
+            if path == "/api/job":
+                # Cheap enough to poll every second during a solve: no design
+                # serialisation, no lock.
+                sess = self.server.session
+                return self._json(200, {
+                    "job": sess.job.to_json(),
+                    "task": sess.progress.to_json(),
+                    "serial": int(getattr(sess, "solution_serial", 0)),
+                    "hasSolution": sess.solution is not None,
+                    "partial": bool(getattr(sess.solution, "partial", False))})
             if path == "/api/blob":
                 return self._serve_blob(q.get("id", [""])[0])
             return self._json(404, {"error": "no such endpoint"})

@@ -18,6 +18,18 @@ from .elements import DofMap, tet_basis
 from .quadrature import tet_rule
 
 
+class RegionLookup:
+    """``region -> complex material value``; a class (not a lambda) so a
+    Solution can be pickled between the solver process and the GUI."""
+
+    def __init__(self, table: dict, default: complex = 1.0 + 0j):
+        self.table = table
+        self.default = default
+
+    def __call__(self, region):
+        return self.table.get(region, self.default)
+
+
 class FieldSolution:
     """A single-frequency electric-field solution on a mesh."""
 
@@ -28,8 +40,8 @@ class FieldSolution:
         self.x = np.asarray(x, complex)
         self.freq = float(freq)
         self.k0 = 2.0 * math.pi * self.freq / c0
-        self.eps_of_region = eps_of_region or (lambda r: 1.0 + 0j)
-        self.mu_of_region = mu_of_region or (lambda r: 1.0 + 0j)
+        self.eps_of_region = eps_of_region or RegionLookup({})
+        self.mu_of_region = mu_of_region or RegionLookup({})
 
     # ------------------------------------------------------------------
     def eval_at(self, tets: np.ndarray, points: np.ndarray

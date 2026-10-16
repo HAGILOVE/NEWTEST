@@ -48,14 +48,18 @@ async function dlgPrimitive() {
 
 async function dlgControls() {
   await guard(async()=>{
-    const r=await rpc('analysis.controls');const body=el('div');
+    const r=await rpc('analysis.controls');const perf=await rpc('analysis.performance');const body=el('div');
     body.appendChild(field('Maximum element size (empty = automatic)',inp('eng-h',r.mesh.max_element_size?fmtLen(r.mesh.max_element_size,U()):'')));
     body.appendChild(field('Linear solver',sel('eng-solver',['auto','direct','iterative'],r.solver.linear_solver)));
     body.appendChild(field('Relative linear-solver tolerance',inp('eng-tol',r.solver.tol)));
     body.appendChild(field('Consecutive converged adaptive passes',inp('eng-conv',r.adaptive.min_converged_passes,'number',{min:1,max:20})));
+    body.appendChild(field(`Solver threads (0 = automatic: ${perf.auto} of ${perf.cpus} cores)`,inp('eng-threads',perf.threads,'number',{min:0,max:256})));
+    body.appendChild(el('div',{class:'check'},el('input',{id:'eng-isolate',type:'checkbox',...(perf.isolate?{checked:'checked'}:{})}),el('label',{for:'eng-isolate'},'Run the solver in a separate low-priority process (keeps the PC responsive; can be aborted)')));
     body.appendChild(el('div',{class:'hint'},'These controls are saved with the Design. A smaller mesh increases runtime and memory. Set maximum passes high enough for the required consecutive convergence.'));
-    dialog({title:'Solver and Mesh Controls',body,ok:'Apply',onOk:()=>rpc('analysis.setControls',{
-      meshSize:gv('eng-h'),solver:gv('eng-solver'),tolerance:gn('eng-tol'),convergedPasses:gn('eng-conv')})});
+    dialog({title:'Solver and Mesh Controls',body,ok:'Apply',onOk:async()=>{
+      await rpc('analysis.setPerformance',{threads:gn('eng-threads')||0,isolate:$('#eng-isolate').checked});
+      return rpc('analysis.setControls',{
+        meshSize:gv('eng-h'),solver:gv('eng-solver'),tolerance:gn('eng-tol'),convergedPasses:gn('eng-conv')});}});
   });
 }
 

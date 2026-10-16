@@ -128,6 +128,18 @@ class Viewport {
     const gl = this.gl = canvas.getContext('webgl', {
       antialias: true, alpha: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL is not available in this browser');
+    // A GPU that is starved (or reset by the driver) while something heavy
+    // runs drops the context and leaves a blank view. The model lives on the
+    // server, so the cheapest reliable recovery is to rebuild the page.
+    canvas.addEventListener('webglcontextlost', e => {
+      e.preventDefault();
+      this.contextLost = true;
+      if (this.onContextLost) this.onContextLost();
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (this.onContextRestored) this.onContextRestored();
+      else location.reload();
+    });
     this.progSolid = this._program(VS_SOLID, FS_SOLID);
     this.progLine = this._program(VS_LINE, FS_LINE);
     this.objects = [];
@@ -154,6 +166,9 @@ class Viewport {
     this.gridStep=null; // first actual model sets the fixed world-grid spacing
     this._bindInput();
     this._loop = this._loop.bind(this);
+    this._hot = performance.now();
+    for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown'])
+      window.addEventListener(ev, () => this.wake(), { passive: true, capture: true });
     requestAnimationFrame(this._loop);
   }
 
@@ -865,8 +880,22 @@ class Viewport {
   }
 
   /* ------------------------------------------------------------ render */
+  /* Redrawing a large scene 60 times a second while nothing changes keeps
+     the GPU and a CPU core busy for no reason -- and during an analysis that
+     is exactly the capacity the solver (and the rest of the desktop) needs.
+     So frames run at full rate only while the user is interacting; an idle
+     view is refreshed at a low rate that still picks up any programmatic
+     change (selection, results, animation steps) within a tenth of a second. */
+  wake() { this._hot = performance.now(); }
+
   _loop() {
-    this._draw();
+    const now = performance.now();
+    const hot = now - (this._hot || 0) < 1500;
+    const gap = this.lowPower ? 200 : 90;
+    if (hot || now - (this._last || 0) >= gap) {
+      this._last = now;
+      this._draw();
+    }
     requestAnimationFrame(this._loop);
   }
 

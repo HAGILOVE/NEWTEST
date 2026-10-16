@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import threading
 import time
 import traceback
@@ -166,6 +167,8 @@ class Progress:
 class SolveJob:
     """A running (or finished) analysis."""
     setup: str = ""
+    #: "solve" (this module), "study" or "optimization" (engineering.py)
+    kind: str = "solve"
     running: bool = False
     done: bool = False
     error: str = ""
@@ -177,6 +180,39 @@ class SolveJob:
     freq_total: int = 0
     partial_points: int = 0
     stage: str = ""
+    #: last solver message -- what it is doing right now
+    detail: str = ""
+    #: "process" (isolated, killable) or "thread"
+    mode: str = "thread"
+    pid: int = 0
+    threads: int = 0
+    #: unknowns in the current linear system / the factorisation backend
+    dofs: int = 0
+    backend: str = ""
+    tets: int = 0
+    #: user asked to stop / abort; the solver is winding down
+    stopping: bool = False
+    aborting: bool = False
+    #: seconds spent per stage ("meshing", "adaptive", "sweep", ...)
+    phases: Dict[str, float] = field(default_factory=dict)
+    stage_since: float = 0.0
+    #: how the run ended: complete / stopped / aborted / failed
+    outcome: str = ""
+
+    def enter_stage(self, name: str) -> None:
+        now = time.time()
+        if self.stage and self.stage_since and self.stage != name:
+            self.phases[self.stage] = (self.phases.get(self.stage, 0.0)
+                                       + now - self.stage_since)
+        if self.stage != name or not self.stage_since:
+            self.stage_since = now
+        self.stage = name
+
+    def phase_times(self) -> Dict[str, float]:
+        out = dict(self.phases)
+        if self.running and self.stage and self.stage_since:
+            out[self.stage] = out.get(self.stage, 0.0) + time.time() - self.stage_since
+        return {k: round(v, 1) for k, v in out.items()}
 
     @property
     def elapsed(self) -> float:
@@ -184,11 +220,17 @@ class SolveJob:
         return max(end - self.started, 0.0) if self.started else 0.0
 
     def to_json(self) -> dict:
-        return {"setup": self.setup, "running": self.running,
+        return {"setup": self.setup, "kind": self.kind, "running": self.running,
                 "done": self.done, "error": self.error,
                 "elapsed": round(self.elapsed, 2), "stage": self.stage,
                 "pass": self.pass_no, "totalPasses": self.total_passes,
-                "freqDone": self.freq_done, "freqTotal": self.freq_total}
+                "freqDone": self.freq_done, "freqTotal": self.freq_total,
+                "detail": self.detail, "mode": self.mode, "pid": self.pid,
+                "threads": self.threads, "dofs": self.dofs,
+                "backend": self.backend, "tets": self.tets,
+                "stopping": self.stopping, "aborting": self.aborting,
+                "phases": self.phase_times(), "outcome": self.outcome,
+                "partialPoints": self.partial_points}
 
 
 class Session:
@@ -207,6 +249,11 @@ class Session:
         #: set by :func:`aether.gui.server.serve` so File ▸ Exit can stop it
         self.server = None
         self.cancel_event = threading.Event()
+        #: the running isolated solver (aether.gui.worker.SolverProcess)
+        self.solver = None
+        #: how analyses run: solver threads (0 = automatic) and whether to use
+        #: the isolated low-priority process
+        self.perf = {"threads": 0, "isolate": True}
         self.study_results = []
         self.study_spec = {}
         self.opt_results = {}
@@ -374,7 +421,9 @@ class Session:
             if errs:
                 raise RuntimeError("validation failed: " + "; ".join(errs))
             st = d.get_setup(setup_name or None)
-            self.cancel_event.clear()
+            # a fresh event per run: an aborted thread-mode solve that is still
+            # unwinding must not be revived by the next run clearing its flag
+            self.cancel_event = threading.Event()
             self.solution = None
             self.solution_serial += 1
             self.job = SolveJob(setup=st.name, running=True,
@@ -385,9 +434,11 @@ class Session:
                                     else min(len(s.frequencies()),
                                              s.max_points or d.config.sweep.interp_max_points)
                                     for s in st.sweeps)) or 1,
-                                stage="meshing")
+                                stage="meshing", stage_since=time.time(),
+                                mode=("process" if self._spawnable() else "thread"))
         t = threading.Thread(target=self._solve_worker,
-                             args=(setup_name, kw, d), daemon=True)
+                             args=(setup_name, kw, d, self.job,
+                                   self.cancel_event), daemon=True)
         t.start()
 
     def _publish_partial(self, part) -> None:
@@ -398,59 +449,212 @@ class Session:
         self.solution_serial += 1
         self.job.partial_points = int(len(part.freqs))
 
-    def _solve_worker(self, setup_name, kw, d):
+    # -- stopping ---------------------------------------------------------
+    def request_stop(self) -> bool:
+        """Finish the current step, then end the analysis keeping the
+        results computed so far. Returns False when nothing is running."""
+        with self._lock:
+            if not self.job.running:
+                return False
+            self.job.stopping = True
+        self.cancel_event.set()
+        sp = self.solver
+        if sp is not None:
+            sp.stop()
+        return True
+
+    def request_abort(self) -> bool:
+        """End the analysis *now*. A solver process is terminated; a solve
+        running inside this process (thread mode) cannot be killed, so it is
+        cancelled and detached -- its late result is discarded."""
+        with self._lock:
+            if not self.job.running:
+                return False
+            self.job.stopping = True
+            self.job.aborting = True
+        self.cancel_event.set()
+        sp = self.solver
+        if sp is not None:
+            sp.abort()
+        elif self.job.kind == "solve" and self.job.mode != "process":
+            self._finish_stopped("aborted", "", self.job)
+        elif self.job.kind != "solve":
+            self.job.aborting = False       # a study ends after its current solve
+        return True
+
+    # -- the worker -------------------------------------------------------
+    def _solve_worker(self, setup_name, kw, d, job, cancel):
+        from . import worker
+        self.messages.add(f"Analysis started for {self.job.setup!r}.",
+                          "info", "analysis")
+        probe = _ProgressProbe(job)
+        use_proc = self._spawnable()
+        if use_proc:
+            try:
+                self._run_in_process(worker, probe, setup_name, kw, d, job)
+                return
+            except _FallBack as why:
+                self.messages.add(
+                    f"Could not start the isolated solver process ({why}); "
+                    "running inside the application instead.",
+                    "warning", "analysis")
+        self._run_in_thread(probe, setup_name, kw, d, job, cancel)
+
+    def _run_in_process(self, worker, probe, setup_name, kw, d, job):
+        job.mode = "process"
+        job.threads = worker.default_threads(override=self.perf.get("threads", 0))
+        if job.aborting:            # abort pressed before the process existed
+            self._finish_stopped("aborted", "", job)
+            return
+        runner = worker.SolverProcess(
+            d, setup_name, kw,
+            on_log=lambda lvl, name, msg: self._on_solver_log(probe, lvl, name, msg),
+            on_partial=lambda part: self._on_process_partial(d, part),
+            threads=job.threads)
+        self.solver = runner
+        if job.aborting:            # abort pressed while it was being set up
+            runner.abort()
         try:
-            self.messages.add(f"Analysis started for {self.job.setup!r}.",
-                              "info", "analysis")
-            probe = _ProgressProbe(self.job)
+            try:
+                status, sol, message = runner.run()
+            except Exception as exc:
+                if runner.pid:
+                    status, sol, message = "error", None, f"{type(exc).__name__}: {exc}"
+                else:
+                    raise _FallBack(exc)
+        finally:
+            self.solver = None
+        if status == "done" and sol is not None:
+            sol.design = d
+            d.mesh = sol.mesh
+            self._finish_ok(sol, job)
+            return
+        if sol is not None:
+            sol.design = d
+            d.mesh = sol.mesh
+            sol.partial = True
+            self.solution = sol
+            self.solution_serial += 1
+            job.partial_points = int(len(sol.freqs))
+        self._finish_stopped(status, message, job)
+
+    def _spawnable(self) -> bool:
+        try:
+            from . import worker
+            return bool(self.perf.get("isolate", True)) and worker.can_spawn()
+        except Exception:
+            return False
+
+    def _on_solver_log(self, probe, level, name, message) -> None:
+        logging.getLogger(name).log(level, message)
+        probe.feed(message)
+
+    def _on_process_partial(self, d, part) -> None:
+        part.design = d
+        d.mesh = part.mesh
+        self._publish_partial(part)
+
+    def _run_in_thread(self, probe, setup_name, kw, d, job, cancel):
+        job.mode = "thread"
+        from . import worker
+        job.threads = worker.default_threads(override=self.perf.get("threads", 0))
+        worker.limit_native_threads(job.threads)
+
+        def partial(part):
+            if not job.aborting:     # a detached run must not touch the session
+                self._publish_partial(part)
+        try:
             logging.getLogger("aether").addHandler(probe)
             try:
-                sol = d.solve(setup=setup_name or None, cancel=self.cancel_event,
-                              on_partial=self._publish_partial, **kw)
+                sol = d.solve(setup=setup_name or None, cancel=cancel,
+                              on_partial=partial, **kw)
             finally:
                 logging.getLogger("aether").removeHandler(probe)
-            with self._lock:
-                self.solution = sol
-                self.solution_serial += 1
-                self.job.running = False
-                self.job.done = True
-                self.job.finished = time.time()
-                self.job.stage = "complete"
-            if sol.modes:
-                self.messages.add(
-                    f"Analysis complete in {self.job.elapsed:.1f} s "
-                    f"({len(sol.modes)} eigenmode(s): "
-                    + ", ".join(f"{m.f / 1e9:.4f} GHz" for m in sol.modes[:6])
-                    + ").", "info", "analysis")
-            else:
-                self.messages.add(
-                    f"Analysis complete in {self.job.elapsed:.1f} s "
-                    f"({sol.sparams.n_freq} frequency points).", "info",
-                    "analysis")
-            for si in sol.sweep_info:
-                if si.get("requested", "discrete") == "discrete":
-                    continue
-                note = (f"Sweep {si.get('name', '')!r} ({si['kind']}): "
-                        f"{si['solved']} full solve(s) reconstructed "
-                        f"{si['points']} points")
-                if si["kind"] != si["requested"]:
-                    note = (f"Sweep {si.get('name', '')!r}: only {si['points']} "
-                            f"point(s), solved directly instead of {si['requested']}")
-                self.messages.add(note + ".", "info", "analysis")
+            if job.aborting:        # detached: the user already walked away
+                return
+            self._finish_ok(sol, job)
         except Exception as exc:                 # pragma: no cover - surfaced in UI
-            with self._lock:
-                self.job.running = False
-                self.job.done = True
-                self.job.error = str(exc)
-                self.job.finished = time.time()
-                from ..fem.control import SolveCancelled
-                self.job.stage = "cancelled" if isinstance(exc, SolveCancelled) else "failed"
-            self.messages.add(f"Analysis failed: {exc}", "error", "analysis")
-            if getattr(self.solution, "partial", False):
-                self.messages.add("The results computed before it stopped "
-                                  "are still available in Results.", "info",
-                                  "analysis")
+            from ..fem.control import SolveCancelled
+            if job.aborting:
+                return
+            status = "cancelled" if isinstance(exc, SolveCancelled) else "error"
+            self._finish_stopped(status, str(exc), job)
             log.debug("solve traceback:\n%s", traceback.format_exc())
+
+    def _finish_ok(self, sol, job) -> None:
+        with self._lock:
+            self.solution = sol
+            self.solution_serial += 1
+            job.running = False
+            job.done = True
+            job.finished = time.time()
+            job.enter_stage("complete")
+            job.outcome = "complete"
+            job.stopping = False
+        if sol.modes:
+            self.messages.add(
+                f"Analysis complete in {job.elapsed:.1f} s "
+                f"({len(sol.modes)} eigenmode(s): "
+                + ", ".join(f"{m.f / 1e9:.4f} GHz" for m in sol.modes[:6])
+                + ").", "info", "analysis")
+        else:
+            self.messages.add(
+                f"Analysis complete in {job.elapsed:.1f} s "
+                f"({sol.sparams.n_freq} frequency points).", "info",
+                "analysis")
+        for si in sol.sweep_info:
+            if si.get("requested", "discrete") == "discrete":
+                continue
+            note = (f"Sweep {si.get('name', '')!r} ({si['kind']}): "
+                    f"{si['solved']} full solve(s) reconstructed "
+                    f"{si['points']} points")
+            if si["kind"] != si["requested"]:
+                note = (f"Sweep {si.get('name', '')!r}: only {si['points']} "
+                        f"point(s), solved directly instead of {si['requested']}")
+            self.messages.add(note + ".", "info", "analysis")
+
+    def _finish_stopped(self, status: str, message: str, job) -> None:
+        """The analysis ended without a full result: stopped, aborted, failed."""
+        with self._lock:
+            if job.done:
+                return
+            job.running = False
+            job.done = True
+            job.finished = time.time()
+            job.stopping = False
+            if status == "aborted" or job.aborting:
+                job.outcome = "aborted"
+                job.enter_stage("aborted")
+                job.error = "Aborted by the user."
+            elif status == "cancelled":
+                job.outcome = "stopped"
+                job.enter_stage("cancelled")
+                job.error = "Stopped by the user."
+            else:
+                job.outcome = "failed"
+                job.enter_stage("failed")
+                job.error = message
+        kept = getattr(self.solution, "partial", False)
+        if job.outcome == "failed":
+            self.messages.add(f"Analysis failed: {message}", "error", "analysis")
+        elif job.outcome == "aborted":
+            self.messages.add(
+                f"Analysis aborted after {job.elapsed:.1f} s.", "warning",
+                "analysis")
+        else:
+            self.messages.add(
+                f"Analysis stopped after {job.elapsed:.1f} s.", "warning",
+                "analysis")
+        if kept:
+            n = job.partial_points
+            self.messages.add(
+                "The results computed before it ended are still available in "
+                f"Results ({n} frequency point{'s' if n != 1 else ''}).",
+                "info", "analysis")
+
+
+class _FallBack(RuntimeError):
+    """The isolated solver process could not be started."""
 
 
 class _ProgressProbe(logging.Handler):
@@ -462,17 +666,36 @@ class _ProgressProbe(logging.Handler):
 
     def emit(self, record):
         try:
-            m = record.getMessage()
-            if m.startswith("adaptive pass"):
-                self.job.stage = "adaptive"
-                self.job.pass_no = int(m.split()[2].rstrip(":"))
-            elif m.startswith("tetrahedral meshing"):
-                self.job.stage = "meshing"
-            elif m.lstrip().startswith("f ="):
-                self.job.stage = "sweep"
-                self.job.freq_done += 1
-            elif "frequency sweep" in m and "done" not in m:
-                self.job.stage = "sweep"
-                self.job.freq_done = 0
+            self.feed(record.getMessage())
         except Exception:
             pass
+
+    def feed(self, m: str) -> None:
+        job = self.job
+        try:
+            if m.startswith("adaptive pass"):
+                job.enter_stage("adaptive")
+                job.pass_no = int(m.split()[2].rstrip(":"))
+                mt = re.search(r"(\d+) tets", m)
+                if mt:
+                    job.tets = int(mt.group(1))
+            elif m.startswith("tetrahedral meshing") and not m.endswith("..."):
+                pass
+            elif m.startswith("tetrahedral meshing"):
+                job.enter_stage("meshing")
+            elif m.lstrip().startswith("f ="):
+                job.enter_stage("sweep")
+                job.freq_done += 1
+            elif "frequency sweep" in m and "done" not in m:
+                job.enter_stage("sweep")
+                job.freq_done = 0
+            elif m.startswith("linear solver ready"):
+                mb = re.search(r"\[([^,\]]+), n=(\d+)", m)
+                if mb:
+                    job.backend, job.dofs = mb.group(1), int(mb.group(2))
+            if m.strip():
+                job.detail = m.strip()[:160]
+        except Exception:
+            pass
+
+
